@@ -381,11 +381,11 @@ enum WindowManagerHandoff {
                 continue
             }
             restorationAnchors[id] = anchor
-            var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+            var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable))
             let initialRootToken = proof?.token
             let initialRootAccepted = proof.map { rememberRestorationRoot($0.token, for: id) } ?? true
             if initialRootAccepted, proof != nil, proof?.type != .popup {
-                proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+                proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable))
             }
             // A fresh native read may suspend. Revalidate model, native ownership,
             // process generation and exclusive controller admission afterwards.
@@ -447,11 +447,11 @@ enum WindowManagerHandoff {
         // replacement revokes stale intent before any saved row can override it.
         for id in Array(restorationRootTokens.keys).sorted() where pendingRestoration.assignments[id] != nil {
             guard let window = MacWindow.allWindowsMap[id],
-                  let proof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+                  let proof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable)) else {
                 throw HandoffError.message("Cannot verify pending window root continuity for export")
             }
             guard rememberRestorationRoot(proof.token, for: id) else { continue }
-            guard let finalProof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+            guard let finalProof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable)) else {
                 throw HandoffError.message("Cannot verify pending window root continuity for export")
             }
             _ = rememberRestorationRoot(finalProof.token, for: id)

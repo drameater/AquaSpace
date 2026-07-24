@@ -255,7 +255,7 @@ extension Window {
 @MainActor
 private func unbindAndGetBindingDataForNewWindow(_ windowId: UInt32, _ macApp: MacApp, _ workspace: Workspace, window: Window?, _ cm: CancellationMode) async throws -> BindingData {
     let continuation = window.map { WindowCommandContinuation.beforeMutation($0) }
-    let windowLevel = getWindowLevel(for: windowId)
+    let windowLevel = try await getWindowLevel(for: windowId, cm)
     let type = try await macApp.getAxUiElementWindowType(windowId, windowLevel, cm)
     guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
           continuation?.mayContinue != false else { throw CancellationError() }
