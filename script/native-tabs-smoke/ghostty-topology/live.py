@@ -109,8 +109,14 @@ def settle(groups,note):
    check(True,note,native=v,rows=rr);return {r[3][len(prefix):]:r[0] for r in rr}
   time.sleep(.12)
  raise AssertionError(note+': '+str(dict(actual=actual,expected=expected,native=v)))
-def fresh(label,anchor=None):
+def focus_test_workspace(workspace):
+ if workspace not in (A,B):raise RuntimeError('Creation requires a dedicated test workspace')
  isolated()
+ cli('workspace',workspace)
+ if cli('list-workspaces','--focused')!=workspace:raise RuntimeError('Test workspace did not become focused; refusing creation')
+ preserved()
+def fresh(label,anchor=None,workspace=A):
+ focus_test_workspace(workspace)
  if anchor:v=driver('add',prefix+label,created[anchor]['tab'],created[anchor]['terminal'])
  else:v=driver('create',prefix+label)
  created[label]=v;save('created.json',created);preserved();return v
@@ -127,7 +133,7 @@ def move(label,workspace):
 def menu(op,label):
  select(label);v=native();c=created[label]
  if not any(g['selected']==c['tab'] for g in v['groups']):raise RuntimeError('Requested menu selection not active')
- isolated();result=N.run(['osascript',SOURCE/'native-menu.applescript',op,pid,protected[0],prefix,prefix+label],timeout=15)
+ isolated();result=N.run([sys.executable,SOURCE/'native_menu.py',op,pid,protected[0],prefix,prefix+label],timeout=15)
  event('native-menu',operation=op,label=label,result=result);preserved()
 def G(labels,ws):return (frozenset(labels),ws)
 def personal_identity(v):return sorted((g['selected'],tuple(sorted((m['tab'],m['terminal']) for m in g['members']))) for g in v['groups'])

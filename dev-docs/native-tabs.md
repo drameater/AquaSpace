@@ -106,3 +106,11 @@ observed the same sole AquaSpace process. No manager lifecycle action or rebuild
 was needed. See the [full record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
 and [opt-in harness](../script/native-tabs-smoke/ghostty-topology/README.md), including
 setup failures, cleanup, evidence and the four offline entrypoint guard tests.
+
+
+The subsequent offline harness review found that initial creation could occur on
+the original workspace and that System Events process indices were not stable
+mutation targets. Both are repaired with verified test-workspace focus before
+creation and retained PID-bound AX menu elements. New offline regressions cover
+the creation ordering and process-churn/error paths. The revised harness has not
+been run live; see the [offline repair record](aquaspace.md#offline-ghostty-harness-isolation-repair-after-4072970d).

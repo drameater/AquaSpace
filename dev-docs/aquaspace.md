@@ -262,3 +262,46 @@ baseline and malformed baseline cannot reach live actions. The existing retired
 lifecycle runners remain retired. These sources, offline guard tests and
 validation notes are included in a local checkpoint after `a243c7f0`; nothing was
 pushed. No additional live tests were run while preparing that checkpoint.
+
+
+## Offline Ghostty harness isolation repair after 4072970d
+
+An offline review found two gaps in the reusable harness: its first standalone
+window was created before entering a dedicated test workspace, and System Events
+process indices could shift between a PID check and a subsequent UI mutation.
+The earlier claim that a changed index always failed closed was too strong: a
+check after activation could report the problem after foregrounding another app.
+The completed live record above remains evidence for the observed run, rather
+than proof against these unexercised failure schedules.
+
+The creation path now selects a dedicated test workspace and verifies focused
+workspace readback before every new window/tab request. Unsupported workspaces,
+failed switches and incorrect readback abort before creation. Existing tab-group
+membership, window-ID, terminal-UUID, manager-identity and baseline-preservation
+checks remain in place.
+
+The positional AppleScript driver has been removed. `native_menu.py` uses public
+accessibility APIs to bind one application element to the isolated Ghostty PID,
+retains its copied window/menu references, and acts directly on those references.
+Every element must belong to that PID, every exposed window must retain the test
+prefix, the focused title must match, and the requested menu item must be unique
+and enabled. Process-list changes cannot redirect a retained target. Stale/native
+read failures abort; uncertain presses are never retried. Error cleanup cancels
+only the retained menu, without global keyboard input. The direct AX caller uses
+normal Accessibility/Device Control access, independently of System Events'
+Automation permission. No new manager lifecycle or fallback launch path was added.
+
+Offline regressions first reproduced creation on a personal workspace and rejected
+the old positional-menu wiring. The repaired suite adds 23 safety tests: actual
+runner creation functions run against fake workspace state, the menu policy runs
+against retained fake elements under process churn/exit, and the actual native
+adapter's C boundary is replaced by fake functions. Its tests confirm reference
+retention, direct-reference mutations and native failure handling. Existing opt-in
+and retired-runner guards are also retained. Native libraries, subprocesses and
+signals are blocked throughout the new safety tests. The final offline run passed
+all **80 Python AquaSpace tests**, and `git diff --check` passed.
+
+This repair was performed entirely offline. No AquaSpace or Ghostty launch, real
+process/window inspection, live test, installation or push occurred. The new AX
+path and creation order have not yet been validated live. The prior 31 live
+assertions must not be relabeled as a live run of these changes.

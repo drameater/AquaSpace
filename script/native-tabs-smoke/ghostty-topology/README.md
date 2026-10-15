@@ -3,7 +3,7 @@
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
 Run it only when foreground interaction on dedicated test workspaces is authorized.
-The operator must explicitly authorize AppleScript/System Events access to Ghostty.
+The operator must explicitly authorize native accessibility menu automation of Ghostty.
 
 It launches a second instance of the installed `/Applications/Ghostty.app` using
 `NSWorkspace` with `createsNewApplicationInstance`. That instance reads only its
@@ -12,14 +12,26 @@ runs `/bin/cat` rather than shell startup scripts. No terminal input is sent.
 The original Ghostty PID is protected. Scripting Bridge addresses the disposable
 PID directly; all subsequent tab operations re-find both the created tab ID and
 terminal UUID. The native-menu driver requires the unique test title prefix for
-**every** exposed window, checks the selected title, and rechecks the target PID
-before menu clicks. System Events uses a primitive process-ID snapshot and an
-index because resolving two apps by their identical display name is ambiguous.
-A changed process index fails closed; it never retries a possibly executed action.
+**every** exposed window, checks the selected title, and checks the PID of every
+accessibility element. `native_menu.py` binds an application accessibility element
+to the disposable PID once, retains the copied window/menu elements, and uses
+those exact references for activation, menu presses and menu cancellation.
+It never enumerates System Events processes or resolves a target by display name
+or list position. Process-list changes cannot redirect those retained references;
+a stale element produces an error without selecting another process. Ambiguous
+action replies stop the run without retrying the action. Native menu errors cancel
+only the retained target menu; no global Escape key or terminal input is sent.
 
 Before each mutation and during polling, the harness checks sole manager
 ownership and every original window's workspace/fullscreen flags. Independent
 background monitors sample manager identity and original windows throughout.
+Before **every** window/tab creation it selects the requested dedicated test
+workspace and reads back the focused workspace. A failed switch, a success reply
+without actual focus, or a request to create on any other workspace refuses
+creation. This happens before the first standalone window exists, avoiding
+registration/tiling on the original workspace. The later explicit window moves
+remain independently guarded.
+
 It stops if the baseline changes, including a window disappearing. Do not weaken
 this check to accommodate another app's activity: inspect the evidence, clean up,
 and establish a fresh baseline. Test windows alone are moved between
@@ -69,8 +81,10 @@ python3 -B script/native-tabs-smoke/ghostty-topology/live.py \
 Without `--run-live` and an explicit baseline, the runner exits before writing
 files, compiling anything, inspecting native processes, or launching applications.
 The suite currently requires exactly one pre-existing Ghostty process and an
-otherwise idle desktop. Normal Automation and Accessibility/Device Control
-permission must already be available. No sudo, SIP changes, injection, manager
+otherwise idle desktop. Normal Automation permission for the Ghostty scripting
+API and Accessibility/Device Control access for the native AX caller must already
+be available. The menu driver now calls public AX APIs directly; System Events'
+Automation permission alone does not supply AX access for that caller. No sudo, SIP changes, injection, manager
 rebuild, installation, or remote access is needed.
 
 Evidence is saved under `.debug/aquaspace/ghostty-topology/run-*/`; `current`
@@ -78,3 +92,29 @@ points to the latest run. `results.json` distinguishes a completed success from
 an interrupted attempt. `events.jsonl` records native memberships, actual menu
 invocations, workspace rows, and cleanup. Separate process/window sample files
 retain the preservation observations. Do not count unreached checks as passes.
+
+
+## Offline safety regressions after 4072970d
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s script/tests -p 'test_aquaspace_ghostty_topology*.py'
+```
+
+The creation tests evaluate the runner's actual creation functions with a fake
+workspace service, checking the workspace at the instant of creation. They cover
+initial/destination windows, anchored tabs, failed switches, incorrect focus
+readback and refusal of personal workspaces. The menu tests inject process churn
+at activation and both presses, including after the final PID check, so the
+personal application occupies the old process-list position. They also cover
+target exit, foreign-PID elements, unowned windows, selected-title changes,
+disabled/ambiguous menus, and uncertain action completion without retries.
+Tests of the actual ctypes adapter replace only its C functions, verifying direct
+handle use, independent CF retention, stale-element errors and failed window reads.
+All these tests block native-library loading, subprocesses and signals. They
+execute no application, installed CLI, native process reader or real AX operation.
+
+These changes have **offline validation only**. The earlier 31-assertion live
+record applies to the previous System Events driver and creation ordering. The
+new direct-AX path and reordered creation need a separately authorized live run;
+neither app was launched or installed during this repair.
