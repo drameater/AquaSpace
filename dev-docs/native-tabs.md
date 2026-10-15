@@ -242,3 +242,22 @@ ownership checks remain in force. Admission now requires v6, with stale v5
 libraries refused. All 190 Python tests and 52 native cases with fake APIs pass;
 no diagnostic library/helper or app was rebuilt/launched, and live validation
 remains pending. See the [offline background-cleanup repair](aquaspace.md#offline-background-cleanup-focus-repair-after-943558e3--2026-10-15).
+
+The first authorized v6 attempt stopped on native foreground churn before its
+two-tab grouping settled, preserving the seven fresh baseline assignments and
+Ghostty window 28264 on workspace 1. All 206 manager samples saw the same sole
+AquaSpace. Exact disposable tabs closed through v6 background guards; a separately
+verified empty/background cleanup terminated only disposable PID 99908 without
+changing desktop focus. The run remains failed, with full v6 validation pending
+idle-desktop clarification. Nothing was installed or pushed. See the
+[interrupted v6 attempt](aquaspace.md#v6-foreground-interrupted-ghostty-attempt-after-b9aadb8f--2026-10-15).
+
+After renewed idle confirmation, the unchanged v6 library completed **all 32 real
+Ghostty checks**, including three native merges/detachments, three independently
+guarded background closes, guarded termination and stable exact native/model
+focus restoration before/after cleanup. Ghostty window 28264 stayed on workspace
+1 with unchanged native identities; all seven fresh-baseline assignments were
+preserved in 571 samples. All 1,893 manager samples observed the same sole
+AquaSpace PID 42527. Only disposable PID 2282 exited. Nothing was installed or
+pushed. The earlier interrupted attempt remains failed; see the
+[complete v6 validation](aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).

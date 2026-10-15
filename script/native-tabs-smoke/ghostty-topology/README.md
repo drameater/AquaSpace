@@ -1,15 +1,17 @@
 # Real Ghostty native merge/detach checks
 
-Latest authorized **v5** validation on **2026-10-15** passed **32 assertions**, including
+Latest authorized **v6** validation on **2026-10-15** passed **32 assertions**, including
 all native merge/detach cycles and stable native/model desktop focus restoration.
-All nine baseline assignments were preserved; original Ghostty window 28264
+All seven baseline assignments were preserved; original Ghostty window 28264
 stayed on its current baseline workspace 1, disposable tabs/processes were removed,
-and 1,900 manager inventories observed the same sole AquaSpace. See the
-[completed v5 run](../../../dev-docs/aquaspace.md#v5-ghostty-live-validation-after-3fd4ba73--2026-10-15).
+and 1,893 manager inventories observed the same sole AquaSpace. See the
+[completed v6 run](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
 
 Current source admission requires **`ghostty-topology-retained-source-v6`** for
-background-only cleanup. This repair has offline validation only; the diagnostic
-library has not been rebuilt. The earlier v5 run above remains historical.
+background-only cleanup. The rebuilt v6 library passed the full native suite,
+three strict background closes, guarded termination and stable restoration.
+Its [first interrupted attempt](../../../dev-docs/aquaspace.md#v6-foreground-interrupted-ghostty-attempt-after-b9aadb8f--2026-10-15)
+remains failed; the later retry completed after renewed idle confirmation.
 Older libraries, including v5, are refused before capture or launch.
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
@@ -454,3 +456,9 @@ or live reader was launched or loaded. Only the isolated test binary was built/
 run; the native source also passed syntax-only checking. No installation, live
 test or push occurred. The earlier v5 live run is historical; v6 remains awaiting
 separately authorized diagnostic rebuild and live validation.
+
+The subsequent authorized v6 retry passed all 32 real Ghostty checks, including
+each native/background cleanup admission and stable focus before/after cleanup.
+It preserved all seven current baseline assignments, original Ghostty identities
+and the same sole manager in 1,893 samples. Only disposable PID 2282 exited.
+See the [complete v6 result](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).

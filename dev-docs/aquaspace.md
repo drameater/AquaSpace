@@ -1311,3 +1311,101 @@ exact binary; the v6 background-cleanup repair has offline validation only and
 is recorded in a local checkpoint after `943558e3`. No additional tests, builds,
 installations or app/helper launches were performed while creating the checkpoint.
 Nothing was pushed.
+
+## v6 foreground-interrupted Ghostty attempt after b9aadb8f — 2026-10-15
+
+After explicit authorization, only the diagnostic library was rebuilt from
+`b9aadb8f`. The v6 harness admitted the new capability and ran on
+`native-tab-test-ghostty-v6-20261015-a` / `-b`. Neither manager was rebuilt,
+installed, launched, stopped or restarted. The existing Swift helper supplied
+read-only observations and the disposable launch; it was not rebuilt.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-180001/` stopped after **seven
+assertions**, before the two-tab grouping settled or any merge/detach operation.
+The independent native foreground reads disagreed, followed by actual native/model
+focus on the baseline Helium window on workspace 5. The saved evidence cannot
+attribute that change to user input or autonomous application behavior. Execution
+permission was revoked; no restoration write or action retry occurred. The result
+is `success=false`, with focus restoration unverified, not a completed v6 pass.
+
+All **206 manager samples** observed the same sole AquaSpace PID **42527**, birth
+`(1792081221, 893887)`. All **63 original-window samples** preserved the seven
+fresh-baseline workspace/fullscreen assignments. Existing Ghostty window
+**28264 stayed on workspace 1**; its harness baseline/final layout was
+`macos_native_window_of_hidden_app`. The earlier preflight saw it tiled, before
+the harness captured that fresh hidden-window baseline. No original-workspace
+movement was observed.
+
+Both exact disposable tab/terminal pairs passed the v6 background-admission and
+native close guards. The failed-run error latch then blocked its normal final
+preservation check before termination, leaving an empty disposable PID **99908**,
+birth `(1792101603, 79799)`. A supplemental cleanup independently reverified the
+same sole manager/control/inventory, every original workspace/fullscreen state,
+original Ghostty native identities, exact disposable process birth/executable,
+absence of disposable managed/native windows, and native/model background focus.
+Only then did the same v6 native termination guard request that empty process's
+exit; its exit and the original identities/assignments were checked afterward.
+No ownership check or source guard was relaxed. Supplemental cleanup made **zero
+focus writes** and left its observed native/model desktop focus unchanged.
+
+The original run remains failed. `supplemental-cleanup.json` records the separate
+successful cleanup; `completion-summary.json` records both outcomes and hashes.
+Native source SHA-256 is
+`e7c0ce9c05699141bf30cdfa2e907af99ae7627dc75b5d7fc09faf65aad03349`;
+adapter is `35516873e61ddf6292652c4f18219210a3a7bcf5d0ad9b5555d1c7e4907fcf48`;
+rebuilt v6 library is `44075dc36adc3ffb95070b1e1470a11112db31f4263bc97d108dfa8d549b0dc5`.
+Installed app/CLI hashes remain unchanged. The user subsequently confirmed the
+desktop was idle and authorized the separate retry below. Nothing was installed
+or pushed. These attempt notes remain local and uncommitted.
+
+## v6 Ghostty live validation after b9aadb8f — 2026-10-15
+
+After the user confirmed the desktop was idle and authorized retry, the unchanged
+v6 library built from `b9aadb8f` completed the full real Ghostty native-menu suite
+on the fresh pair `native-tab-test-ghostty-v6-retry-20261015-a` / `-b`.
+No manager or Swift helper was rebuilt or installed, no manager was launched,
+stopped or restarted, and no ownership or focus guard was changed for the retry.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-180417/` passed **all 32
+assertions**, `success=true`, with no errors. It exercised three native merges
+and three detachments, cross-workspace merging, three-tab and two-to-one
+detachment, independent movement, merging three bare windows, repeated tab
+selections and the final detach/move/remerge cycle.
+
+- All **seven fresh-baseline windows** retained workspace/fullscreen state in
+  **571 original-window samples**, with zero mismatches. Existing Ghostty window
+  **28264 stayed on workspace 1**, with the same hidden-window layout in every
+  sample and the final model. Original Ghostty PID **17528** and native tab/
+  terminal identities were preserved before and after cleanup. This fresh
+  baseline does not retest the older stock-to-fork hidden-Zen handoff limitation.
+- All **1,893 manager samples** observed the same sole installed AquaSpace PID
+  **42527**, birth `(1792081221, 893887)`. Peak count was one; verified control/
+  inventory and ownership checks also passed throughout the guarded actions.
+- Original workspace **1**, model window **28146**, and the exact retained native
+  ChatGPT app/window (PID **15689**) were restored with a single focus request.
+  Three matching observations spanned **0.584 seconds** before cleanup, and
+  three matching observations spanned **0.545 seconds** afterward. Focus finished
+  `verified-after-cleanup`, `verified=true`, with no revocation.
+- Three strict `admit-close-*` observations preceded the exact recorded tab/
+  terminal closes; each passed the independent v6 native background/process
+  guards. `admit-terminate` preceded native guarded termination of only the empty
+  disposable PID **2282**, birth `(1792101858, 946940)`. Its exit was confirmed,
+  no disposable managed windows remained, and no `cleanup-incomplete` event
+  occurred. No terminal input or additional focus-restoration request was sent.
+
+Saved results, events, baseline, process/window samples and
+`completion-summary.json` retain the evidence. Native source SHA-256 is
+`e7c0ce9c05699141bf30cdfa2e907af99ae7627dc75b5d7fc09faf65aad03349`;
+adapter is `35516873e61ddf6292652c4f18219210a3a7bcf5d0ad9b5555d1c7e4907fcf48`;
+v6 library is `44075dc36adc3ffb95070b1e1470a11112db31f4263bc97d108dfa8d549b0dc5`.
+Installed app/CLI hashes match the preceding installation. The first interrupted
+attempt remains failed; this independent complete result does not relabel it.
+Unsafe foreground/read-error cases retain their offline regression evidence;
+they were not artificially injected into this live run.
+
+The user was told to resume desktop use after completion. Only saved artifacts,
+source/binary files and documentation were inspected afterward; no further live
+process/focus query, installed CLI, app/helper or live test was invoked. Nothing
+was installed or pushed. These updated live validation notes form a local
+documentation checkpoint after `b9aadb8f`. No additional tests, builds,
+installations or app/helper launches were performed while creating the checkpoint.
