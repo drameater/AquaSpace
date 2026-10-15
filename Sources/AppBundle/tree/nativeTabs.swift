@@ -12,6 +12,11 @@ final class AxNativeTabState {
     private(set) var representatives: [UInt32: UInt32] = [:]
     private var pendingAbsorptions: [UInt32: UInt32] = [:]
     private var pendingInheritances: [UInt32: UInt32] = [:]
+    private struct Recovery {
+        let started: ContinuousClock.Instant
+        var observations: [UInt32: AxNativeTabObservation]
+    }
+    private var recovery: Recovery?
 
     var update: NativeTabUpdate {
         NativeTabUpdate(replacements: pendingReplacements, absorptions: pendingAbsorptions, inheritances: pendingInheritances, exposedWindowIds: exposedWindowIds)
@@ -25,7 +30,10 @@ final class AxNativeTabState {
 
     func reconcile(_ liveWindows: [WindowIdAndAxUiElement]?, _ job: RunLoopJob, isAppHidden: Bool, windowServerIds: Set<UInt32>? = nil) throws -> [UInt32: UInt32] {
         try job.checkCancellation()
-        guard let liveWindows, !liveWindows.isEmpty, !isAppHidden, !isLeftMouseButtonDown else { return pendingReplacements }
+        guard let liveWindows, !liveWindows.isEmpty, !isAppHidden, !isLeftMouseButtonDown else {
+            recovery = nil
+            return pendingReplacements
+        }
         let serverIds = windowServerIds ?? getWindowServerWindowIdsByPid().map { $0[pid] ?? [] }
         let now = ContinuousClock().now
         var births = recentCreations.filter { $0.value.duration(to: now) < .seconds(2) }
@@ -40,7 +48,18 @@ final class AxNativeTabState {
             let isNew = knownWindowIds.map { !$0.contains(id) && serverIds?.contains(id) == true } == true
             current[id] = try AxNativeTabObservation.read(id, window, job, isNewWindow: isNew, isRecentWindowCreation: births[id] != nil)
         }
-        var previous = observations
+        // AXWindows, native bars and geometry can settle in different reads. Keep
+        // the pre-transition counts/eligibility briefly, without relaxing matching.
+        let retry = recovery.flatMap { $0.started.duration(to: now) < .seconds(2) ? $0 : nil }
+        // An unclassified newly exposed group must not disappear from the set
+        // of competing sources on retry. Its disappearance starts a new epoch;
+        // there is no safe attribution for the preceding partial transition.
+        let lostProvisional = retry.map {
+            !Set(observations.keys).intersection(exposedWindowIds)
+                .subtracting($0.observations.keys).subtracting(current.keys).isEmpty
+        } == true
+        let history = lostProvisional ? current : retry?.observations ?? observations
+        var previous = history
         for oldId in previous.keys where current[oldId] == nil {
             if let cached = previous[oldId], let window = cached.window, window.containingWindowId() != nil {
                 let refreshed = try AxNativeTabObservation.read(oldId, window, job)
@@ -58,10 +77,13 @@ final class AxNativeTabState {
             }
         }
         let createdIds = serverIds.map { $0.subtracting(knownWindowIds ?? $0) } ?? []
-        let topology = nativeTabTopology(previous: observations, refreshed: previous, current: current, representatives: representatives, createdWindowIds: createdIds)
+        let topology = nativeTabTopology(previous: history, refreshed: previous, current: current, representatives: representatives, createdWindowIds: createdIds)
+        let nextHistory = nativeTabHistoryAfterUpdate(previous: history, current: current, topology: topology)
         try job.checkCancellation()
         let replacements = topology.replacements
         // Do not mutate the state until all cancellable AX reads have completed.
+        recovery = nextHistory.unresolved ? Recovery(started: retry?.started ?? now, observations: nextHistory.observations) : nil
+        if lostProvisional { observations = current }
         for oldId in Array(replacements.values) + Array(topology.absorptions.keys) { observations.removeValue(forKey: oldId) }
         observations.merge(current) { _, new in new }
         exposedWindowIds = Set(liveWindows.map(\.windowId))
@@ -113,11 +135,52 @@ final class AxNativeTabState {
 
     func invalidateObservations() {
         observations = [:]
+        recovery = nil
         exposedWindowIds = []
         recentCreations = [:]
         representatives = [:]
         if let serverIds = getWindowServerWindowIdsByPid()?[pid] { knownWindowIds = (knownWindowIds ?? []).union(serverIds) }
     }
+}
+
+/// Accept settled observations and confirmed ownership changes into the retry
+/// baseline. Unmatched count/bar changes and potential newly exposed tabs keep
+/// their original eligibility. Every other window remains an ambiguity candidate.
+private func nativeTabHistoryAfterUpdate(
+    previous: [UInt32: AxNativeTabObservation],
+    current: [UInt32: AxNativeTabObservation],
+    topology: NativeTabTopology,
+) -> (observations: [UInt32: AxNativeTabObservation], unresolved: Bool) {
+    var history = previous
+    var unresolved = false
+    let settled = Set(Array(topology.replacements.keys) + Array(topology.replacements.values) +
+        Array(topology.absorptions.keys) + Array(topology.absorptions.values) +
+        Array(topology.inheritances.keys) + Array(topology.inheritances.values))
+    for id in settled { history.removeValue(forKey: id) }
+    for (id, new) in current {
+        if settled.contains(id) {
+            history[id] = new
+        } else if let old = history[id] {
+            let sameContainer = (old.tabBar == nil && new.tabBar == nil) || old.sharesTabContainer(with: new)
+            if old.snapshot.tabCount == new.snapshot.tabCount && sameContainer {
+                history[id] = new
+            } else {
+                unresolved = true
+            }
+        } else {
+            let firstTab = (new.snapshot.isNewWindow || new.snapshot.isRecentWindowCreation) &&
+                (new.snapshot.tabCount ?? 0) >= 2 && previous.values.contains { $0.tabBar == nil }
+            let split = !new.snapshot.isNewWindow && !new.snapshot.isRecentWindowCreation &&
+                previous.values.contains { ($0.snapshot.tabCount ?? 0) >= 2 }
+            if firstTab || split {
+                unresolved = true
+            } else {
+                history[id] = new
+            }
+        }
+    }
+    history = history.filter { $0.value.window.map { $0.containingWindowId() == nil } != true }
+    return (history, unresolved)
 }
 
 /// Collapse queued selections onto the currently exposed tab. A canceled session may
@@ -137,6 +200,10 @@ func nativeTabTransferPlan(replacements: [UInt32: UInt32], managedWindowIds: Set
             }
             id = previousId
         }
+        // Recovery can leave a staged sibling model alongside the original slot.
+        // If selection returns to that slot before a queued cycle commits, keep
+        // its binding rather than copying the staging workspace back onto it.
+        if managedWindowIds.contains(newId), replacements[id] == newId { continue }
         candidates[newId] = oldestManagedId
     }
     return candidates.filter { _, oldId in candidates.values.filter { $0 == oldId }.count == 1 }
@@ -173,6 +240,14 @@ func absorbNativeTabState(from previous: Window, into current: Window) {
     if focus.windowOrNil === previous { _ = current.focusWindow() }
     replaceNativeTabFocusId(previous.windowId, current.windowId)
     previous.unbindFromParent()
+}
+
+/// Recovery can identify a split after its window was registered elsewhere.
+/// Keep its existing floating/fullscreen state and avoid new-window callbacks.
+@MainActor
+func inheritNativeTabWorkspace(_ window: Window, on workspace: Workspace) {
+    guard window.nodeWorkspace !== workspace else { return }
+    _ = moveWindowToWorkspace(window, workspace, CmdIoImpl.emptyStdinIgnoringOut, focusFollowsWindow: false, failIfNoop: false)
 }
 
 /// AX objects stay on their application's AX thread; only the replacement IDs cross threads.

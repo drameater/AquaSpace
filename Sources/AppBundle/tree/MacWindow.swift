@@ -35,7 +35,12 @@ final class MacWindow: Window {
             try await debugWindowsIfRecording(current, .cancellable)
             return current
         }
-        if let existing = allWindowsMap[windowId] { return existing }
+        if let existing = allWindowsMap[windowId] {
+            if existing.macApp === macApp, let nativeTabWorkspace {
+                inheritNativeTabWorkspace(existing, on: nativeTabWorkspace)
+            }
+            return existing
+        }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
         let data = try await unbindAndGetBindingDataForNewWindow(
             windowId,
@@ -48,7 +53,12 @@ final class MacWindow: Window {
         )
 
         // atomic synchronous section
-        if let existing = allWindowsMap[windowId] { return existing }
+        if let existing = allWindowsMap[windowId] {
+            if existing.macApp === macApp, let nativeTabWorkspace {
+                inheritNativeTabWorkspace(existing, on: nativeTabWorkspace)
+            }
+            return existing
+        }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
         allWindowsMap[windowId] = window
 

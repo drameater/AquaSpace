@@ -12,6 +12,18 @@ The AX thread queues replacements until the main actor acknowledges transferring
 
 ## Verification
 
+An offline investigation after checkpoint `dc94868d` reproduced recovery defects when tab counts, geometry, and AXWindows exposure settle across separate scans. The working source now retains a bounded pre-transition baseline and passes all six reproductions, additional ambiguity/cancellation checks, and model binding tests. See [native-tabs-diagnosis.md](native-tabs-diagnosis.md) for the diagnosis, repair, evidence, and limits on attributing the earlier live fixture failures. `python3 script/test-native-tabs-offline.py` runs 42 tests using memory-only AX substitutes, including 16 existing matcher/queue regressions. No app is launched.
+
+Recovered detachment can find a window already registered on a staging workspace. The registry now applies the inherited workspace to that existing model, preserving floating/fullscreen state and avoiding another new-window callback. Fresh registrations retain the existing callback path. Two tests run this binding helper against the real in-memory tree using `TestWindow`/`TestApp`:
+
+```sh
+python3 script/test-native-tab-model-offline.py \
+  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+  --scratch-path /private/tmp/aerospace-native-tab-validation-build
+```
+
+This builds the AppBundle library and a Swift Testing target, with no app entrypoint or window creation. Dependencies must already be cached; resolution and updates are disabled. The explicit scratch path above reuses this machine's existing dependency/build cache. No recovery fix has been installed or live-tested yet.
+
 `Sources/AppBundleTests/tree/NativeTabReplacementTest.swift` exercises classification and actual tree/workspace transfers. Run it with the repository's normal Swift/Xcode test environment:
 
 ```sh
