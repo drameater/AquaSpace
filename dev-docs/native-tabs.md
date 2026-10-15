@@ -261,3 +261,14 @@ preserved in 571 samples. All 1,893 manager samples observed the same sole
 AquaSpace PID 42527. Only disposable PID 2282 exited. Nothing was installed or
 pushed. The earlier interrupted attempt remains failed; see the
 [complete v6 validation](aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
+
+The subsequent offline review found missing native target-lifetime admission for
+foreground calls and prefix-only menu admission after parent validation. Both
+are repaired: foreground mutations/owned snapshots require pinned process proof,
+and in-process menu dispatch repeatedly verifies exact recorded group/tab/
+terminal/selection membership plus retained AX roots. Unknown prefixed windows,
+hidden tabs, identity replacements and unreadable membership are refused. The
+old standalone menu CLI is retired; admission requires v7 and rejects v6.
+All 204 Python and 105 native cases with fake APIs pass, including a saved-v6
+reproduction. No app/diagnostic helper was launched, no live test or installation
+occurred, and nothing was pushed. See the [offline ownership repair](aquaspace.md#offline-foreground-target-and-menu-ownership-repair-after-44578401--2026-10-15).

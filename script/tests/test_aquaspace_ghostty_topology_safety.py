@@ -99,13 +99,15 @@ class NativeMenuWiringTests(unittest.TestCase):
     def test_runner_uses_stable_native_target_instead_of_system_events(self):
         runner = (SOURCE / 'live.py').read_text()
         self.assertNotIn("['osascript'", runner)
-        self.assertIn("SOURCE/'native_menu.py'", runner)
+        self.assertIn('run_menu(', runner)
+        self.assertNotIn("SOURCE/'native_menu.py'", runner)
         self.assertFalse((SOURCE / 'native-menu.applescript').exists())
 
 # Importing the new menu policy is safe: native libraries are opened only by its
 # explicit adapter constructor, never while importing or creating fake elements.
 import importlib.util
 import io
+import copy
 from types import SimpleNamespace
 
 with offline():
@@ -143,6 +145,12 @@ class FakeAX:
         self.personal_app = Element(self.personal, role='AXApplication')
         self.process_order = [Element(50), self.app, self.personal_app]
         self.bindings = []
+        self.native={'groups':[{'window':'group-a','selected':'tab-a','members':[{'tab':'tab-a','terminal':'terminal-a','title':self.prefix+'a'}]}]}
+        self.expected=copy.deepcopy(self.native)
+
+    def read_membership(self):
+        self.hook('membership',self.app)
+        return self.native
 
     def request(self, operation='merge'):
         return menu_policy.Request(operation, self.target, self.personal, self.prefix, self.prefix + 'a')
@@ -204,7 +212,7 @@ class FakeAX:
 class NativeMenuPolicyTests(unittest.TestCase):
     def run_policy(self, backend, operation='merge'):
         with offline():
-            return menu_policy.run_menu(backend.request(operation), backend)
+            return menu_policy.run_menu(backend.request(operation),backend,expected=backend.expected,read_membership=backend.read_membership)
 
     def test_native_merge_and_detach_press_the_requested_retained_item(self):
         for operation in ('merge', 'detach'):
@@ -215,6 +223,22 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 self.assertEqual(b.bindings, [b.target])
                 self.assertEqual(b.actions, [('press', b.window_menu),
                                              ('press', action), ('cancel', b.menu)])
+
+    def test_exact_recorded_inactive_ax_roots_are_supported_without_admitting_extra_members(self):
+        for expose_inactive in (False,True):
+            with self.subTest(expose_inactive=expose_inactive):
+                b=FakeAX()
+                b.native['groups'][0]['members'].append({'tab':'tab-b','terminal':'terminal-b','title':b.prefix+'b'})
+                b.expected=copy.deepcopy(b.native)
+                if expose_inactive:b.app.attributes['AXWindows'].append(Element(b.target,b.prefix+'b','AXWindow'))
+                self.run_policy(b)
+                self.assertIn(('press',b.merge),b.actions)
+
+    def test_duplicate_title_ax_window_never_becomes_an_extra_owned_root(self):
+        b=FakeAX()
+        b.app.attributes['AXWindows'].append(Element(b.target,b.window.title,'AXWindow'))
+        with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
+        self.assertEqual(b.actions,[])
 
     def test_background_target_is_never_activated_to_reclaim_user_focus(self):
         b = FakeAX(); b.app.attributes['AXFrontmost'] = False
@@ -293,6 +317,67 @@ class NativeMenuPolicyTests(unittest.TestCase):
         with self.assertRaises(menu_policy.MenuError):
             self.run_policy(b)
         self.assertEqual(b.actions, [])
+
+    def test_unrecorded_prefixed_background_window_is_not_authorized(self):
+        b = FakeAX()
+        b.app.attributes['AXWindows'].append(Element(b.target,b.prefix+'initial','AXWindow'))
+        with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
+        self.assertEqual(b.actions, [])
+
+    def test_prefixed_window_arriving_after_menu_open_prevents_merge(self):
+        b = FakeAX()
+        def arrival(stage, element):
+            if stage=='press' and element is b.window_menu:
+                b.app.attributes['AXWindows'].append(Element(b.target,b.prefix+'initial','AXWindow'))
+        b.hook=arrival
+        with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
+        self.assertNotIn(('press',b.merge),b.actions)
+
+    def test_hidden_unrecorded_tab_and_changed_terminal_refuse_before_menu_open(self):
+        for problem in ('extra-tab','terminal','group','selection','unreadable','duplicate'):
+            with self.subTest(problem=problem):
+                b=FakeAX();group=b.native['groups'][0]
+                if problem=='extra-tab': group['members'].append({'tab':'foreign','terminal':'foreign-uuid','title':b.prefix+'initial'})
+                elif problem=='terminal':group['members'][0]['terminal']='replacement-uuid'
+                elif problem=='group':group['window']='replacement-group'
+                elif problem=='selection':group['selected']='absent'
+                elif problem=='unreadable':b.native=None
+                else:group['members'].append(copy.deepcopy(group['members'][0]))
+                with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
+                self.assertEqual(b.actions,[])
+
+    def test_membership_arrival_during_menu_open_refuses_action(self):
+        b=FakeAX()
+        def arrival(stage,element):
+            if stage=='press' and element is b.window_menu:
+                b.native['groups'][0]['members'].append({'tab':'foreign','terminal':'foreign-uuid','title':b.prefix+'initial'})
+        b.hook=arrival
+        with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
+        self.assertEqual(b.actions,[('press',b.window_menu),('cancel',b.menu)])
+
+    def test_same_title_ax_root_replacement_is_not_admitted(self):
+        b=FakeAX()
+        def replace(stage,element):
+            if stage=='press' and element is b.window_menu:
+                other=Element(b.target,b.prefix+'a','AXWindow')
+                b.app.attributes.update(AXWindows=[other],AXFocusedWindow=other)
+        b.hook=replace
+        with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
+        self.assertNotIn(('press',b.merge),b.actions)
+
+    def test_membership_read_failure_cancels_only_retained_menu_without_retry(self):
+        b=FakeAX();reads=[]
+        def changed(stage,element):
+            if stage=='press' and element is b.window_menu:
+                def failed():reads.append(True);raise RuntimeError('membership unreadable')
+                b.read_membership=failed
+        # The callback itself stays retained by run_menu; mutate its read source.
+        def reader():return b.read_membership()
+        b.hook=changed
+        with offline(),self.assertRaisesRegex(RuntimeError,'membership unreadable'):
+            menu_policy.run_menu(b.request(),b,expected=b.expected,read_membership=reader)
+        self.assertEqual(reads,[True])
+        self.assertEqual(b.actions,[('press',b.window_menu),('cancel',b.menu)])
 
     def test_foreign_pid_element_refuses_before_any_menu_mutation(self):
         b = FakeAX()
@@ -436,6 +521,7 @@ class NativeAXAdapterTests(unittest.TestCase):
 class NativeMenuCliTests(unittest.TestCase):
     def test_help_missing_and_invalid_arguments_do_not_construct_native_backend(self):
         cases = [(['--help'], 0), ([], 2),
+                 (['merge','200','100','AeroSpace-NativeTabs-offline-unique-','AeroSpace-NativeTabs-offline-unique-a'],2),
                  (['merge', '-1', '100', 'AeroSpace-NativeTabs-offline-unique-',
                    'AeroSpace-NativeTabs-offline-unique-a'], 2)]
         for arguments, code in cases:

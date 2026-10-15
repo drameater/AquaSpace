@@ -112,9 +112,13 @@ static NSArray *windows(GhosttyApplication *app) { return (NSArray *)value([app 
 static NSArray *tabs(id window) { return (NSArray *)value([(GhosttyObject *)window tabs]); }
 static NSDictionary *describe(GhosttyApplication *app) {
     NSMutableArray *groups = [NSMutableArray array];
-    for (id w in windows(app)) {
+    id currentWindows=windows(app);
+    if (![currentWindows isKindOfClass:NSArray.class]) [NSException raise:@"Ownership" format:@"Unreadable native windows"];
+    for (id w in currentWindows) {
         NSMutableArray *members = [NSMutableArray array];
-        for (id t in tabs(w)) {
+        id currentTabs=tabs(w);
+        if (![currentTabs isKindOfClass:NSArray.class]) [NSException raise:@"Ownership" format:@"Unreadable native tabs"];
+        for (id t in currentTabs) {
             id terminal = value([(GhosttyObject *)t focusedTerminal]);
             [members addObject:@{@"tab":identity(t), @"terminal":identity(terminal), @"title":value([(GhosttyObject *)t name]) ?: @""}];
         }
@@ -250,22 +254,29 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
         if (argc != 3 || pid <= 0) [NSException raise:@"Arguments" format:@"Unexpected termination arguments"];
         return terminateEmptyGhostty(pid, request[@"process"]);
     }
-    NSArray *closeBirth = nil;
-    if ([op isEqual:@"close"]) {
-        if (argc != 5 || pid <= 0) [NSException raise:@"Arguments" format:@"Unexpected close arguments"];
-        closeBirth = cleanupBirth(pid, request[@"process"]);
-        requireProcessIdentity(pid, closeBirth);
+    NSArray *targetBirth = nil;
+    if ([op isEqual:@"close"] || [op isEqual:@"owned-status"] || [op isEqual:@"create"] ||
+        [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
+        if (pid <= 0) [NSException raise:@"Arguments" format:@"Invalid target PID"];
+        targetBirth = cleanupBirth(pid, request[@"process"]);
+        requireProcessIdentity(pid, targetBirth);
     }
     AquaSpaceGhosttyForegroundGuard *foreground = nil;
     if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
         foreground = [[AquaSpaceGhosttyForegroundGuard alloc] initWithSnapshot:request[@"foreground"] application:sourceApp window:sourceWindow];
     }
+    // Source AX reads may block while the disposable target exits/reuses a PID.
+    // A valid original source does not prove the target's lifetime.
+    if (targetBirth) requireProcessIdentity(pid, targetBirth);
     NSRunningApplication *native = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (![native.bundleIdentifier isEqual:@"com.mitchellh.ghostty"]) [NSException raise:@"Identity" format:@"Not the expected Ghostty PID"];
     GhosttyApplication *app = (GhosttyApplication *)[SBApplication applicationWithProcessIdentifier:pid];
     app.timeout = 10 * 60;
     NSDictionary *result;
-    if ([op isEqual:@"status"]) { result = describe(app); }
+    if ([op isEqual:@"status"] || [op isEqual:@"owned-status"]) {
+        result = describe(app);
+        if (targetBirth) requireProcessIdentity(pid, targetBirth);
+    }
     else if ([op isEqual:@"create"] || [op isEqual:@"add"]) {
         if (argc < 4) [NSException raise:@"Arguments" format:@"Missing test title"];
         NSString *title = @(argv[3]);
@@ -280,8 +291,10 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
             if (!targetWindow) [NSException raise:@"Identity" format:@"Anchor tab absent"];
         }
         [foreground check];
+        requireProcessIdentity(pid, targetBirth);
         id tab = [op isEqual:@"create"] ? value([(GhosttyObject *)[app newWindowWithConfiguration:nil] selectedTab]) : [app newTabIn:targetWindow withConfiguration:nil];
         tab = value(tab); id terminal = value([(GhosttyObject *)tab focusedTerminal]);
+        requireProcessIdentity(pid, targetBirth);
         if (![app performAction:[@"set_tab_title:" stringByAppendingString:title] on:terminal]) [NSException raise:@"Title" format:@"Could not assign test title"];
         result = @{@"tab":identity(tab), @"terminal":identity(terminal), @"title":title};
     } else {
@@ -296,15 +309,17 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
             else [NSException raise:@"Identity" format:@"Test tab absent"];
         } else if ([op isEqual:@"select"]) {
             [foreground check];
+            requireProcessIdentity(pid, targetBirth);
             [(GhosttyObject *)targetTab selectTab]; result=describe(app);
         } else if ([op isEqual:@"activate"]) {
             if (![(NSString *)value([(GhosttyObject *)targetTab name]) hasPrefix:@"AeroSpace-NativeTabs-"])
                 [NSException raise:@"Identity" format:@"Not a disposable tab"];
             [foreground check];
+            requireProcessIdentity(pid, targetBirth);
             if (![native activateWithOptions:0])
                 [NSException raise:@"Foreground" format:@"Initial activation refused"];
             result=@{@"activationRequested":@YES};
-        } else if ([op isEqual:@"close"]) { result=closeBackgroundTab(pid, closeBirth, targetTab); }
+        } else if ([op isEqual:@"close"]) { result=closeBackgroundTab(pid, targetBirth, targetTab); }
         else [NSException raise:@"Operation" format:@"Unknown operation"];
     }
     return result;
@@ -312,8 +327,8 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
 
 // There is deliberately no executable entrypoint or metadata-only fallback.
 const char *AquaSpaceGhosttyDriverCapabilities(void) {
-    // v6 also requires fresh, fail-closed background admission for all cleanup.
-    return "ghostty-topology-retained-source-v6";
+    // v7 also pins foreground mutations and owned read-only membership.
+    return "ghostty-topology-retained-source-v7";
 }
 void AquaSpaceGhosttyDriverFree(void *result) { free(result); }
 char *AquaSpaceGhosttyDriverRun(const char *json, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {

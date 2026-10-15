@@ -1409,3 +1409,76 @@ process/focus query, installed CLI, app/helper or live test was invoked. Nothing
 was installed or pushed. These updated live validation notes form a local
 documentation checkpoint after `b9aadb8f`. No additional tests, builds,
 installations or app/helper launches were performed while creating the checkpoint.
+
+## Offline foreground-target and menu ownership repair after 44578401 — 2026-10-15
+
+The v6 checkpoint review found two older ownership gaps. First, the native
+foreground driver checked its source and then bound the target by PID/bundle ID
+without requiring the disposable's recorded birth/UID proof. The original source
+can remain valid during first creation while the target exits and its PID is
+reused by another Ghostty. Second, exact native membership was checked only in
+the parent before starting the menu child. An unrecorded background window could
+inherit the disposable configuration's valid prefixed initial title and pass the
+child's prefix-only checks, allowing Merge All Windows to include it. The
+protected original Ghostty PID remained excluded, but neither conditional gap
+met the recorded-ownership contract.
+
+Foreground create/add/select/activate now require the same pinned process proof
+as cleanup. The native receiver rechecks birth/UID/executable after potentially
+blocking source capture and immediately after final source validation, before
+mutation. Exact-anchor enumeration remains required for add/select/activate.
+Creation rechecks lifetime before its subsequent title action. The runner also
+uses a new proof-required read-only `owned-status` operation for every disposable
+membership snapshot; it rechecks target lifetime after enumeration. Personal
+status reads remain read-only. Unreadable native window/tab collections now fail
+instead of silently becoming an empty inventory.
+
+Menu dispatch now runs inside the runner, using its recorded expected topology
+and the same pinned native reader. It compares exact group IDs, selections, tab/
+terminal identities and titles before menu opening and before the action, with
+further validation around AX enumeration. All exposed AX roots must map to exact
+recorded member titles, every selected group must be represented, and duplicate
+titles/roots and changed retained roots are refused. Recorded inactive tab roots
+may be exposed without admitting unrecorded content. Prefix matching remains a
+necessary check, never sufficient ownership. The reader also rechecks execution
+focus; departure/read errors revoke permission, cancel only the retained menu and
+stop without retry. The old standalone prefix-only menu CLI is inert/retired.
+Its help and invalid-argument paths still perform no native work.
+
+Both native export and adapter now require
+`ghostty-topology-retained-source-v7`. Stale v6 libraries are refused before
+session capture/disposable launch. Existing source-root, ambiguity, destination,
+original-window, background-only cleanup and manager inventory guards remain in
+force; no manager lifecycle or privilege mechanism was added.
+
+Offline validation:
+
+- Two prefixed-unrecorded-window tests first failed against the old menu policy,
+  including arrival after menu opening. They now prevent menu/action presses.
+- A missing-target-proof test failed for all four foreground operations before
+  the fix. The adapter now refuses missing, mismatched or protected proof before
+  native entry, and runner wiring passes the original proof for mutations and
+  owned snapshots.
+- All **204 Python tests** pass, including hidden unknown tabs, changed terminal/
+  group/selection identity, duplicates, unreadable membership, same-title AX root
+  replacement, recorded inactive-root variants, late user focus and retired CLI
+  behavior. Native loads, subprocesses and signals are blocked in these tests.
+- All **105 native cases** pass using fake process, focus, scripting and app APIs:
+  the actual native operation body has 40 target-admission cases; the existing
+  52 cleanup and 13 retained-foreground cases still pass. The new suite was also
+  replayed against saved `44578401` native source and reproduced mutations despite
+  replacement/missing/protected proof while the original source stayed valid.
+  Current-source cases reject those mutations, including target churn during
+  source capture, native binding and anchor enumeration. The follow-up title
+  write is refused if target identity changes after creation. Owned reads reject
+  replacement and unreadable inventories.
+- Native source passes syntax-only compilation and the diff passes whitespace
+  checks. Only isolated test binaries were built/run; none execute real desktop,
+  process, focus or Ghostty APIs.
+
+No app or diagnostic helper/library was launched, rebuilt or loaded, no installed
+CLI/live reader was invoked, and no live test or installation occurred. Nothing
+was pushed. The completed v6 live run remains historical; v7 has offline
+validation only. These fixes, regressions and notes form the local checkpoint
+after `44578401`. Creating this checkpoint involved no additional tests, builds,
+installations, app or helper launches, or live checks. Nothing was pushed.

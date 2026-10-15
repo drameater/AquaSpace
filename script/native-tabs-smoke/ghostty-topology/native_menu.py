@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 from dataclasses import dataclass
-import json
 import sys
 import time
 
@@ -28,18 +27,51 @@ class Request:
     def validate(self):
         if self.operation not in ('merge', 'detach'):
             raise MenuError('Unsupported native menu operation')
-        if self.pid <= 0 or self.protected_pid <= 0 or self.pid == self.protected_pid:
+        if (type(self.pid) is not int or type(self.protected_pid) is not int
+                or not 0 < self.pid <= 0x7fffffff or not 0 < self.protected_pid <= 0x7fffffff or self.pid == self.protected_pid):
             raise MenuError('Refusing invalid or protected process')
-        if not self.prefix.startswith('AeroSpace-NativeTabs-') or len(self.prefix) < 32:
+        if not isinstance(self.prefix,str) or not self.prefix.startswith('AeroSpace-NativeTabs-') or len(self.prefix) < 32:
             raise MenuError('Missing unique test prefix')
-        if not self.title.startswith(self.prefix):
+        if not isinstance(self.title,str) or not self.title.startswith(self.prefix):
             raise MenuError('Selected title is not a test title')
 
 
-def run_menu(request, backend):
+def canonical_membership(value, prefix):
+    if not isinstance(value,dict) or not isinstance(value.get('groups'),list) or not value['groups']:
+        raise MenuError('Missing exact native membership')
+    groups, group_ids, tab_ids, terminals, titles = [], set(), set(), set(), set()
+    for group in value['groups']:
+        if (not isinstance(group,dict) or any(not isinstance(group.get(k),str) or not group[k] for k in ('window','selected'))
+                or group['window'] in group_ids or not isinstance(group.get('members'),list) or not group['members']):
+            raise MenuError('Malformed or ambiguous native group')
+        group_ids.add(group['window']); members=[]
+        for member in group['members']:
+            if (not isinstance(member,dict) or any(not isinstance(member.get(k),str) or not member[k] for k in ('tab','terminal','title'))
+                    or member['tab'] in tab_ids or member['terminal'] in terminals or member['title'] in titles
+                    or not member['title'].startswith(prefix)):
+                raise MenuError('Malformed, ambiguous or unowned native member')
+            tab_ids.add(member['tab']);terminals.add(member['terminal']);titles.add(member['title'])
+            members.append((member['tab'],member['terminal'],member['title']))
+        if group['selected'] not in {member[0] for member in members}:
+            raise MenuError('Native selection is not a recorded member')
+        groups.append((group['window'],group['selected'],tuple(sorted(members))))
+    return tuple(sorted(groups))
+
+
+def run_menu(request, backend, *, expected, read_membership):
     """All mutations use retained elements; no process names/ordinals are used."""
     request.validate()
+    expected=canonical_membership(expected,request.prefix)
+    if not callable(read_membership): raise MenuError('Fresh exact membership reader required')
+    selected_titles=[next(m[2] for m in members if m[0]==selected) for _,selected,members in expected]
+    recorded_titles={member[2] for _,_,members in expected for member in members}
+    if request.title not in selected_titles: raise MenuError('Requested selection is not recorded')
     app = backend.application(request.pid)
+    roots=None
+
+    def checked_membership():
+        if canonical_membership(read_membership(),request.prefix)!=expected:
+            raise MenuError('Native membership changed; refusing menu actions')
 
     def owned(element):
         if backend.pid(element) != request.pid:
@@ -47,18 +79,33 @@ def run_menu(request, backend):
         return element
 
     def checked_windows():
+        nonlocal roots
+        checked_membership()
         owned(app)
         windows = backend.elements(app, 'AXWindows')
         if not windows:
             raise MenuError('No test windows')
+        actual_titles=[]
         for window in windows:
             title = backend.title(owned(window))
-            if title is None or not title.startswith(request.prefix):
+            if title not in recorded_titles:
                 raise MenuError('Unowned window; refusing native menu actions')
+            actual_titles.append(title)
+        # macOS may expose either just selected group windows or additional
+        # inactive tab roots. Every exposed root must name an exact recorded
+        # native member, and every selected group must be represented.
+        if len(set(actual_titles))!=len(actual_titles) or not set(selected_titles).issubset(actual_titles):
+            raise MenuError('Native and AX membership disagree')
+        if any(backend.same(w,other) for index,w in enumerate(windows) for other in windows[:index]):
+            raise MenuError('Duplicate accessibility windows')
+        if roots is not None and (len(windows)!=len(roots) or any(not any(backend.same(w,r) for r in roots) for w in windows)):
+            raise MenuError('Retained native window roots changed')
         focused = owned(backend.element(app, 'AXFocusedWindow'))
         if (not any(backend.same(focused, w) for w in windows)
                 or backend.title(focused) != request.title):
             raise MenuError('Selected test window changed')
+        checked_membership()
+        if roots is None: roots=tuple(windows)
 
     def named_child(parent, role, title):
         matches = []
@@ -271,26 +318,17 @@ class NativeAX:
 
 
 def main(argv=None, *, backend_factory=NativeAX):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('merge', 'detach'))
-    parser.add_argument('pid', type=int)
-    parser.add_argument('protected_pid', type=int)
+    # Exact membership must come from the runner's recorded identities and its
+    # pinned in-process native reader. The old prefix-only CLI cannot supply it.
+    parser=argparse.ArgumentParser(description='Retired prefix-only menu entrypoint; use the guarded live harness.')
+    parser.add_argument('operation',choices=('merge','detach'))
+    parser.add_argument('pid',type=int)
+    parser.add_argument('protected_pid',type=int)
     parser.add_argument('prefix')
     parser.add_argument('title')
-    args = parser.parse_args(argv)
-    request = Request(args.operation, args.pid, args.protected_pid, args.prefix, args.title)
-    backend = None
-    try:
-        request.validate()  # Reject protected PID before loading native APIs.
-        backend = backend_factory()
-        print(json.dumps(run_menu(request, backend)))
-        return 0
-    except (MenuError, OSError) as error:
-        print(str(error), file=sys.stderr)
-        return 2
-    finally:
-        if backend is not None:
-            backend.close()
+    parser.parse_args(argv)
+    print('Standalone native-menu entrypoint retired; use the guarded live harness.',file=sys.stderr)
+    return 2
 
 
 if __name__ == '__main__':

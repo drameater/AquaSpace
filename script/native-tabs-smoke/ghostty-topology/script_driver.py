@@ -8,8 +8,8 @@ class DriverError(RuntimeError):
 
 
 class ScriptDriver:
-    # v6 also requires fail-closed native background admission for cleanup.
-    CAPABILITY = b'ghostty-topology-retained-source-v6'
+    # v7 pins foreground targets and read-only ownership snapshots as well.
+    CAPABILITY = b'ghostty-topology-retained-source-v7'
     MUTATIONS = frozenset(('create', 'add', 'select', 'activate'))
 
     def __init__(self, path, *, load_library=None):
@@ -40,8 +40,8 @@ class ScriptDriver:
         if type(pid) is not int or not 0 < pid <= 0x7fffffff:
             raise DriverError('Invalid target PID')
         request = dict(argv=[str(pid), operation, *map(str, arguments)])
-        if operation in ('close', 'terminate'):
-            if ((operation == 'terminate' and arguments)
+        if operation in self.MUTATIONS or operation in ('close', 'terminate', 'owned-status'):
+            if ((operation in ('terminate','owned-status') and arguments)
                     or (operation == 'close' and (len(arguments) != 2 or any(not isinstance(v,str) or not v for v in arguments)))
                     or not isinstance(expected_birth, (tuple, list))
                     or len(expected_birth) != 4

@@ -111,27 +111,51 @@ class RunnerFocusTests(unittest.TestCase):
             if args[0] == 'workspace':
                 f.model.update(workspace=args[1], window='', pid=None, title=None)
             return ''
-        sources = []
-        def run(target, op, *args, source=None, confirm_source=None):
+        sources,proofs = [],[]
+        def run(target, op, *args, source=None, confirm_source=None,**proof):
             if source is not None: confirm_source(source)
             calls.append(('driver', [Path('/fake/library'),target,op,*args]))
             sources.append(source)
+            proofs.append(proof)
             return {'tab':'new', 'terminal':'terminal'}
         def isolated(): f.guard()
         tree = ast.parse((SOURCE / 'live.py').read_text())
         names = {'focus_guard', 'destinations_guard', 'focus_test_workspace', 'fresh', 'select', 'move', 'menu', 'driver', 'settle', 'activate_initial'}
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
         scope = dict(activity=gate, isolated=isolated, preserved=f.guard, focus_controller=f.controller,
-                     native=lambda: {'groups':[{'selected':'tab-a','members':[{'tab':'tab-a','terminal':'term-a','title':f.test_window.title}]}]}, pid=200, protected=[100], baseline={},
+                     native=lambda: {'groups':[{'window':'group-a','selected':'tab-a','members':[{'tab':'tab-a','terminal':'term-a','title':f.test_window.title}]}]}, pid=200, birth=(200,123,456,501), protected=[100], baseline={},
                      created={'a':{'tab':'tab-a','terminal':'term-a'}}, own_rows=lambda: rows,
                      prefix='AeroSpace-NativeTabs-offline-unique-', A='test-a', B='test-b',
                      CLI=Path('/fake/cli'), HERE=Path('/fake/helper'), SOURCE=SOURCE,
                      sys=SimpleNamespace(executable='/fake/python'), N=SimpleNamespace(run=lambda *args,**kwargs:'{}'),
-                     script_driver=SimpleNamespace(run=run,sources=sources),
+                     script_driver=SimpleNamespace(run=run,sources=sources,proofs=proofs),
+                     NativeAX=lambda:SimpleNamespace(close=lambda:None),
+                     MenuRequest=lambda *args:args,
+                     run_menu=lambda request,backend,**kwargs:kwargs['read_membership'](),
                      cli=cli, json=json, focus_restore=policy, time=SimpleNamespace(sleep=f.pause, monotonic=lambda:f.now),
                      save=lambda *args:None, event=lambda *args, **kwargs:None)
         exec(compile(ast.Module(body=nodes,type_ignores=[]), str(SOURCE / 'live.py'), 'exec'), scope)
         return f, gate, scope, calls
+
+    def test_runner_forwards_original_target_proof_for_mutation_and_owned_snapshot(self):
+        with offline():
+            _,_,scope,calls=self.fixture()
+            scope['driver']('create','AeroSpace-NativeTabs-offline-unique-new')
+            scope['driver']('status')
+            self.assertEqual(scope['script_driver'].proofs,[{'expected_birth':scope['birth'],'protected_pids':[100]}]*2)
+            self.assertEqual(calls[-1][1][2],'owned-status')
+
+    def test_menu_reader_focus_departure_revokes_and_closes_only_local_backend(self):
+        with offline():
+            f,_,scope,calls=self.fixture();released=[]
+            def backend():
+                f.external_focus()
+                return SimpleNamespace(close=lambda:released.append(True))
+            scope['NativeAX']=backend
+            with self.assertRaises(policy.FocusError):scope['menu']('merge','a')
+            self.assertEqual(released,[True])
+            self.assertIsNotNone(f.controller.revoked)
+            self.assertIs(f.front,f.external)
 
     def test_every_runner_action_refuses_external_user_focus_before_mutation(self):
         actions = [('select',('a',)), ('move',('a','test-b')), ('fresh',('b',)),
@@ -153,7 +177,7 @@ class RunnerFocusTests(unittest.TestCase):
     def test_selection_rechecks_focus_after_helper_before_cli_activation(self):
         with offline():
             f, _, scope, calls = self.fixture()
-            def run(target,op,*args,source=None,confirm_source=None):
+            def run(target,op,*args,source=None,confirm_source=None,**proof):
                 confirm_source(source)
                 calls.append(('driver', [target,op,*args])); f.external_focus()
                 return {}
@@ -213,7 +237,7 @@ class RunnerFocusTests(unittest.TestCase):
         with offline():
             f, gate, scope, calls = self.fixture()
             gate.workspace_selected('test-a', f.controller.initial); f.front = f.original
-            def run(target,op,*args,source=None,confirm_source=None):
+            def run(target,op,*args,source=None,confirm_source=None,**proof):
                 confirm_source(source)
                 self.assertIs(source.window,f.original_window)
                 calls.append(('driver',[Path('/fake/library'),target,op,*args]))
@@ -275,10 +299,10 @@ class HelperAdmissionTests(unittest.TestCase):
         self.assertNotIn('int main(',source)
         self.assertIn('application:sourceApp window:sourceWindow',main)
         self.assertLess(main.index('initWithSnapshot:'),main.index('SBApplication applicationWithProcessIdentifier:'))
-        self.assertIn('[foreground check];\n        id tab =', main)
-        self.assertIn('[foreground check];\n            [(GhosttyObject *)targetTab selectTab]', main)
+        self.assertIn('[foreground check];\n        requireProcessIdentity(pid, targetBirth);\n        id tab =', main)
+        self.assertIn('[foreground check];\n            requireProcessIdentity(pid, targetBirth);\n            [(GhosttyObject *)targetTab selectTab]', main)
         self.assertEqual(main.count('activateWithOptions:'),1)
-        self.assertIn('[foreground check];\n            if (![native activateWithOptions:', main)
+        self.assertIn('[foreground check];\n            requireProcessIdentity(pid, targetBirth);\n            if (![native activateWithOptions:', main)
         self.assertNotIn('targetWindow activateWindow', main)
 
 

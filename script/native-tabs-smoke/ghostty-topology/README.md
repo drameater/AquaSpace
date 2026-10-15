@@ -7,12 +7,11 @@ stayed on its current baseline workspace 1, disposable tabs/processes were remov
 and 1,893 manager inventories observed the same sole AquaSpace. See the
 [completed v6 run](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
 
-Current source admission requires **`ghostty-topology-retained-source-v6`** for
-background-only cleanup. The rebuilt v6 library passed the full native suite,
-three strict background closes, guarded termination and stable restoration.
-Its [first interrupted attempt](../../../dev-docs/aquaspace.md#v6-foreground-interrupted-ghostty-attempt-after-b9aadb8f--2026-10-15)
-remains failed; the later retry completed after renewed idle confirmation.
-Older libraries, including v5, are refused before capture or launch.
+Current source admission requires **`ghostty-topology-retained-source-v7`** for
+pinned foreground targets and exact menu membership. This repair has offline
+validation only; the diagnostic library has not been rebuilt. Older libraries,
+including v6, are refused before capture or launch. The completed v6 run above
+and its first interrupted attempt remain historical records for their exact build.
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
@@ -25,9 +24,12 @@ throwaway configuration, restores no sessions, creates no initial window, and
 runs `/bin/cat` rather than shell startup scripts. No terminal input is sent.
 The original Ghostty PID is protected. Scripting Bridge addresses the disposable
 PID directly; all subsequent tab operations re-find both the created tab ID and
-terminal UUID. The native-menu driver requires the unique test title prefix for
-**every** exposed window, checks the selected title, and checks the PID of every
-accessibility element. `native_menu.py` binds an application accessibility element
+terminal UUID. Foreground mutations and the disposable process's read-only
+`owned-status` snapshots require the recorded birth/UID and protected PID proof
+inside the native receiver, including after blocking source/target reads.
+The native-menu driver now requires fresh exact group/tab/terminal/title and
+selection membership, checks the selected title, and checks the PID of every
+accessibility element. `native_menu.py` runs in process and binds an application accessibility element
 to the disposable PID once, retains the copied window/menu elements, and uses
 those exact references for menu presses and menu cancellation. The menu driver
 never activates a background app.
@@ -36,6 +38,11 @@ or list position. Process-list changes cannot redirect those retained references
 a stale element produces an error without selecting another process. Ambiguous
 action replies stop the run without retrying the action. Native menu errors cancel
 only the retained target menu; no global Escape key or terminal input is sent.
+Each exposed AX window must correspond to an exact recorded native member;
+selected groups must be represented and duplicate titles/roots are refused.
+Recorded inactive tab roots may also be exposed, but a prefix alone never admits
+an occupant. Root references remain pinned across repeated membership checks.
+The old standalone prefix-only menu CLI is retired and cannot load native APIs.
 
 Before each mutation and during polling, the harness checks sole manager
 ownership and every original window's workspace/fullscreen flags. Independent
@@ -462,3 +469,41 @@ each native/background cleanup admission and stable focus before/after cleanup.
 It preserved all seven current baseline assignments, original Ghostty identities
 and the same sole manager in 1,893 samples. Only disposable PID 2282 exited.
 See the [complete v6 result](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
+
+## Offline foreground-target and exact-menu ownership repair after 44578401
+
+The review found two older gaps: foreground calls could resolve a recycled target
+PID after blocking source checks, and a native-menu child could admit a newly
+arrived window with the disposable configuration's prefixed default title.
+The v7 receiver now requires the recorded process proof for create/add/select/
+activate and owned membership reads. It rechecks kernel birth/UID/executable after
+source capture, exact-anchor enumeration and final source confirmation; creation
+also checks before the follow-up title action. Unknown native collection replies
+are errors, never empty inventories.
+
+Native-menu dispatch now runs in process with the original runner's pinned
+`owned-status` reader. Exact group IDs, selected tab IDs, all recorded tab/terminal
+pairs and titles must still match before opening the menu and before its action.
+AX roots/titles are independently correlated and retained; an unrecorded
+`prefix + initial` arrival, hidden extra tab, duplicate, changed terminal or root
+replacement stops the action. A read or focus failure revokes execution without
+retry; errors cancel only the retained target menu. The old CLI always refuses
+mutation and retains inert help/error handling.
+
+All **204 Python tests** pass. The two prefixed-window regressions and missing
+foreground-proof regression first failed against the old implementation. Further
+tests cover exact native/AX membership, read errors, late arrivals, target proof
+forwarding, focus changes during in-process dispatch and v6-library refusal.
+All **105 native cases** pass against fake APIs: 40 actual operation/target cases,
+52 cleanup cases and 13 retained-foreground cases. The new target suite also
+reproduces unsafe creation/other mutations when replayed against saved v6 source:
+
+```sh
+python3 -B script/test-ghostty-target-offline.py
+```
+
+Only isolated test binaries were built/run, with all process, focus, scripting
+and application calls replaced by fakes; the native source passed syntax-only
+compilation. No app, diagnostic helper/library, installed CLI or live reader was
+launched or loaded. No installation, live test or push occurred. v7 awaits
+separate authorization for diagnostic rebuild/live validation.

@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'script'))
 import aquaspace_update as u
 import focus_restore
-from native_menu import NativeAX
+from native_menu import NativeAX, Request as MenuRequest, run_menu
 from script_driver import ScriptDriver
 SOURCE=Path(__file__).resolve().parent
 HERE=ROOT/'.debug/aquaspace/ghostty-topology'
@@ -107,7 +107,9 @@ def driver(op,*args,personal=False):
   if personal:raise RuntimeError('No personal-process mutations')
   destinations_guard()
   snapshot=focus_guard('before-script-'+op)
- try:v=script_driver.run(target,op,*args,source=snapshot,confirm_source=focus_controller.confirm_native if snapshot is not None else None)
+ proof={} if personal else dict(expected_birth=birth,protected_pids=protected)
+ if op=='status' and not personal:op='owned-status'
+ try:v=script_driver.run(target,op,*args,source=snapshot,confirm_source=focus_controller.confirm_native if snapshot is not None else None,**proof)
  except Exception as error:
   if snapshot is not None:focus_controller.revoke(error)
   raise
@@ -202,10 +204,17 @@ def menu(op,label):
  select(label);v=native();c=created[label]
  if not any(g['selected']==c['tab'] for g in v['groups']):raise RuntimeError('Requested menu selection not active')
  isolated();destinations_guard();focus_guard('before-native-menu')
- try:result=N.run([sys.executable,SOURCE/'native_menu.py',op,pid,protected[0],prefix,prefix+label],timeout=15)
+ backend=None
+ def read_membership():
+  current=native();focus_guard('native-menu-membership');return current
+ try:
+  backend=NativeAX()
+  result=run_menu(MenuRequest(op,pid,protected[0],prefix,prefix+label),backend,expected=v,read_membership=read_membership)
  except Exception as error:
   focus_controller.revoke(error)
   raise
+ finally:
+  if backend is not None:backend.close()
  event('native-menu',operation=op,label=label,result=result);preserved()
 def G(labels,ws):return (frozenset(labels),ws)
 def personal_identity(v):return sorted((g['selected'],tuple(sorted((m['tab'],m['terminal']) for m in g['members']))) for g in v['groups'])

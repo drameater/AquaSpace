@@ -17,7 +17,15 @@ with offline():
 
 
 class RetainedDriverTests(unittest.TestCase):
-    def fixture(self, *, capability=b'ghostty-topology-retained-source-v6', native_error=False):
+    def test_foreground_mutations_require_pinned_target_proof_before_native_entry(self):
+        with offline():
+            for op in ('create','add','select','activate'):
+                with self.subTest(op=op):
+                    d,source,_,calls,_=self.fixture()
+                    with self.assertRaises(driver.DriverError):
+                        d.run(200,op,'tab','terminal',source=source,confirm_source=lambda _:None)
+                    self.assertEqual(calls,[])
+    def fixture(self, *, capability=b'ghostty-topology-retained-source-v7', native_error=False):
         calls, frees, buffers = [], [], []
         source = SimpleNamespace(app=0x100000001, window=0x200000002, pid=100, title='~')
         state = dict(foreground_window=source.window, mutated=False)
@@ -43,7 +51,7 @@ class RetainedDriverTests(unittest.TestCase):
         with offline():
             d, source, state, calls, frees = self.fixture()
             observed = []
-            self.assertEqual(d.run(200,'activate','tab','terminal',source=source,
+            self.assertEqual(d.run(200,'activate','tab','terminal',source=source,expected_birth=(200,123,456,501),protected_pids=[100],
                                    confirm_source=lambda value:observed.append(value)),
                              {'activationRequested':True})
             self.assertIs(observed[0],source)
@@ -57,7 +65,7 @@ class RetainedDriverTests(unittest.TestCase):
                 with self.subTest(operation=operation):
                     d, source, state, calls, frees = self.fixture(native_error=True)
                     with self.assertRaisesRegex(driver.DriverError,'Source window changed'):
-                        d.run(200,operation,'tab','terminal',source=source,confirm_source=lambda _:None)
+                        d.run(200,operation,'tab','terminal',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
                     self.assertEqual(calls[0][2],source.window)
                     self.assertNotEqual(calls[0][2],state['foreground_window'])
                     self.assertFalse(state['mutated'])
@@ -68,7 +76,7 @@ class RetainedDriverTests(unittest.TestCase):
             d, source, _, calls, _ = self.fixture()
             for bad in (None,SimpleNamespace(app=None,window=None,pid=100,title='~')):
                 with self.subTest(source=bad),self.assertRaises(driver.DriverError):
-                    d.run(200,'activate','tab','terminal',source=bad,confirm_source=lambda _:None)
+                    d.run(200,'activate','tab','terminal',source=bad,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
             self.assertEqual(calls,[])
 
     def test_final_source_confirmation_refuses_before_any_native_mutation(self):
@@ -76,7 +84,7 @@ class RetainedDriverTests(unittest.TestCase):
             d, source, _, calls, _ = self.fixture()
             def changed(_): raise RuntimeError('Foreground changed during preparation')
             with self.assertRaisesRegex(RuntimeError,'Foreground changed'):
-                d.run(200,'activate','tab','terminal',source=source,confirm_source=changed)
+                d.run(200,'activate','tab','terminal',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=changed)
             self.assertEqual(calls,[])
 
     def test_old_or_unreadable_library_never_falls_back_to_an_executable(self):
@@ -115,11 +123,34 @@ class RetainedDriverTests(unittest.TestCase):
         with offline(), self.assertRaisesRegex(driver.DriverError, 'Unsupported diagnostic library'):
             self.fixture(capability=b'ghostty-topology-retained-source-v5')
 
+    def test_legacy_v6_library_cannot_admit_unpinned_foreground_targets(self):
+        with offline(),self.assertRaisesRegex(driver.DriverError,'Unsupported diagnostic library'):
+            self.fixture(capability=b'ghostty-topology-retained-source-v6')
+
+    def test_owned_membership_read_requires_process_proof_without_foreground_activation(self):
+        with offline():
+            d,_,state,calls,_=self.fixture();state['foreground_window']=None
+            with self.assertRaises(driver.DriverError):d.run(200,'owned-status')
+            self.assertEqual(calls,[])
+            d.run(200,'owned-status',expected_birth=(200,123,456,501),protected_pids=[100])
+            self.assertEqual(calls[0][0]['process'],{'birth':[200,123,456,501],'protected':[100]})
+            self.assertEqual(calls[0][1:],(None,None))
+
+    def test_foreground_target_proof_rejects_replacement_or_protected_target_before_native_entry(self):
+        with offline():
+            for op in ('create','add','select','activate'):
+                for birth,protected in (((201,123,456,501),[100]),((200,123,456,501),[200]),((200,123,456,501),[])):
+                    with self.subTest(op=op,birth=birth,protected=protected):
+                        d,source,_,calls,_=self.fixture()
+                        with self.assertRaises(driver.DriverError):
+                            d.run(200,op,'tab','terminal',source=source,confirm_source=lambda _:None,expected_birth=birth,protected_pids=protected)
+                        self.assertEqual(calls,[])
+
     def test_native_export_and_adapter_require_the_fresh_reader_capability(self):
         source = (SOURCE/'ScriptDriver.m').read_text()
         exported = re.search(r'const char \*AquaSpaceGhosttyDriverCapabilities\(void\)\s*\{\s*(?://[^\n]*\n\s*)*return "([^"]+)";\s*\}', source)
         self.assertIsNotNone(exported)
-        self.assertEqual(exported.group(1), 'ghostty-topology-retained-source-v6')
+        self.assertEqual(exported.group(1), 'ghostty-topology-retained-source-v7')
         self.assertEqual(exported.group(1).encode('ascii'), driver.ScriptDriver.CAPABILITY)
 
     def test_native_source_is_retained_and_not_recaptured_from_current_focus(self):
@@ -134,7 +165,7 @@ class RetainedDriverTests(unittest.TestCase):
         with offline():
             d, source, state, calls, _ = self.fixture()
             source.window = None; source.title = None; state['foreground_window'] = None
-            d.run(200,'create','owned-title',source=source,confirm_source=lambda _:None)
+            d.run(200,'create','owned-title',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
             self.assertEqual(calls[0][1:],(source.app,None))
             self.assertFalse(calls[0][0]['foreground']['hasWindow'])
 
@@ -144,7 +175,7 @@ class RetainedDriverTests(unittest.TestCase):
                 with self.subTest(pointer=pointer):
                     d, source, _, calls, _ = self.fixture(); source.window = pointer
                     with self.assertRaises(driver.DriverError):
-                        d.run(200,'select','tab','terminal',source=source,confirm_source=lambda _:None)
+                        d.run(200,'select','tab','terminal',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
                     self.assertEqual(calls,[])
             d, source, _, calls, _ = self.fixture()
             with self.assertRaises(driver.DriverError): d.run(200,'activate',source=source)
@@ -152,7 +183,7 @@ class RetainedDriverTests(unittest.TestCase):
             for invalid in (True,0,-1,'100'):
                 d, source, _, calls, _ = self.fixture(); source.pid = invalid
                 with self.assertRaises(driver.DriverError):
-                    d.run(200,'activate',source=source,confirm_source=lambda _:None)
+                    d.run(200,'activate',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
                 self.assertEqual(calls,[])
 
     def test_malformed_native_response_is_freed_once_without_retry(self):
@@ -163,7 +194,7 @@ class RetainedDriverTests(unittest.TestCase):
             def bad(*args): attempts.append(args); return ctypes.addressof(buffer)
             d._run = bad
             with self.assertRaises(ValueError):
-                d.run(200,'activate','tab','terminal',source=source,confirm_source=lambda _:None)
+                d.run(200,'activate','tab','terminal',source=source,expected_birth=(200,123,456,501),protected_pids=[100],confirm_source=lambda _:None)
             self.assertEqual(len(attempts),1)
             self.assertEqual(frees,[ctypes.addressof(buffer)])
 
