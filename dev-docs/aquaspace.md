@@ -1482,3 +1482,126 @@ was pushed. The completed v6 live run remains historical; v7 has offline
 validation only. These fixes, regressions and notes form the local checkpoint
 after `44578401`. Creating this checkpoint involved no additional tests, builds,
 installations, app or helper launches, or live checks. Nothing was pushed.
+
+## V7 Ghostty live attempt and authorized recovery after 34e0f9af — 2026-10-15
+
+The user authorized rebuilding the diagnostic library and running the v7 harness
+on test workspaces, preserving existing Ghostty/focus and sole-manager ownership.
+Only `script-driver.dylib` was rebuilt; the installed manager/CLI and existing
+launcher helper were reused. No manager lifecycle action or installation occurred.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-190454/` used the fresh empty
+pair `native-tab-test-ghostty-v7-20261015-{a,b}` and passed **12 preliminary checks**:
+separate disposable creation, no restored windows, native two-tab grouping,
+group movement, both tab selections and an independent destination. It then
+stopped **before the first merge action** with
+`DriverError('Ownership: Unreadable native windows')`. This is a failed run;
+no v7 merge/detach or desktop-restoration pass is claimed.
+
+The last successful exact membership/focus observation preceded opening the
+retained Window menu. The next exact membership read, while the menu was open,
+failed roughly ten seconds later, consistent with the native driver's ten-second
+Apple-event timeout. The retained menu cancellation then returned. A separate
+read-only diagnostic, bound to the same birth/UID/executable, successfully read
+the unchanged complete three-tab membership after cancellation. Read-only AX
+enumeration also exposed the Window menu and its Merge/Detach items while closed.
+This points to a menu-tracking/Scripting Bridge interaction in the new harness
+path; the evidence does not establish a window-manager topology failure or a
+definitive Apple-event error code. No guard was bypassed, read failure converted
+to an empty inventory, or action retried. Harness changes remain future work.
+
+Preservation evidence:
+
+- **800 manager samples** all observed the same sole installed AquaSpace PID
+  **42527**, birth `(1792081221, 893887)`, peak count **1**.
+- **237 window samples** preserved all **eight fresh baseline** workspace and
+  fullscreen assignments with zero drift. Original Ghostty window **28264**
+  remained on workspace **1**. The failed run's final verification was blocked
+  by its error latch; later independent recovery reads confirmed the original
+  Ghostty native tab/terminal identities and baseline assignments again.
+- The initial native/model desktop focus was Helium PID **15590**, window
+  **28101**, workspace **5**. The membership error permanently revoked this
+  run's foreground authorization. Restoration issued **zero focus requests**;
+  background cleanup correctly refused while disposable Ghostty was foreground.
+  Its three tabs were left recorded, with `cleanup-incomplete` evidence.
+
+The user then explicitly authorized one guarded original-focus return and exact
+disposable cleanup. By recovery entry, native/model focus instead belonged to
+ChatGPT PID **15689**, window **28146**, workspace **1**. The fresh recovery
+preserved that new focus and issued **zero focus writes**. Independent manager,
+baseline, native membership and pinned-process reads preceded cleanup; the v7
+receiver's background/birth/executable guards admitted three exact tab/terminal
+closes and termination of only disposable PID **34940**, birth
+`(1792105496, 29756)`. Its exit was confirmed. A final read-only observation
+confirmed the same sole AquaSpace, all eight original assignments unchanged,
+disposable exit and matching ChatGPT native/model focus. This does not establish
+restoration to the original Helium focus. Evidence is saved separately in
+`supplemental-recovery.json` and `post-recovery-observation.json`; the original
+`results.json` remains unsuccessful.
+
+Source SHA-256:
+`dc3537027531c9825c6efd05fbc8f1e2451f71e6455b48fd674164c2bf7ebd3b`;
+adapter `cddd83296f81f7a24f75c61d3f8da30fd577583ad1f10cc3346364c43ffed472`;
+built v7 library `73861d20dd39c95baa264c81428e73d4229ee7d56efc5dbd70b32993c8568735`.
+Installed manager/CLI hashes still matched the preceding v6 record. No manager
+was launched, paused or stopped, no terminal input was sent, and nothing was
+installed or pushed. These attempt/recovery notes are included in the subsequent
+local menu-tracking repair checkpoint.
+
+## Offline menu-tracking membership repair after 34e0f9af — 2026-10-15
+
+The user authorized fixing the v7 menu-open reader failure and adding offline
+regressions, with app/helper launch, live testing, installation and pushing
+explicitly prohibited. This repair changes only the Python menu dispatch/tests
+and documentation; the native library, its v7 admission capability, proof checks,
+and all manager/window/focus policies remain unchanged. No helper/library rebuild
+is needed for this Python dispatch change.
+
+The saved live trace points to menu tracking blocking Scripting Bridge replies:
+exact membership reads succeeded before opening Window, failed after the open
+with the driver's roughly ten-second timeout, and succeeded read-only again
+after retained-menu cancellation. The prior read-only probe also confirmed that
+Ghostty exposes the complete native Window menu/action tree while closed. A
+transient unrelated native-read failure and AX-root churn were considered as
+alternatives; neither explains that ordering as directly. No new live probe was
+performed, so the underlying native timeout mechanism is an inference rather
+than a newly observed Apple-event error code.
+
+The offline reproduction runs the actual `run_menu` policy against a fake AX
+backend and a native membership callback that refuses replies while the menu is
+tracking. Both merge and detach failed before the fix with the same
+`Ownership: Unreadable native windows` error at the post-open membership read.
+It now passes by removing the preliminary Window-menu press, not by relaxing
+the read. The policy retains the exact closed-tree menu/item references,
+rechecks the full native group/tab/terminal/title/selection inventory and pinned
+AX roots around enumeration, checks target PID and foreground, and issues one
+direct `AXPress` to the requested item. There is no menu-opening fallback,
+compatibility reader, cached-membership admission, activation or action retry.
+Unavailable, unreadable, disabled or ambiguous closed menu trees stop before
+any mutation. An attempted item press gets one best-effort cancellation against
+the same retained, PID-checked menu, including on an uncertain action result;
+pre-press failures need no cancellation because no menu was opened.
+
+All **211 AquaSpace Python offline tests** pass, including **41 menu/live-path
+safety tests**. Seven added test methods cover the modal reader reproduction
+for both operations, topology changes at the action without stale post-action
+admission reads, unavailable closed trees without fallback, exact late native
+membership changes, hidden-tab arrival during final AX enumeration, foreign menu
+elements, and foreign/unreadable cancellation without retry. Existing late
+arrival, same-title-root replacement, read-error, process-churn and user-focus
+tests now inject at closed-tree action discovery rather than the removed
+menu-opening press. The pinned reader still runs after those injections; it
+refuses hidden unknown tabs, changed groups/terminals/selections/titles,
+duplicates and unreadable membership. The uncertain-action test covers both
+merge and detach and requires exactly one retained-menu cancellation attempt.
+
+Tests block native-library loading, subprocesses and signals. No native test
+binary was compiled/run, no diagnostic library was rebuilt/loaded, no installed
+CLI or native process/focus reader was invoked, and no app/helper was launched.
+The diff passes whitespace checks. No installation, live test or push occurred.
+The direct closed-menu action still requires separately authorized live
+validation; the prior failed v7 run and its recovery remain historical and are
+not relabeled as passing. The repair, regressions and notes form the local
+checkpoint after `34e0f9af`. Creating this checkpoint involved no additional
+tests, builds, installations, app/helper launches or live checks. Nothing was
+pushed.

@@ -272,3 +272,24 @@ old standalone menu CLI is retired; admission requires v7 and rejects v6.
 All 204 Python and 105 native cases with fake APIs pass, including a saved-v6
 reproduction. No app/diagnostic helper was launched, no live test or installation
 occurred, and nothing was pushed. See the [offline ownership repair](aquaspace.md#offline-foreground-target-and-menu-ownership-repair-after-44578401--2026-10-15).
+
+The authorized v7 rebuild/live attempt passed 12 preliminary checks, then stopped
+before its first merge when exact native membership became unreadable after
+opening Ghostty's Window menu. All eight baseline assignments were unchanged in
+237 samples, and 800 manager samples observed the same sole AquaSpace. Original
+Ghostty window 28264 stayed on workspace 1 with unchanged native identities.
+Focus restoration was refused by the error latch. Separately authorized recovery
+preserved the new ChatGPT focus and removed only the three recorded disposable
+tabs and pinned process. v7 merge/detach and restoration validation remain pending;
+see the [attempt and recovery](aquaspace.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
+
+The menu-tracking reader path is now repaired offline. The harness discovers the
+retained native action in the closed menu tree and runs its fresh exact native
+membership, AX root/selection and foreground checks before one direct item press.
+It never opens the tracking menu first, substitutes cached membership, or retries
+an uncertain action. Inaccessible/ambiguous closed menus fail before mutation.
+All 211 Python offline tests pass, including both operations under simulated
+menu-tracking read failure and late ownership/focus changes. No app, helper,
+native diagnostic library or live API was launched/loaded for this repair; no
+installation or push occurred. The earlier failed live result remains failed;
+see the [offline diagnosis and repair](aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).

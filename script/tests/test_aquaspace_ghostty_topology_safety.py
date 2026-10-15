@@ -214,6 +214,116 @@ class NativeMenuPolicyTests(unittest.TestCase):
         with offline():
             return menu_policy.run_menu(backend.request(operation),backend,expected=backend.expected,read_membership=backend.read_membership)
 
+    def test_menu_tracking_blocks_membership_but_closed_item_dispatch_does_not(self):
+        # Replay the real call chain: AX opens a tracking menu, then the pinned
+        # native reader cannot answer until tracking ends. A cached inventory
+        # cannot replace that read. Never opening the menu avoids the deadlock.
+        for operation in ('merge', 'detach'):
+            with self.subTest(operation=operation):
+                b=FakeAX();tracking=False;reads=[]
+                def tracking_reader(stage,element):
+                    nonlocal tracking
+                    if stage=='press' and element is b.window_menu:tracking=True
+                    if stage=='membership':
+                        reads.append(tracking)
+                        if tracking:raise menu_policy.MenuError('Ownership: Unreadable native windows')
+                b.hook=tracking_reader
+                self.run_policy(b,operation)
+                self.assertGreaterEqual(len(reads),2)
+                self.assertFalse(any(reads))
+                action=b.merge if operation=='merge' else b.detach
+                self.assertEqual(b.actions,[('press',action),('cancel',b.menu)])
+
+    def test_action_can_change_topology_without_post_press_membership_reads(self):
+        for operation in ('merge','detach'):
+            with self.subTest(operation=operation):
+                b=FakeAX();attempted=False
+                action=b.merge if operation=='merge' else b.detach
+                def mutate(stage,element):
+                    nonlocal attempted
+                    if stage=='press' and element is action:
+                        attempted=True
+                        b.native=None  # The action's postcondition is polled by the runner.
+                    if stage=='membership' and attempted:
+                        raise AssertionError('No revalidation or retry after possible action')
+                b.hook=mutate
+                self.run_policy(b,operation)
+                self.assertTrue(attempted)
+                self.assertEqual(b.actions,[('press',action),('cancel',b.menu)])
+
+    def test_closed_menu_unavailable_never_falls_back_to_opening_it(self):
+        for problem in ('missing', 'ambiguous', 'unreadable', 'wrong-role'):
+            with self.subTest(problem=problem):
+                b = FakeAX()
+                if problem == 'missing':
+                    b.window_menu.attributes['AXChildren'] = []
+                elif problem == 'ambiguous':
+                    b.window_menu.attributes['AXChildren'].append(b.menu)
+                elif problem == 'wrong-role':
+                    b.menu.role = 'AXWindow'
+                else:
+                    def unreadable(stage, element):
+                        if stage == 'AXChildren' and element is b.window_menu:
+                            raise menu_policy.MenuError('Closed menu is unreadable')
+                    b.hook = unreadable
+                with self.assertRaises(menu_policy.MenuError):
+                    self.run_policy(b)
+                self.assertEqual(b.actions, [])
+                self.assertEqual(b.bindings, [b.target])
+
+    def test_exact_membership_changes_during_discovery_refuse_direct_action(self):
+        for problem in ('extra-tab', 'terminal', 'group', 'selection', 'title', 'duplicate', 'unreadable'):
+            with self.subTest(problem=problem):
+                b = FakeAX()
+                def changed(stage, element):
+                    if stage != 'AXChildren' or element is not b.menu:
+                        return
+                    group = b.native['groups'][0]
+                    if problem == 'extra-tab':
+                        group['members'].append({'tab': 'foreign', 'terminal': 'foreign-uuid', 'title': b.prefix + 'initial'})
+                    elif problem == 'terminal':
+                        group['members'][0]['terminal'] = 'replacement-uuid'
+                    elif problem == 'group':
+                        group['window'] = 'replacement-group'
+                    elif problem == 'selection':
+                        group['selected'] = 'absent'
+                    elif problem == 'title':
+                        group['members'][0]['title'] = b.prefix + 'replacement'
+                    elif problem == 'duplicate':
+                        group['members'].append(copy.deepcopy(group['members'][0]))
+                    else:
+                        b.native = None
+                b.hook = changed
+                with self.assertRaises(menu_policy.MenuError):
+                    self.run_policy(b)
+                self.assertEqual(b.actions, [])
+
+    def test_hidden_arrival_during_final_ax_read_is_not_admitted_by_cached_membership(self):
+        b = FakeAX()
+        discovered = False
+        def arrival(stage, element):
+            nonlocal discovered
+            if stage == 'AXChildren' and element is b.menu:
+                discovered = True
+            if discovered and stage == 'AXFocusedWindow' and element is b.app:
+                b.native['groups'][0]['members'].append(
+                    {'tab': 'foreign', 'terminal': 'foreign-uuid', 'title': b.prefix + 'initial'})
+        b.hook = arrival
+        with self.assertRaises(menu_policy.MenuError):
+            self.run_policy(b)
+        self.assertTrue(discovered)
+        self.assertEqual(b.actions, [])
+
+    def test_foreign_menu_elements_are_refused_without_rebinding(self):
+        for name in ('bar', 'window_menu', 'menu', 'merge'):
+            with self.subTest(element=name):
+                b = FakeAX()
+                getattr(b, name).pid = b.personal
+                with self.assertRaises(menu_policy.MenuError):
+                    self.run_policy(b)
+                self.assertEqual(b.actions, [])
+                self.assertEqual(b.bindings, [b.target])
+
     def test_native_merge_and_detach_press_the_requested_retained_item(self):
         for operation in ('merge', 'detach'):
             with self.subTest(operation=operation):
@@ -221,8 +331,7 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 self.run_policy(b, operation)
                 action = b.merge if operation == 'merge' else b.detach
                 self.assertEqual(b.bindings, [b.target])
-                self.assertEqual(b.actions, [('press', b.window_menu),
-                                             ('press', action), ('cancel', b.menu)])
+                self.assertEqual(b.actions, [('press', action), ('cancel', b.menu)])
 
     def test_exact_recorded_inactive_ax_roots_are_supported_without_admitting_extra_members(self):
         for expose_inactive in (False,True):
@@ -251,28 +360,28 @@ class NativeMenuPolicyTests(unittest.TestCase):
         with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
         self.assertEqual(b.actions, [])
 
-    def test_user_switch_after_menu_open_refuses_action_and_only_cancels_owned_menu(self):
+    def test_user_switch_during_closed_menu_discovery_refuses_action(self):
         b = FakeAX()
         def switch(stage, element):
-            if stage == 'press' and element is b.window_menu:
+            if stage == 'AXChildren' and element is b.menu:
                 b.app.attributes['AXFrontmost'] = False
         b.hook = switch
         with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
-        self.assertEqual(b.actions, [('press', b.window_menu), ('cancel', b.menu)])
+        self.assertEqual(b.actions, [])
 
     def test_process_churn_at_menu_clicks_never_retargets_personal_app(self):
         b = FakeAX()
         stages = []
 
         def churn(stage, element):
-            if stage in ('activate', 'press'):
+            if stage == 'press' or (stage == 'AXChildren' and element is b.menu):
                 # Removing a preceding process places the PERSONAL app at the old
                 # target's numeric index. It must not change the mutation target.
                 b.process_order = [b.app, b.personal_app]
                 stages.append(stage)
         b.hook = churn
         self.run_policy(b)
-        self.assertEqual(stages, ['press', 'press'])
+        self.assertEqual(stages, ['AXChildren', 'press'])
         self.assertTrue(all(e.pid == b.target for _, e in b.actions))
         self.assertNotIn(b.personal_app, [e for _, e in b.actions])
 
@@ -324,16 +433,16 @@ class NativeMenuPolicyTests(unittest.TestCase):
         with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
         self.assertEqual(b.actions, [])
 
-    def test_prefixed_window_arriving_after_menu_open_prevents_merge(self):
+    def test_prefixed_window_arriving_during_closed_menu_discovery_prevents_merge(self):
         b = FakeAX()
         def arrival(stage, element):
-            if stage=='press' and element is b.window_menu:
+            if stage=='AXChildren' and element is b.menu:
                 b.app.attributes['AXWindows'].append(Element(b.target,b.prefix+'initial','AXWindow'))
         b.hook=arrival
         with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
         self.assertNotIn(('press',b.merge),b.actions)
 
-    def test_hidden_unrecorded_tab_and_changed_terminal_refuse_before_menu_open(self):
+    def test_hidden_unrecorded_tab_and_changed_terminal_refuse_before_discovery(self):
         for problem in ('extra-tab','terminal','group','selection','unreadable','duplicate'):
             with self.subTest(problem=problem):
                 b=FakeAX();group=b.native['groups'][0]
@@ -346,29 +455,29 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
                 self.assertEqual(b.actions,[])
 
-    def test_membership_arrival_during_menu_open_refuses_action(self):
+    def test_membership_arrival_during_closed_menu_discovery_refuses_action(self):
         b=FakeAX()
         def arrival(stage,element):
-            if stage=='press' and element is b.window_menu:
+            if stage=='AXChildren' and element is b.menu:
                 b.native['groups'][0]['members'].append({'tab':'foreign','terminal':'foreign-uuid','title':b.prefix+'initial'})
         b.hook=arrival
         with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
-        self.assertEqual(b.actions,[('press',b.window_menu),('cancel',b.menu)])
+        self.assertEqual(b.actions,[])
 
     def test_same_title_ax_root_replacement_is_not_admitted(self):
         b=FakeAX()
         def replace(stage,element):
-            if stage=='press' and element is b.window_menu:
+            if stage=='AXChildren' and element is b.menu:
                 other=Element(b.target,b.prefix+'a','AXWindow')
                 b.app.attributes.update(AXWindows=[other],AXFocusedWindow=other)
         b.hook=replace
         with self.assertRaises(menu_policy.MenuError):self.run_policy(b)
         self.assertNotIn(('press',b.merge),b.actions)
 
-    def test_membership_read_failure_cancels_only_retained_menu_without_retry(self):
+    def test_membership_read_failure_after_discovery_stops_without_mutation_or_retry(self):
         b=FakeAX();reads=[]
         def changed(stage,element):
-            if stage=='press' and element is b.window_menu:
+            if stage=='AXChildren' and element is b.menu:
                 def failed():reads.append(True);raise RuntimeError('membership unreadable')
                 b.read_membership=failed
         # The callback itself stays retained by run_menu; mutate its read source.
@@ -377,7 +486,7 @@ class NativeMenuPolicyTests(unittest.TestCase):
         with offline(),self.assertRaisesRegex(RuntimeError,'membership unreadable'):
             menu_policy.run_menu(b.request(),b,expected=b.expected,read_membership=reader)
         self.assertEqual(reads,[True])
-        self.assertEqual(b.actions,[('press',b.window_menu),('cancel',b.menu)])
+        self.assertEqual(b.actions,[])
 
     def test_foreign_pid_element_refuses_before_any_menu_mutation(self):
         b = FakeAX()
@@ -397,17 +506,17 @@ class NativeMenuPolicyTests(unittest.TestCase):
             self.run_policy(b)
         self.assertEqual(b.actions, [])
 
-    def test_window_arriving_after_menu_open_refuses_merge(self):
+    def test_window_arriving_during_closed_menu_discovery_refuses_merge(self):
         b = FakeAX()
 
         def new_window(stage, element):
-            if stage == 'press' and element is b.window_menu:
+            if stage == 'AXChildren' and element is b.menu:
                 b.app.attributes['AXWindows'].append(Element(b.target, 'unowned', 'AXWindow'))
         b.hook = new_window
         with self.assertRaises(menu_policy.MenuError):
             self.run_policy(b)
         self.assertNotIn(('press', b.merge), b.actions)
-        self.assertEqual(b.actions[-1], ('cancel', b.menu))
+        self.assertEqual(b.actions, [])
 
     def test_disabled_or_ambiguous_menu_action_is_not_pressed(self):
         for problem in ('disabled', 'ambiguous'):
@@ -422,18 +531,39 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 self.assertNotIn(('press', b.merge), b.actions)
 
     def test_ambiguous_action_reply_is_not_retried(self):
-        b = FakeAX()
-        attempts = []
+        for operation in ('merge', 'detach'):
+            with self.subTest(operation=operation):
+                b = FakeAX()
+                action = b.merge if operation == 'merge' else b.detach
+                attempts = []
+                def ambiguous(stage, element):
+                    if stage == 'press' and element is action:
+                        attempts.append(element)
+                        raise menu_policy.MenuError('reply lost after possible action')
+                b.hook = ambiguous
+                with self.assertRaises(menu_policy.MenuError):
+                    self.run_policy(b, operation)
+                self.assertEqual(attempts, [action])
+                self.assertEqual(b.actions, [('cancel', b.menu)])
 
-        def ambiguous(stage, element):
-            if stage == 'press' and element is b.merge:
-                attempts.append(element)
-                raise menu_policy.MenuError('reply lost after possible action')
-        b.hook = ambiguous
-        with self.assertRaises(menu_policy.MenuError):
-            self.run_policy(b)
-        self.assertEqual(attempts, [b.merge])
-        self.assertEqual(b.actions[-1], ('cancel', b.menu))
+    def test_uncertain_action_never_cancels_a_foreign_menu_or_retries_failed_cancel(self):
+        for problem in ('foreign', 'unreadable'):
+            with self.subTest(problem=problem):
+                b = FakeAX()
+                cancellations = []
+                def uncertain(stage, element):
+                    if stage == 'press' and element is b.merge:
+                        if problem == 'foreign':
+                            b.menu.pid = b.personal
+                        raise menu_policy.MenuError('Unknown action outcome')
+                def cancel(element):
+                    cancellations.append(element)
+                    raise menu_policy.MenuError('Cancel unavailable')
+                b.hook, b.cancel = uncertain, cancel
+                with self.assertRaisesRegex(menu_policy.MenuError, 'Unknown action outcome'):
+                    self.run_policy(b)
+                self.assertEqual(cancellations, [] if problem == 'foreign' else [b.menu])
+                self.assertEqual(b.actions, [])
 
 
 class NativeAXAdapterTests(unittest.TestCase):

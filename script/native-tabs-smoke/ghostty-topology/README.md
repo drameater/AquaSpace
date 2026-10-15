@@ -8,10 +8,21 @@ and 1,893 manager inventories observed the same sole AquaSpace. See the
 [completed v6 run](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
 
 Current source admission requires **`ghostty-topology-retained-source-v7`** for
-pinned foreground targets and exact menu membership. This repair has offline
-validation only; the diagnostic library has not been rebuilt. Older libraries,
-including v6, are refused before capture or launch. The completed v6 run above
+pinned foreground targets and exact menu membership. The authorized v7 library
+rebuild/live attempt stopped before its first merge when the native membership
+read failed after opening the Window menu. It passed 12 preliminary checks,
+preserved all eight baseline assignments and observed the same sole AquaSpace
+in 800 samples, but did not validate merge/detach or focus restoration. Separately
+authorized background recovery removed all disposable tabs/processes while
+preserving the new ChatGPT focus. See the [v7 attempt and recovery](../../../dev-docs/aquaspace.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
+Older libraries, including v6, are refused before capture or launch. The completed v6 run above
 and its first interrupted attempt remain historical records for their exact build.
+
+The subsequent offline repair dispatches the retained menu item directly from
+the closed menu tree, keeping fresh exact membership checks before its single
+press. It never opens the menu first or falls back to cached membership.
+All **211 Python offline tests** pass; this revised dispatch has not been live
+tested. See the [offline menu-tracking repair](../../../dev-docs/aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
@@ -31,13 +42,14 @@ The native-menu driver now requires fresh exact group/tab/terminal/title and
 selection membership, checks the selected title, and checks the PID of every
 accessibility element. `native_menu.py` runs in process and binds an application accessibility element
 to the disposable PID once, retains the copied window/menu elements, and uses
-those exact references for menu presses and menu cancellation. The menu driver
-never activates a background app.
+those exact references for the direct menu-item press and menu cancellation.
+The menu driver never activates a background app.
 It never enumerates System Events processes or resolves a target by display name
 or list position. Process-list changes cannot redirect those retained references;
 a stale element produces an error without selecting another process. Ambiguous
-action replies stop the run without retrying the action. Native menu errors cancel
-only the retained target menu; no global Escape key or terminal input is sent.
+action replies stop the run without retrying the action. After an attempted
+press, cancellation addresses only the retained target menu; failures before the
+press perform no mutation. No global Escape key or terminal input is sent.
 Each exposed AX window must correspond to an exact recorded native member;
 selected groups must be represented and duplicate titles/roots are refused.
 Recorded inactive tab roots may also be exposed, but a prefix alone never admits
@@ -155,7 +167,7 @@ The creation tests evaluate the runner's actual creation functions with a fake
 workspace service, checking the workspace at the instant of creation. They cover
 initial/destination windows, anchored tabs, failed switches, incorrect focus
 readback and refusal of personal workspaces. The menu tests inject process churn
-at activation and both presses, including after the final PID check, so the
+during closed-menu discovery and at the direct press, including after the final PID check, so the
 personal application occupies the old process-list position. They also cover
 target exit, foreign-PID elements, unowned windows, selected-title changes,
 disabled/ambiguous menus, and uncertain action completion without retries.
@@ -505,5 +517,6 @@ python3 -B script/test-ghostty-target-offline.py
 Only isolated test binaries were built/run, with all process, focus, scripting
 and application calls replaced by fakes; the native source passed syntax-only
 compilation. No app, diagnostic helper/library, installed CLI or live reader was
-launched or loaded. No installation, live test or push occurred. v7 awaits
-separate authorization for diagnostic rebuild/live validation.
+launched or loaded during that offline repair. No installation, live test or
+push occurred at that checkpoint. The subsequently authorized v7 rebuild/live
+attempt described above stopped before merging; full validation remains pending.

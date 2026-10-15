@@ -130,14 +130,14 @@ def run_menu(request, backend, *, expected, read_membership):
     menu_bar = owned(backend.element(app, 'AXMenuBar'))
     window_menu = named_child(menu_bar, 'AXMenuBarItem', 'Window')
     checked_windows()
-    opened = False
+    attempted = False
     menu = None
     try:
-        # Mark intent first: AXPress may succeed even if the reply fails.
-        target = owned(window_menu)
-        require_foreground()
-        opened = True
-        backend.press(target)
+        # Ghostty exposes the menu tree while closed. Opening a tracking menu
+        # first can block the Scripting Bridge reader used by checked_windows.
+        # Retain its exact item without opening anything, then run the same
+        # fresh native/AX checks before one direct AXPress. Missing closed-tree
+        # access is an error; never fall back to opening or cached membership.
         menus = [owned(c) for c in backend.elements(window_menu, 'AXChildren')
                  if backend.role(owned(c)) == 'AXMenu']
         if len(menus) != 1:
@@ -151,12 +151,14 @@ def run_menu(request, backend, *, expected, read_membership):
         checked_windows()
         target = owned(action)
         require_foreground()
+        # Mark intent first: AXPress may succeed even if the reply fails.
+        attempted = True
         backend.press(target)
     finally:
         # Cancel only this process's retained menu, never send Escape globally.
-        if opened:
+        if attempted:
             try:
-                backend.cancel(owned(menu if menu is not None else window_menu))
+                backend.cancel(owned(menu))
             except MenuError:
                 pass
     return {'operation': request.operation, 'pid': request.pid, 'target': 'retained-AX-element'}
