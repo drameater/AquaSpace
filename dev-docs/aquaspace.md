@@ -1678,3 +1678,75 @@ installed or pushed. These live validation notes form the local documentation
 checkpoint after `1789ab2d`. Creating this checkpoint involved no additional
 tests, builds, installations, app/helper launches or live checks. Nothing was
 pushed.
+
+## Offline restoration and final menu focus repair after fa59aeb4 — 2026-10-15
+
+The user authorized fixing both focus gaps found in the v7 checkpoint review,
+adding offline regressions without weakening ownership, and prohibited all app/
+helper launches, live tests, installations and pushes. Only Python runner/menu/
+focus policy code, offline tests and documentation were changed. The native
+library, v7 capability admission, manager inventory, pinned process proof and
+native background cleanup guards are unchanged; no diagnostic rebuild is needed
+for these Python changes.
+
+First, `native()` rejected unknown tabs and read/schema failures without always
+revoking foreground permission. Cleanup then built a restoration grant from
+`own_rows()`, which only filtered the disposable PID, baseline IDs and title
+prefix. A new foreground window inheriting `prefix + initial` could fail exact
+native ownership but still qualify for restoration. The offline reproduction
+executed the actual native reader, row reader, teardown restoration call and
+focus policy; it issued a focus command after ownership rejection before repair.
+
+Native reads now validate collection/group/member/selection structure and
+uniqueness, compare every tab/terminal/title triple with its original creation
+record, and permanently revoke on any read/ownership failure. Restoration accepts
+a fresh validator rather than a set of model IDs. Before granting a focus write,
+the runner validates pinned process/manager/original-window ownership, the full
+recorded native membership, exact selected model rows and dedicated workspace
+inventories. The source snapshot must match one exact row with coherent native/
+model PID/title and unique model focus. The focus policy rechecks the retained
+source after these potentially blocking reads. It requires the same source
+window/model/title across original-target validation; another known group or
+same-title replacement cannot inherit an earlier grant. Failures permanently
+revoke restoration, including if the user subsequently returns to a known tab.
+The empty-workspace path now carries only that exact source through workspace
+selection and validates its retained reference/title before the existing native
+activation. Background exact-ID cleanup remains independently guarded and never
+acquires foreground restoration permission from this validation.
+
+Second, native-menu selection was checked before the last potentially blocking
+membership/source callback, followed only by application foreground validation.
+The real execution gate correctly allowed another recorded group, but that was
+insufficient to authorize the specifically requested menu selection. Fake-API
+reproductions using the actual menu policy and actual `ExecutionFocus.check`
+switched from requested group A to recorded B during that callback, or replaced
+the requested root with a same-title root, and still reached the action before
+repair. Menu dispatch now pins the initial requested root and rechecks that exact
+root/title plus the complete retained AX inventory after blocking callbacks and
+before the item press. The callback cannot substitute a new source. The closed-
+menu dispatch, fresh exact membership, PID checks, ambiguity refusal, no-retry
+behavior and retained-only cancellation remain intact. No menu-opening fallback
+or activation path was added.
+
+Both reviewed reproductions failed before their repairs. Further exact-source
+restoration cases also first failed when a known group or same-title root changed
+during target validation. All **223 AquaSpace Python offline tests** now pass,
+including **12 new regression methods** covering prior rejection and fresh
+restoration admission, malformed/unreadable/duplicate/changed membership and
+permanent revocation, late arrivals and model ambiguity, baseline/manager refusal,
+source changes during membership and target reads, empty-workspace transitions,
+both merge/detach operations after final callback root changes, and runner-level
+revocation/local backend release. An unchanged exact source still restores once
+and verifies after cleanup. Legacy prefix-ID sets and truthy substitutes for an
+explicit successful fresh validator are refused.
+
+All process/native boundaries are fakes in these tests. Native library loads,
+subprocesses and signals are blocked; the tests also prevent live-path file
+creation. No native test binary or diagnostic helper/library was built, run or
+loaded, no installed CLI or live process/focus reader was invoked, and no app
+was launched. The diff passes whitespace checks. No installation, live test or
+push occurred. The successful v7 run remains historical for its exact source;
+these additional fixes have offline validation only. Both fixes, regressions and
+diagnosis notes form the local checkpoint after `fa59aeb4`. Creating this
+checkpoint involved no additional tests, builds, installations, app/helper
+launches or live checks. Nothing was pushed.

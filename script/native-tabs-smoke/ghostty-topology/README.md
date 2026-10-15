@@ -8,6 +8,14 @@ and 2,392 manager inventories observed the same sole AquaSpace. Three direct nat
 merges and three detachments passed with the closed-menu reader fix. See the
 [completed fixed v7 run](../../../dev-docs/aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
 
+The subsequent review found two remaining focus-admission gaps. Current Python
+source now requires fresh exact native/model ownership for restoration and
+rechecks the retained requested menu window after the last membership callback.
+All **223 Python offline tests** pass, including both reproduced failures; these
+additional fixes have not been live-tested. The successful v7 result above is
+historical for its committed Python source and library. The native v7 library
+is unchanged. See the [offline focus repair](../../../dev-docs/aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
+
 Current source admission requires **`ghostty-topology-retained-source-v7`** for
 pinned foreground targets and exact menu membership. The earlier v7 library
 rebuild/live attempt stopped before its first merge when the native membership
@@ -58,6 +66,9 @@ Each exposed AX window must correspond to an exact recorded native member;
 selected groups must be represented and duplicate titles/roots are refused.
 Recorded inactive tab roots may also be exposed, but a prefix alone never admits
 an occupant. Root references remain pinned across repeated membership checks.
+The requested focused root is also pinned, then checked again with the complete
+AX window inventory after the last blocking membership/source callback. Another
+recorded group or a same-title replacement cannot inherit the requested action.
 The old standalone prefix-only menu CLI is retired and cannot load native APIs.
 
 Before each mutation and during polling, the harness checks sole manager
@@ -263,6 +274,14 @@ is tied to that requested workspace and cannot authorize a personal model window
 Any detected departure or uncertain action reply permanently revokes foreground
 permission for the run, including cleanup restoration. Returning to a test window
 does not clear that failure. Exact-ID background cleanup remains available.
+
+Native membership/read/schema failures now revoke that permission too.
+Restoration no longer accepts a set of prefix-matched model IDs: before a focus
+write, it requires a fresh proof-owned inventory of all recorded native tab/
+terminal/title identities and exact selected model rows. The observed source
+must remain coherent, unambiguous and the same retained native window after
+those reads and across original-target validation. Empty-workspace restoration
+carries only that exact source through its existing activation transition.
 
 The script driver now requires a native foreground grant for create/add/select,
 retains its source AX application/window across tab enumeration, and rechecks

@@ -68,6 +68,7 @@ def run_menu(request, backend, *, expected, read_membership):
     if request.title not in selected_titles: raise MenuError('Requested selection is not recorded')
     app = backend.application(request.pid)
     roots=None
+    selected_root=None
 
     def checked_membership():
         if canonical_membership(read_membership(),request.prefix)!=expected:
@@ -78,9 +79,8 @@ def run_menu(request, backend, *, expected, read_membership):
             raise MenuError('Accessibility element belongs to another process')
         return element
 
-    def checked_windows():
-        nonlocal roots
-        checked_membership()
+    def checked_ax_windows():
+        nonlocal roots, selected_root
         owned(app)
         windows = backend.elements(app, 'AXWindows')
         if not windows:
@@ -102,10 +102,16 @@ def run_menu(request, backend, *, expected, read_membership):
             raise MenuError('Retained native window roots changed')
         focused = owned(backend.element(app, 'AXFocusedWindow'))
         if (not any(backend.same(focused, w) for w in windows)
-                or backend.title(focused) != request.title):
+                or backend.title(focused) != request.title
+                or (selected_root is not None and not backend.same(focused, selected_root))):
             raise MenuError('Selected test window changed')
-        checked_membership()
         if roots is None: roots=tuple(windows)
+        if selected_root is None: selected_root=focused
+
+    def checked_windows():
+        checked_membership()
+        checked_ax_windows()
+        checked_membership()
 
     def named_child(parent, role, title):
         matches = []
@@ -120,6 +126,10 @@ def run_menu(request, backend, *, expected, read_membership):
     def require_foreground():
         # Parent selection already made this process foreground. Never activate
         # it here: a user may have switched away during subprocess setup/AX reads.
+        # The last membership/source callback can block or accept another owned
+        # group. Revalidate the retained requested root and complete AX inventory
+        # after it returns; application foreground alone is not this selection.
+        checked_ax_windows()
         if not backend.flag(owned(app), 'AXFrontmost'):
             raise MenuError('Disposable Ghostty lost foreground ownership')
         owned(app)

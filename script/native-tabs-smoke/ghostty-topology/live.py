@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'script'))
 import aquaspace_update as u
 import focus_restore
-from native_menu import NativeAX, Request as MenuRequest, run_menu
+from native_menu import NativeAX, Request as MenuRequest, canonical_membership, run_menu
 from script_driver import ScriptDriver
 SOURCE=Path(__file__).resolve().parent
 HERE=ROOT/'.debug/aquaspace/ghostty-topology'
@@ -123,10 +123,34 @@ def own_rows():
  return result
 
 def native():
- v=driver('status');members=[m for g in v['groups'] for m in g['members']]
- expected={(c['tab'],c['terminal']) for c in created.values()}
- if len(members)!=len(expected) or {(m['tab'],m['terminal']) for m in members}!=expected or any(not m['title'].startswith(prefix) for m in members):raise RuntimeError('Unexpected native tab ownership: '+str(v))
- return v
+ try:
+  v=driver('status')
+  if not isinstance(v,dict) or not isinstance(v.get('groups'),list):raise RuntimeError('Unreadable native tab membership')
+  if v['groups']:canonical_membership(v,prefix)
+  members=[m for g in v['groups'] for m in g['members']]
+  expected={(c['tab'],c['terminal'],c['title']) for c in created.values()}
+  if len(members)!=len(expected) or {(m['tab'],m['terminal'],m['title']) for m in members}!=expected:raise RuntimeError('Unexpected native tab ownership: '+str(v))
+  return v
+ except Exception as error:
+  if focus_controller is not None:focus_controller.revoke(error)
+  raise
+
+def require_restoration_source(source):
+ # Prefix-only CLI rows never grant a focus write. Bind the observed source to
+ # fresh proof-owned native membership and exact selected model rows instead.
+ try:
+  isolated();membership=native();owned=own_rows()
+  inventories={w:cli('list-windows','--workspace',w,'--format','%{window-id}\t%{workspace}\t%{app-pid}\t%{window-title}') for w in (A,B)}
+  focus_restore.require_owned_destinations(inventories,owned,membership,pid,prefix,set(baseline))
+  m=source.model
+  matches=[r for r in owned if r[0]==m['window']]
+  if (len(matches)!=1 or not m['unique'] or source.pid!=pid or source.window is None or
+      m['pid']!=pid or m['title']!=source.title or matches[0][1:]!=[m['workspace'],str(pid),source.title]):
+   raise focus_restore.FocusError('Restoration source is not an exact recorded selected window')
+  return True
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 
 def settle(groups,note):
  # Expected partition maps label sets to workspace. Native group selection is read independently.
@@ -291,7 +315,7 @@ finally:
  # Restore while our last window still owns actual foreground focus. Closing a
  # foreground app first can hand focus to an unrelated window/workspace.
  try:
-  focus_controller.restore_before_cleanup(pid,{r[0] for r in own_rows()},{A,B},prefix)
+  focus_controller.restore_before_cleanup(pid,require_restoration_source,{A,B},prefix)
  except Exception as error:
   errors.append('Focus restoration: '+repr(error));success=False
   event('focus-restoration-error',error=repr(error))

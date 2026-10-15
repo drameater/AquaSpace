@@ -305,3 +305,15 @@ attempt had stopped on a Helium foreground change before any menu action and
 was safely cleaned up without a focus write; it remains failed. No manager
 lifecycle action, rebuild, installation or push occurred. See the
 [complete fixed-v7 record](aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
+
+The following offline review reproduced two further focus gaps: native ownership
+failure did not always revoke restoration, and final menu membership reads could
+change the requested selected root before dispatch. Both are repaired. Restoration
+requires fresh exact native/model admission and a retained unchanged source;
+native failures permanently revoke focus permission. Menu dispatch rechecks the
+retained requested root/title and full AX inventory after blocking callbacks.
+All **223 Python offline tests** pass, including 12 new regression methods using
+actual runner/policy functions with fake APIs. No apps, helpers, diagnostic
+libraries, live readers or installed CLIs were launched/loaded; no rebuild,
+installation, live test or push occurred. The successful v7 live result remains
+historical for its exact checkpoint; see the [offline focus repair](aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).

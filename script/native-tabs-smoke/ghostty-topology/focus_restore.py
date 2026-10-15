@@ -193,31 +193,47 @@ class FocusRestoration:
             self.status, self.error = 'capture-failed', str(error)
             raise
 
-    def restore_before_cleanup(self, test_pid, owned_windows, test_workspaces, prefix):
+    def restore_before_cleanup(self, test_pid, require_owned, test_workspaces, prefix):
         self.verified = False
         try:
             if self.revoked is not None:
                 raise FocusError('Execution foreground ownership revoked: ' + self.revoked)
+            if not callable(require_owned):
+                raise FocusError('Fresh exact restoration ownership validator required')
             self.guard()
             if self.initial is None:
                 raise FocusError('No verified original desktop focus')
             current = self.observe('before-restore')
             def is_test(value):
-                return (test_pid is not None and value.model['workspace'] in test_workspaces
-                        and value.model['window'] in owned_windows
-                        and value.model['pid'] == test_pid and value.pid == test_pid
-                        and value.window is not None and value.title is not None
-                        and value.title.startswith(prefix))
+                coherent = (test_pid is not None and value.model['workspace'] in test_workspaces
+                            and value.model['window'] and value.model['unique']
+                            and value.model['pid'] == test_pid and value.pid == test_pid
+                            and value.window is not None and value.title is not None
+                            and value.model['title'] == value.title and value.title.startswith(prefix))
+                if not coherent:
+                    return False
+                if require_owned(value) is not True:
+                    raise FocusError('Restoration source ownership was not confirmed')
+                # Membership and model enumeration may block. Neither a newer
+                # source nor a same-title replacement inherits this grant.
+                self.confirm_native(value)
+                return True
+
+            granted_source = None
 
             def may_write():
+                nonlocal granted_source
                 # Target validation can take time. Recheck foreground ownership
                 # afterwards, immediately before requesting original focus.
                 self.guard()
                 latest = self.observe('before-focus-write')
                 if self._matches(latest, self.initial):
                     return False
+                if not self._matches(latest, current) or latest.title != current.title:
+                    raise FocusError('Restoration source changed during target validation')
                 if not is_test(latest):
                     raise FocusError('Focus changed during target validation; refusing restoration')
+                granted_source = latest
                 return True
 
             if not self._matches(current, self.initial):
@@ -247,8 +263,9 @@ class FocusRestoration:
                     if may_write():
                         self.cli('workspace', self.initial.model['workspace'])
                         transition = self.observe('empty-workspace-selected')
-                        native_is_test = (transition.pid == test_pid and transition.title is not None
-                                          and transition.title.startswith(prefix))
+                        native_is_test = (granted_source is not None
+                                          and self._native_matches(transition, granted_source)
+                                          and transition.title == granted_source.title)
                         if not (native_is_test or self._native_matches(transition, self.initial)):
                             raise FocusError('Native focus changed while restoring empty workspace')
                         self.guard()
@@ -262,12 +279,14 @@ class FocusRestoration:
                         latest = self.observe('before-empty-activation')
                         if (latest.model['workspace'] != self.initial.model['workspace']
                                 or latest.model['window']
+                                or latest.title != transition.title
                                 or not self._native_matches(latest, transition)):
                             raise FocusError('Foreground changed during empty-workspace validation')
                         self.ax.set_frontmost(self.initial.app)
             self._settle('restore-before-cleanup', lambda value: self._matches(value, self.initial))
             self.status = 'restored-before-cleanup'
         except Exception as error:
+            self.revoke(error)
             self.status, self.error = 'restore-failed', str(error)
             raise
 

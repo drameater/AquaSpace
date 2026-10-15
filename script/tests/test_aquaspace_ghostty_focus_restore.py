@@ -106,6 +106,7 @@ class CleanupOrderingTests(unittest.TestCase):
             sys=SimpleNamespace(exit=lambda code: None), A='test-a', B='test-b', prefix='test-',
             record_cleanup_focus=lambda phase: events.append(('focus', phase)),
             focus_controller=controller,
+            require_restoration_source=lambda source: True,
             focus_restore=SimpleNamespace(FocusError=RuntimeError),
             focus_ax=SimpleNamespace(close=lambda: state.__setitem__('released', True)))
         tree = ast.parse((SOURCE / 'live.py').read_text())
@@ -256,6 +257,7 @@ class FocusEnvironment:
         self.original = Ref(100)
         self.original_window = None if empty else Ref(100, 'original')
         self.test, self.test_window = Ref(200), Ref(200, 'AeroSpace-NativeTabs-offline-unique-a')
+        self.recorded_title = self.test_window.title
         self.external, self.external_window = Ref(300), Ref(300, 'new-user-work')
         self.windows = {100: self.original_window, 200: self.test_window, 300: self.external_window}
         self.front = self.original
@@ -341,8 +343,10 @@ class FocusEnvironment:
                           title='new-user-work', unique=True)
 
     def restore(self):
-        return self.controller.restore_before_cleanup(200, {'test-window'}, {'test-a', 'test-b'},
-                                                       'AeroSpace-NativeTabs-offline-unique-')
+        def require_owned(source):
+            return source.model['window'] == 'test-window' and source.title == self.recorded_title
+        return self.controller.restore_before_cleanup(200, require_owned, {'test-a', 'test-b'},
+                                                      'AeroSpace-NativeTabs-offline-unique-')
 
 
 class FocusPolicyTests(unittest.TestCase):
