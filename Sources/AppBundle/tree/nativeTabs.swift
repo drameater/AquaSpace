@@ -12,6 +12,11 @@ final class AxNativeTabState {
     private(set) var representatives: [UInt32: UInt32] = [:]
     private var pendingAbsorptions: [UInt32: UInt32] = [:]
     private var pendingInheritances: [UInt32: UInt32] = [:]
+    // Negative membership evidence is separate from ephemeral AX observations.
+    // A Space reset must not turn an established bare window into a possible
+    // detached tab of whichever other group next shrinks. IDs are scoped to this
+    // application's lifetime, like knownWindowIds.
+    private var independentWindowIds: Set<UInt32> = []
     private struct Recovery {
         let started: ContinuousClock.Instant
         var observations: [UInt32: AxNativeTabObservation]
@@ -77,11 +82,23 @@ final class AxNativeTabState {
             }
         }
         let createdIds = serverIds.map { $0.subtracting(knownWindowIds ?? $0) } ?? []
-        let topology = nativeTabTopology(previous: history, refreshed: previous, current: current, representatives: representatives, createdWindowIds: createdIds)
+        let topology = nativeTabTopology(previous: history, refreshed: previous, current: current, representatives: representatives, createdWindowIds: createdIds, independentWindowIds: independentWindowIds)
         let nextHistory = nativeTabHistoryAfterUpdate(previous: history, current: current, topology: topology)
         try job.checkCancellation()
         let replacements = topology.replacements
         // Do not mutate the state until all cancellable AX reads have completed.
+        // Confirmed joins consume independence; provisional split windows do not
+        // acquire it before recovery has identified their source. Strong shared
+        // bar evidence can still join an independent window into a native group.
+        independentWindowIds.subtract(replacements.values)
+        independentWindowIds.subtract(topology.absorptions.keys)
+        for (id, observation) in current {
+            if observation.tabBar != nil {
+                independentWindowIds.remove(id)
+            } else if let accepted = nextHistory.observations[id], accepted.tabBar == nil {
+                independentWindowIds.insert(id)
+            }
+        }
         recovery = nextHistory.unresolved ? Recovery(started: retry?.started ?? now, observations: nextHistory.observations) : nil
         if lostProvisional { observations = current }
         for oldId in Array(replacements.values) + Array(topology.absorptions.keys) { observations.removeValue(forKey: oldId) }
@@ -134,6 +151,7 @@ final class AxNativeTabState {
     }
 
     func invalidateObservations() {
+        // Forget AX topology, not established independent window ownership.
         observations = [:]
         recovery = nil
         exposedWindowIds = []
@@ -300,6 +318,7 @@ struct AxNativeTabObservation {
 func nativeTabReplacements(
     previous: [UInt32: AxNativeTabObservation],
     current: [UInt32: AxNativeTabObservation],
+    independentWindowIds: Set<UInt32> = [],
 ) -> [UInt32: UInt32] {
     let exposedIds = Set(current.keys)
     var candidates: [UInt32: [UInt32]] = [:]
@@ -313,6 +332,12 @@ func nativeTabReplacements(
             exposedWindowIds: exposedIds, sharesTabBar: oldObservation.sharesTabBar(with: newObservation),
             previousWindowClosed: oldObservation.window.map { $0.containingWindowId() == nil } == true,
         ) {
+            // Geometry cannot transfer an established independent window's slot.
+            // A fresh staged first tab remains eligible during creation grace;
+            // an actual shared native bar is positive membership evidence.
+            if independentWindowIds.contains(newId),
+               !newObservation.snapshot.isNewWindow, !newObservation.snapshot.isRecentWindowCreation,
+               !oldObservation.sharesTabBar(with: newObservation) { continue }
             candidates[newId, default: []].append(oldId)
             if oldObservation.sharesTabBar(with: newObservation) { exactMatches.append(oldId) }
         }

@@ -54,6 +54,133 @@ private final class Replay {
 }
 
 struct NativeTabReplayTest {
+    @Test(arguments: [2, 3], [CGFloat(10), CGFloat(20000)])
+    func closingAnotherGroupsTabCannotClaimAnIndependentWindowAfterInvalidation(count: Int, x: CGFloat) throws {
+        let replay = Replay()
+        _ = replay.window(21423, x: x)
+        try replay.scan([21423]) // Existing standalone window, on a different workspace.
+        let bar = AXUIElement(owner: 23530)
+        _ = replay.window(23530, count: count, bar: bar)
+        replay.serverIds.formUnion([23523, 23528])
+        try replay.scan([21423, 23530])
+
+        // Native Space changes discard AX observations, not the original window's
+        // independent ownership. It need not be present in every later AXWindows read.
+        replay.state.invalidateObservations()
+        try ReplayTime.$elapsed.withValue(.seconds(3)) {
+            try replay.scan([23530])
+            _ = replay.window(23530, count: count == 2 ? nil : count - 1, bar: count == 2 ? nil : bar)
+            let update = try replay.scan([21423, 23530])
+            #expect(update.inheritances[21423] == nil)
+            #expect(update.replacements[21423] == nil)
+            #expect(update.absorptions[21423] == nil)
+        }
+    }
+
+    @Test func aRealInactiveDetachDoesNotAlsoMoveAnIndependentWindow() throws {
+        let replay = Replay()
+        _ = replay.window(9, x: 20000)
+        try replay.scan([9])
+        let bar = AXUIElement(owner: 3)
+        _ = replay.window(3, count: 3, bar: bar)
+        replay.serverIds.formUnion([1, 2])
+        try replay.scan([9, 3])
+        replay.state.invalidateObservations()
+        try ReplayTime.$elapsed.withValue(.seconds(3)) {
+            try replay.scan([3])
+            _ = replay.window(2, x: 100)
+            _ = replay.window(3, count: 2, bar: bar)
+            let update = try replay.scan([9, 2, 3])
+            #expect(update.inheritances == [2: 3])
+        }
+    }
+
+    @Test func closingSelectedTabCannotReplaceAnIndependentWindowWithCoincidentGeometry() throws {
+        let replay = Replay()
+        _ = replay.window(9)
+        try replay.scan([9])
+        _ = replay.window(3, count: 2, bar: AXUIElement(owner: 3))
+        replay.serverIds.insert(2)
+        try replay.scan([9, 3])
+        replay.state.invalidateObservations()
+        try ReplayTime.$elapsed.withValue(.seconds(3)) {
+            try replay.scan([3])
+            replay.windows[3]!.owner = nil // Selected tab really closed; its sibling survives.
+            _ = replay.window(2)
+            let update = try replay.scan([9, 2])
+            #expect(update.replacements == [2: 3])
+            #expect(update.inheritances.isEmpty)
+        }
+    }
+
+    @Test func independentWindowCanReallyJoinAnotherGroupAndLaterDetach() throws {
+        let replay = Replay()
+        _ = replay.window(1, x: 20000)
+        try replay.scan([1])
+        let bar = AXUIElement(owner: 3)
+        _ = replay.window(3, count: 2, bar: bar)
+        replay.serverIds.insert(2)
+        try replay.scan([1, 3])
+        try ReplayTime.$elapsed.withValue(.seconds(3)) {
+            // The source really merges: its size agrees, destination grows by one.
+            _ = replay.window(3, count: 3, bar: bar)
+            let merged = try replay.scan([3])
+            #expect(merged.absorptions == [1: 3])
+            _ = replay.window(1, count: 3, bar: bar)
+            let selected = try replay.scan([1])
+            #expect(selected.replacements == [1: 3])
+            _ = replay.window(3, count: 3, bar: bar)
+            let switchedBack = try replay.scan([3])
+            #expect(switchedBack.replacements == [3: 1])
+            _ = replay.window(1, x: 100)
+            _ = replay.window(3, count: 2, bar: bar)
+            let detached = try replay.scan([1, 3])
+            #expect(detached.inheritances == [1: 3])
+        }
+    }
+
+    @Test func recentlyCreatedBareStagingWindowCanStillBecomeTheFirstSelectedTab() throws {
+        let replay = Replay()
+        _ = replay.window(1)
+        try replay.scan([1])
+        _ = replay.window(2)
+        try replay.scan([1, 2]) // Both appear bare before the native bar is attached.
+        _ = replay.window(2, count: 2, bar: AXUIElement(owner: 2))
+        #expect(try replay.scan([2]).replacements == [2: 1])
+    }
+
+    @Test func positiveNativeBarIdentityCanMoveAnIndependentIncomingSelection() throws {
+        let replay = Replay()
+        _ = replay.window(1, x: 20000)
+        let bar = AXUIElement(owner: 3)
+        _ = replay.window(3, count: 2, bar: bar)
+        replay.serverIds.insert(2)
+        try replay.scan([1, 3])
+        _ = replay.window(1, count: 3, bar: bar)
+        #expect(try replay.scan([1]).replacements == [1: 3])
+    }
+
+    @Test func cancelledObservationCannotEraseIndependentOwnershipEvidence() throws {
+        let replay = Replay()
+        _ = replay.window(9, x: 20000)
+        try replay.scan([9])
+        let bar = AXUIElement(owner: 3)
+        _ = replay.window(3, count: 3, bar: bar)
+        try replay.scan([9, 3])
+        replay.state.invalidateObservations()
+        try ReplayTime.$elapsed.withValue(.seconds(3)) {
+            try replay.scan([3])
+            _ = replay.window(9, count: 2, bar: AXUIElement(owner: 9))
+            replay.job.checksUntilCancellation = 5 // Cancel after reads, before state commit.
+            #expect(throws: CancellationError.self) { try replay.scan([9, 3]) }
+            replay.job.checksUntilCancellation = nil
+            _ = replay.window(9, x: 20000)
+            _ = replay.window(3, count: 2, bar: bar)
+            let update = try replay.scan([9, 3])
+            #expect(update.inheritances[9] == nil)
+        }
+    }
+
     @Test func newlyCreatedBareDestinationCanAbsorbAnExistingGroup() throws {
         for age in [0, 3] {
             let replay = Replay()

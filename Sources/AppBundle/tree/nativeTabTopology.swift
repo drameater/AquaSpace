@@ -16,8 +16,9 @@ func nativeTabTopology(
     current: [UInt32: AxNativeTabObservation],
     representatives: [UInt32: UInt32],
     createdWindowIds: Set<UInt32> = [],
+    independentWindowIds: Set<UInt32> = [],
 ) -> NativeTabTopology {
-    var result = NativeTabTopology(replacements: nativeTabReplacements(previous: refreshed, current: current))
+    var result = NativeTabTopology(replacements: nativeTabReplacements(previous: refreshed, current: current, independentWindowIds: independentWindowIds))
     let exposed = Set(current.keys)
     var owners: [UInt32: UInt32] = [:]
     for (newId, observation) in current {
@@ -47,7 +48,7 @@ func nativeTabTopology(
     for (oldId, old) in previous where old.snapshot.tabCount == 2 && result.continuations[oldId] == nil {
         guard old.window.map({ $0.containingWindowId() == nil }) != true else { continue }
         let remaining = current.filter { id, candidate in
-            id != oldId && previous[id] == nil && candidate.tabBar == nil &&
+            id != oldId && previous[id] == nil && !independentWindowIds.contains(id) && candidate.tabBar == nil &&
                 !candidate.snapshot.isNewWindow && !candidate.snapshot.isRecentWindowCreation &&
                 nativeTabFramesMatch(old.snapshot.frame, candidate.snapshot.frame)
         }
@@ -60,7 +61,7 @@ func nativeTabTopology(
     // An inactive tab can detach without replacing the selected representative.
     // Prefer the observed shrinking group; use remembered membership only when
     // the transition was coalesced and the source is still exposed.
-    for (newId, new) in current where previous[newId] == nil && result.replacements[newId] == nil && result.inheritances[newId] == nil {
+    for (newId, new) in current where previous[newId] == nil && !independentWindowIds.contains(newId) && result.replacements[newId] == nil && result.inheritances[newId] == nil {
         let shrinking = previous.compactMap { oldId, old -> UInt32? in
             guard let count = old.snapshot.tabCount, count >= 2,
                   let ownerId = result.continuations[oldId] ?? (current[oldId] != nil ? oldId : nil),
