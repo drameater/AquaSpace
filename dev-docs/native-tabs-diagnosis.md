@@ -1,6 +1,6 @@
 # Offline investigation of the AppKit fixture failures
 
-Investigated on 2026-10-14 against local checkpoint `dc94868d`, then repaired offline as described below. No manager, AppKit fixture, or terminal app was launched. No live AX/CG observations, command sockets, installation changes, or network access were used. The installed applications remain unchanged; the repair, tests, and validation notes are recorded together in a local checkpoint after `dc94868d`.
+Investigated on 2026-10-14 against local checkpoint `dc94868d`, then repaired offline as described below. During that offline phase, no manager, AppKit fixture, or terminal app was launched, and no live AX/CG observations, command sockets, installation changes, or network access were used. The installed applications were unchanged during that phase; the repair, tests, and validation notes were committed as `5cf47d53`. Subsequent authorized installation and live validation are recorded at the end of this document.
 
 ## Finding
 
@@ -95,4 +95,12 @@ Final validation passed **44 offline tests**:
 
 Final logs: `.debug/native-tabs-offline/recovery-final.log` and `recovery-model-final.log`. Earlier red runs include `diagnosis.log`, `recovery-ambiguity-red.log`, and `recovery-switchback-red.log`.
 
-These results establish offline recovery and model-binding behavior. They do not supply the missing AX trace for the historical live failures, nor replace a future explicitly authorized live AppKit/Ghostty validation. The repair is committed locally; no installation, app launch, or push was performed.
+These results establish offline recovery and model-binding behavior. They do not supply the missing AX trace for the historical live failures, nor replace live AppKit/Ghostty validation. The repair was committed locally; no installation, app launch, or push was performed during the offline phase.
+
+## Subsequent authorized installation and live checks
+
+Commit `5cf47d53` was subsequently built, signed, and installed as AquaSpace `0.21.3-aquaspace.20261014.6`. The guarded updater confirmed empty manager inventory before launching its one replacement. Final verification found only AquaSpace PID 52732 controlling windows, with verified empty peer inventory and installed app/CLI hashes matching the release build manifest.
+
+Both background and foreground AppKit fixture sequences passed: **87 live assertions** including cross-workspace merges into bare destinations, selected and inactive detachment, independent movement, incoming-selected merges, two-to-one splits, bare merges, remerging, and repeated selections. The fixture now verifies NSWindow membership and saves its own AX snapshot sequence. Two fixture setup failures (JSON dictionary keys and initial workspace placement) were corrected without changing or reinstalling AquaSpace. The complete suite preserved its eight existing baseline windows and restored workspace/focus; all disposable windows were closed.
+
+Across installation and the three fixture attempts, independent monitors recorded 380 process inventories, with peak one manager and no scan errors. No stock AeroSpace process was launched, and nothing was pushed. The [full live validation record](aquaspace.md#recovery-checkpoint-installation-and-live-validation) includes report paths, baseline details, limitations, and the final verification file. This subsequent live validation note is recorded in a local documentation checkpoint after `5cf47d53`.

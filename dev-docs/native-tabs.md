@@ -22,7 +22,7 @@ python3 script/test-native-tab-model-offline.py \
   --scratch-path /private/tmp/aerospace-native-tab-validation-build
 ```
 
-This builds the AppBundle library and a Swift Testing target, with no app entrypoint or window creation. Dependencies must already be cached; resolution and updates are disabled. The explicit scratch path above reuses this machine's existing dependency/build cache. No recovery fix has been installed or live-tested yet.
+This builds the AppBundle library and a Swift Testing target, with no app entrypoint or window creation. Dependencies must already be cached; resolution and updates are disabled. The explicit scratch path above reuses this machine's existing dependency/build cache. The recovery fixes are now installed as AquaSpace `0.21.3-aquaspace.20261014.6` from commit `5cf47d53`; 87 subsequent live assertions passed with both background and foreground AppKit fixtures. See [the installation and live validation record](aquaspace.md#recovery-checkpoint-installation-and-live-validation) for ownership monitoring, trace evidence, cleanup, and the two corrected fixture setup failures.
 
 `Sources/AppBundleTests/tree/NativeTabReplacementTest.swift` exercises classification and actual tree/workspace transfers. Run it with the repository's normal Swift/Xcode test environment:
 

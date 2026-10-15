@@ -38,7 +38,7 @@ The isolated Swift package compiles the production admission and process-reader 
 
 ## Ownership rebuild and live validation after e7b17a02
 
-Release `0.21.3-aquaspace.20261014.5` is installed at `/Applications/AquaSpace.app`. It includes two followups discovered during the authorized rebuild and live tests. These followup source changes, offline regressions, and this validation record are included together in a local checkpoint after `e7b17a02`; nothing has been pushed.
+Release `0.21.3-aquaspace.20261014.5` was installed for this validation. It includes two followups discovered during the authorized rebuild and live tests. These followup source changes, offline regressions, and this validation record are included together in a local checkpoint after `e7b17a02`; nothing has been pushed. The subsequent recovery release is recorded below.
 
 The initial scanner requested BSD process identity before classifying each executable. On macOS 27, an ordinary unrelated process denied that request, causing AquaSpace to fail closed and exit. The corrected Swift runtime scanner and Python installer first classify the authoritative executable path and bundle metadata. Unrelated executables and embedded CLIs require no BSD identity query. Actual manager candidates still require matching before/after kernel birth identities and executable paths; an uncertain candidate or unreadable executable inventory still blocks control. An injected scanner regression reproduced the denied-helper failure before the correction, then passed with it. The updater also now accepts the precise `No window is focused` response when capturing an empty workspace; other capture failures still abort. Its regression likewise failed before the correction and passed afterward.
 
@@ -55,6 +55,29 @@ Evidence:
 - `.debug/aquaspace/release/build.json` (installed version and source/executable hashes).
 
 Additional AppKit fixture checks were inconclusive: one background merge check retained separate workspace assignments, and a foreground fixture failed its initial single-slot expectation. These checks are not counted as passing and do not revalidate merging/detachment for this build. A further fixture retest was not executed because automatic approval review reached its usage limit. This was a review-service failure, not an unsafe-action determination. No further live test was attempted.
+
+## Recovery checkpoint installation and live validation
+
+After explicit authorization to rebuild, install, and test, release `0.21.3-aquaspace.20261014.6` was built from local commit `5cf47d5356c1735090d5355b277c87e1772034a0` with the macOS 26.5 SDK and two compilation workers. The signed app and CLI are installed at `/Applications/AquaSpace.app`; final hashes match `.debug/aquaspace/release/build.json`. The runtime version includes source digest `c71a6481c794`. No source changes beyond that commit were needed for this live run, and nothing was pushed.
+
+The guarded production installer replaced sole predecessor PID 31402 with AquaSpace PID 52732. Instrumented phase boundaries confirmed zero managers after stopping, during replacement, and immediately before the single replacement launch. The transaction committed at `/Applications/.aquaspace-update-f7cfd7c27522438aab97683bb2b2bcfe`. The final status reports AquaSpace controlling windows with a verified empty peer inventory. Stock AeroSpace was never launched.
+
+The completed live suite passed **87 assertions** against the installed build, running both background and foreground variants of the AppKit fixture on `native-tab-test-recovery-a` and `native-tab-test-recovery-b`. It covered first-tab replacement, moving a group across workspaces, merging into a bare destination, selecting every merged member, selected-tab detachment, independently moving the detached window, merging with the incoming tab selected, inactive-tab detachment, two-to-one detachment, bare-window merging, cross-workspace remerging, and repeated selections after those cycles. Native NSWindow group membership was verified independently of the managed workspace model. The fixture also recorded only its own AX roots, native bars, frames, and WindowServer IDs: 404 background and 173 foreground trace samples.
+
+Two setup attempts preceded the completed suite. The first installed the release successfully, then the new fixture logger crashed because a remembered-bar dictionary used numeric JSON keys. That logger was corrected to use string keys and validate serialization; no manager crashed. The next attempt stopped before tab operations because initial app activation placed the standalone fixture on the previously focused workspace. A readiness handshake and an explicit move of only that uniquely identified disposable window established the test workspace before topology assertions. Both retries reused the installed process without reinstalling or launching any manager.
+
+Independent native process monitors recorded **380 inventories** across installation and the three fixture attempts (43, 45, and 292). Peak manager count was one throughout the observed samples, with no observer errors. The spawn-boundary check supplies direct confirmation of empty inventory before replacement, in addition to sampled observations.
+
+The completed suite and final read-only verification preserved all eight windows in that suite's baseline, including workspace assignments and fullscreen flags. Its initial workspace 3 and focused window 23278 were restored; all fixture windows were closed. The original AeroSpace app executable, original CLI, and user configuration match their preflight hashes. Signatures are valid and no unfinished installer transaction remains. Baselines were captured separately for each attempt, because the Messages window identity and Codex fullscreen state changed between the early attempts; tab operations targeted only the disposable fixture windows.
+
+Evidence is saved locally:
+
+- `.debug/aquaspace/recovery-live/preflight.json`, `build.log`, and `live.py` (preflight, build, and test harness).
+- `.debug/aquaspace/recovery-live-1792029411213869000/` (guarded installation, launch-boundary events, first fixture failure, 43 process inventories).
+- `.debug/aquaspace/recovery-live-1792029525519926000/` (startup-workspace failure before tab operations, 45 process inventories).
+- `.debug/aquaspace/recovery-live-1792029683997452000/` (`results.json`, `monitor.json`, `samples.jsonl`, `events.jsonl`, both AX traces, and `final-verification.json`: completed 87 assertions and 292 process inventories).
+
+These tests establish real AppKit behavior through the installed observer/layout pipeline. They do not claim a live replay of each synthetic timing sequence, or app-specific Ghostty merging API coverage. The six synthetic recovery cases remain covered by the 44 offline tests documented in [native-tabs-diagnosis.md](native-tabs-diagnosis.md). This validation record is included in a local documentation checkpoint after `5cf47d53`.
 
 ## Build locally
 
