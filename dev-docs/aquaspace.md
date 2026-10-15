@@ -1089,3 +1089,51 @@ historical; v4 admission has only this offline validation. The admission fix,
 regressions and notes are included in a local checkpoint after `734ebf62`.
 No additional tests, builds, installations or app/helper launches were performed
 when creating this checkpoint, and nothing was pushed.
+
+## v4 Ghostty live validation after 388b3117 — 2026-10-15
+
+After explicit authorization, only the diagnostic library was rebuilt from
+checkpoint `388b3117`. The native export and Python adapter both require
+`ghostty-topology-retained-source-v4`; the full runner passed that admission
+before capturing its session or launching a disposable process. No stale-library
+compatibility path or ownership/focus check was changed.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-150139/` completed **all 32
+assertions**, `success=true`, with no errors. It exercised three actual native
+Ghostty merges and three detachments, including cross-workspace merging, both
+three-tab and two-to-one detachments, independent detached-window movement,
+repeated selection and the final detach/move/remerge cycle. Test windows alone
+used `native-tab-test-ghostty-v4-20261015-a` / `-b`.
+
+- Original Ghostty window **28264 remained floating on workspace 3** in every one
+  of **626 original-window samples** and in the final model. Original PID 17528
+  and its native tab/terminal identities were preserved through cleanup.
+- All **nine windows in the fresh baseline** retained workspace/fullscreen state,
+  with zero preservation mismatches. This does not revisit the separately
+  recorded hidden-Zen omission during the earlier stock-to-fork handoff.
+- All **1,812 manager inventories** observed the same sole AquaSpace PID **42527**,
+  birth `(1792081221, 893887)`. Peak manager count was one. Ownership/inventory
+  checks also passed before every guarded action and final verification. Neither
+  window manager was rebuilt, installed, started, stopped or restarted.
+- Starting workspace **1**, model window **28146**, and the exact retained native
+  ChatGPT app/window (PID **15689**) were restored before cleanup: three matching
+  observations spanned **1.543 seconds**. After cleanup another three matching
+  observations spanned **1.115 seconds**. The report is `verified-after-cleanup`,
+  `verified=true`, without revocation.
+- All disposable tab/terminal pairs were closed, no disposable managed windows
+  remained, and only the empty disposable Ghostty PID **7126** was terminated and
+  confirmed exited. No terminal input was sent.
+
+The run's `results.json`, `events.jsonl`, baseline, process/window samples and
+`completion-summary.json` retain the evidence. Source `ScriptDriver.m` SHA-256 is
+`5590a019cef6fc6aa52d3a84dceef8c07d27f4616418940cc59a332fed7994ab`;
+Python adapter is `283ba08cf01bb8fde41d5c2839543f6712f65ee2661f44a6a12fca1582c606c8`;
+rebuilt v4 library is `30bb9955adb1423af8806f0c131c930d6bbc349e1b1dae1304fa746537b6deea`.
+Installed app/CLI hashes recorded in that summary match the prior installation.
+The earlier v3 results remain historical; this is the new complete v4 result.
+
+The user was told to resume desktop use after the completed run. Only saved
+artifacts and documentation were inspected afterward; no further installed CLI,
+app/helper or live test was invoked. These updated live notes form a local
+documentation checkpoint after `388b3117`. No additional tests or launches were
+performed while creating that checkpoint. Nothing was pushed.

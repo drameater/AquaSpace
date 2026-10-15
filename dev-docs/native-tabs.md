@@ -204,3 +204,12 @@ tests. Ownership checks are unchanged. No diagnostic binary was rebuilt/loaded,
 app/helper launched, live test run, installation performed or changes pushed.
 The preceding 32-check live result remains historical evidence for its v3 build.
 See the [offline admission repair](aquaspace.md#offline-stale-library-admission-repair-after-734ebf62).
+
+After explicit rebuild/live authorization, the v4 diagnostic library completed
+all **32 real Ghostty assertions**, including three merges, three detachments,
+repeated selection/movement and stable exact native/model focus restoration before
+and after cleanup. Original Ghostty window 28264 stayed floating on workspace 3;
+all nine baseline assignments were preserved in 626 samples. All 1,812 process
+inventories saw the same sole AquaSpace PID 42527, with no manager lifecycle
+changes. Disposable PID 7126 and its tabs were removed. Nothing was pushed.
+See the [v4 live validation record](aquaspace.md#v4-ghostty-live-validation-after-388b3117--2026-10-15).

@@ -1,15 +1,15 @@
 # Real Ghostty native merge/detach checks
 
-Latest authorized validation on **2026-10-15** passed **32 assertions**, including
+Latest authorized **v4** validation on **2026-10-15** passed **32 assertions**, including
 all native merge/detach cycles and stable native/model desktop focus restoration.
 All nine baseline assignments were preserved; original Ghostty window 28264
-stayed on workspace 3, disposable tabs/processes were removed, and 1,720 manager
+stayed on workspace 3, disposable tabs/processes were removed, and 1,812 manager
 inventories observed the same sole AquaSpace. See the
-[completed fresh-reader run](../../../dev-docs/aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).
+[completed v4 run](../../../dev-docs/aquaspace.md#v4-ghostty-live-validation-after-388b3117--2026-10-15).
 
-Current admission requires **`ghostty-topology-retained-source-v4`**. The saved
-live result used the preceding v3 build. The v4 admission repair is validated
-offline only; rebuild the diagnostic library before a future authorized live run.
+Current admission requires **`ghostty-topology-retained-source-v4`**. The rebuilt
+v4 library passed admission and the full live suite; older v3 libraries remain
+refused. Earlier validation sections retain their exact historical build/results.
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
