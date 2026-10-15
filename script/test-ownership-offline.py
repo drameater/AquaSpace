@@ -31,8 +31,9 @@ int proc_listpids(uint32_t kind, uint32_t uid, void *buf, int size) { abort(); }
 int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buf, int size) { abort(); }
 int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
 ''')
-    path = root / 'Sources/AppBundleTests/WindowManagerAdmissionTest.swift'
-    (tests / path.name).write_text(path.read_text().replace('@testable import AppBundle', '@testable import Ownership'))
+    for name in ['WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift']:
+        path = root / 'Sources/AppBundleTests' / name
+        (tests / path.name).write_text(path.read_text().replace('@testable import AppBundle', '@testable import Ownership'))
     (package / 'Package.swift').write_text('''// swift-tools-version: 6.2
 import PackageDescription
 let package = Package(name: "OwnershipOffline", platforms: [.macOS(.v13)], targets: [

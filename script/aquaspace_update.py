@@ -92,21 +92,20 @@ class DarwinProcesses:
             raise UpdateError('Process identity changed during inspection.')
         return info
 
-    def inspect(self, pid):
-        before = self._info(pid)
-        if before is None: return None
+    def _executable(self, pid):
         buf = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
         ctypes.set_errno(0)
         count = self.lib.proc_pidpath(pid, buf, len(buf))
         if count <= 0:
             if ctypes.get_errno() == errno.ESRCH: return None
             raise UpdateError(f'Cannot inspect process {pid} executable; refusing the update.')
-        after = self._info(pid)
-        if after is None: return None
-        birth = lambda info: (info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec, info.pbi_uid)
-        if birth(before) != birth(after):
-            raise UpdateError('PID was reused during inspection; refusing the update.')
-        executable = Path(os.fsdecode(buf.value))
+        return Path(os.fsdecode(buf.value))
+
+    def inspect(self, pid):
+        # Protected unrelated helpers can deny BSD records on macOS. Classify the
+        # executable first; full birth/UID verification is required for managers.
+        executable = self._executable(pid)
+        if executable is None: return None
         identifier = ''
         if executable.parent.name == 'MacOS' and executable.parent.parent.name == 'Contents':
             try:
@@ -120,6 +119,16 @@ class DarwinProcesses:
             # SwiftPM/debug executables need not live inside a bundle. Treat an
             # unclassified known manager as a blocker, never as an absent peer.
             identifier = 'unidentified.window-manager'
+        if identifier not in MANAGER_IDS: return None
+        before = self._info(pid)
+        if before is None: return None
+        verified_executable = self._executable(pid)
+        if verified_executable is None: return None
+        after = self._info(pid)
+        if after is None: return None
+        birth = lambda info: (info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec, info.pbi_uid)
+        if birth(before) != birth(after) or executable != verified_executable:
+            raise UpdateError('Process identity changed during inspection; refusing the update.')
         return Process(pid, (after.pbi_start_tvsec, after.pbi_start_tvusec),
                        after.pbi_uid, executable, identifier)
 
@@ -249,7 +258,11 @@ class NativeSystem:
         workspaces = [line.split('\t') for line in query('list-workspaces', '--all', '--format',
             '%{workspace}\t%{workspace-root-container-layout}').splitlines()]
         workspace = query('list-workspaces', '--focused')
-        focused = query('list-windows', '--focused', '--format', '%{window-id}')
+        try:
+            focused = query('list-windows', '--focused', '--format', '%{window-id}')
+        except UpdateError as error:
+            if str(error) != 'No window is focused': raise
+            focused = ''  # An empty workspace is valid session metadata.
         if (any(len(row) != 4 or not row[0].isdigit() or not row[1] or row[3] not in ('true', 'false') for row in windows)
                 or any(len(row) != 2 or not row[0] for row in workspaces)):
             raise UpdateError('Invalid workspace metadata; leaving the current manager alone.')

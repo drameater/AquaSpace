@@ -6,9 +6,9 @@ Open AquaSpace normally to switch from AeroSpace. To switch back, choose **Switc
 
 The original `aerospace` CLI is restored unchanged. AquaSpace adds `/opt/homebrew/bin/aquaspace`, pointing to `AquaSpace.app/Contents/MacOS/aquaspace-cli`. The apps use separate command sockets: the stock CLI controls stock AeroSpace and the fork's CLI controls AquaSpace. AquaSpace prefixes its own callbacks' PATH with a bundled `aerospace` compatibility alias, so relative `aerospace` invocations in the existing config use the fork. The user's shell PATH and original executable remain unchanged; external scripts and absolute CLI paths must explicitly choose the appropriate manager. Only one manager should control windows.
 
-## Validation on 2026-10-14
+## Earlier validation on 2026-10-14
 
-The user authorized rebuilding and testing. Release `0.21.3-aquaspace.20261014.2` is installed and running at `/Applications/AquaSpace.app`. Original AeroSpace and its Homebrew CLI remain restored alongside it. The installed executable matches the final-source build manifest.
+The user authorized rebuilding and testing. Release `0.21.3-aquaspace.20261014.2` was installed at this stage; the later installation is recorded below. Original AeroSpace and its Homebrew CLI remained restored alongside it. The installed executable matched that build manifest.
 
 All 26 headless regressions passed: 20 native-tab cases, four ownership/session cases, and two socket lifecycle cases. A scoped release candidate passed 11 background checks against real AppKit tabs, including cross-workspace group merging, selected/inactive detachment, and preservation of the destination workspace. The handoff target was a simulated IPC peer: it verified that ownership was yielding and window writes were disabled before target launch and received the restoration commands. Stock AeroSpace was not launched for this test. The current manager was paused during each scoped run and resumed afterward; workspace 3 and existing window assignments were preserved. The first fixture incorrectly prevented main-window status, exposing nonstandard AX subroles; restoring standard-window status while continuing to prevent keyboard focus resolved that harness issue.
 
@@ -34,7 +34,27 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s script/tests -p 'test_aquaspace*.py'
 ```
 
-The isolated Swift package compiles the production admission and process-reader sources without the app entrypoint or SwiftUI. Native process functions are replaced with aborting stubs; behavioral tests inject inventories and use temporary lock files. They cover both build configurations, late peers, unreadable inventories, debug/unbundled classification, CLI exclusion, irreversible yielding, lock contention, and symlink refusal. Python regressions verify that retired runners cannot start processes, signal managers, or write files, and that runtime paths have no debug escape hatch. Validation passed 10 Swift ownership regressions, all 50 Python offline tests, and compilation of the AppBundle library target. Neither application was launched or stopped. These source changes have not been installed or live-tested.
+The isolated Swift package compiles the production admission and process-reader sources without the app entrypoint or SwiftUI. Native process functions are replaced with aborting stubs; behavioral tests inject inventories and use temporary lock files. They cover both build configurations, late peers, unreadable inventories, debug/unbundled classification, CLI exclusion, irreversible yielding, lock contention, and symlink refusal. Python regressions verify that retired runners cannot start processes, signal managers, or write files, and that runtime paths have no debug escape hatch. At checkpoint `e7b17a02`, validation passed 10 Swift ownership regressions, all 50 Python offline tests, and compilation of the AppBundle library target. Neither application was launched or stopped during that offline validation. Subsequent installation and live validation are recorded below.
+
+## Ownership rebuild and live validation after e7b17a02
+
+Release `0.21.3-aquaspace.20261014.5` is installed at `/Applications/AquaSpace.app`. It includes two followups discovered during the authorized rebuild and live tests. These followup source changes, offline regressions, and this validation record are included together in a local checkpoint after `e7b17a02`; nothing has been pushed.
+
+The initial scanner requested BSD process identity before classifying each executable. On macOS 27, an ordinary unrelated process denied that request, causing AquaSpace to fail closed and exit. The corrected Swift runtime scanner and Python installer first classify the authoritative executable path and bundle metadata. Unrelated executables and embedded CLIs require no BSD identity query. Actual manager candidates still require matching before/after kernel birth identities and executable paths; an uncertain candidate or unreadable executable inventory still blocks control. An injected scanner regression reproduced the denied-helper failure before the correction, then passed with it. The updater also now accepts the precise `No window is focused` response when capturing an empty workspace; other capture failures still abort. Its regression likewise failed before the correction and passed afterward.
+
+The final offline run passed 16 isolated Swift tests and 53 Python tests. The optimized app and CLI were rebuilt and locally signed. The final live suites passed 45 ownership assertions and 18 updater/Ghostty assertions on dedicated test workspaces. Their independent monitors recorded 188 inventories in total, with a peak of one actual manager and no scan errors. Before every explicit restoration launch, the native inventory confirmed that no manager remained. The final saved status reports AquaSpace PID 31402 controlling windows with a verified empty peer inventory.
+
+Ownership tests exercised production debug/release admission against the controller lock, embedded CLI exclusion, retired-runner refusal, and runtime yielding plus startup refusal for stock-debug, fork-debug, and unbundled peer identities. Peer identity fixtures contained only C output/sleep code and could not control windows; debug admission probes used the production scanner and admission code without AX/window-control code. Stock AeroSpace was not launched. Its original app executable and CLI hashes remained unchanged.
+
+The public guarded updater succeeded from an empty test workspace, with the predecessor confirmed exited before replacement control. Real Ghostty automation created two native tabs, verified one managed slot, moved the group between test workspaces, switched tabs six times, and closed the selected tab while preserving the survivor's workspace. All disposable Ghostty tabs were then closed; existing terminal identities and all eight original window workspace assignments were preserved. The test restored workspace 1 and the original focused window. Dynamic hidden-app layout labels differed during a later metadata inspection, so this run does not establish byte-identical layout/visibility state for every original window.
+
+Evidence:
+
+- `.debug/aquaspace/ownership-live-1792026402881915000/results.json` and `monitor.json` (45 assertions, 84 final monitor samples).
+- `.debug/aquaspace/ghostty-ownership-1792026485819586000/results.json` and `monitor.json` (18 assertions, 104 final monitor samples).
+- `.debug/aquaspace/release/build.json` (installed version and source/executable hashes).
+
+Additional AppKit fixture checks were inconclusive: one background merge check retained separate workspace assignments, and a foreground fixture failed its initial single-slot expectation. These checks are not counted as passing and do not revalidate merging/detachment for this build. A further fixture retest was not executed because automatic approval review reached its usage limit. This was a review-service failure, not an unsafe-action determination. No further live test was attempted.
 
 ## Build locally
 

@@ -2,79 +2,116 @@ import Foundation
 import Darwin
 import PrivateApi
 
-/// Public libproc APIs: argv, app location and LaunchServices registration are
-/// irrelevant. Failure to inspect a live same-user process fails closed.
+struct WindowManagerProcessBirth: Equatable {
+    let pid: Int32
+    let uid: UInt32
+    let seconds: UInt64
+    let microseconds: UInt64
+}
+
+struct WindowManagerBundleMetadata {
+    var identifier: String?
+    var executable: String?
+}
+
+protocol WindowManagerProcessAPI {
+    var userId: UInt32 { get }
+    var ownPid: Int32 { get }
+    func pids() throws -> [Int32]
+    func executable(_ pid: Int32) throws -> String?
+    func identity(_ pid: Int32) throws -> WindowManagerProcessBirth?
+    func metadata(_ executable: String) throws -> WindowManagerBundleMetadata
+}
+
+/// Classify kernel executable paths before requesting BSD identity. macOS can
+/// deny BSD records for unrelated helpers; those records are irrelevant to control.
 enum WindowManagerProcesses {
-    static func peers() throws -> [WindowManagerProcess] {
-        let uid = getuid()
-        let needed = proc_listpids(UInt32(PROC_UID_ONLY), uid, nil, 0)
-        guard needed > 0 else { throw WindowManagerAdmissionError.uncertainInventory }
+    static func peers() throws -> [WindowManagerProcess] { try peers(using: NativeWindowManagerProcessAPI()) }
+
+    static func peers(using api: any WindowManagerProcessAPI) throws -> [WindowManagerProcess] {
+        var result: [WindowManagerProcess] = []
+        for pid in Set(try api.pids()) where pid > 0 && pid != api.ownPid {
+            guard let path = try api.executable(pid) else { continue }
+            let metadata = try api.metadata(path)
+            guard WindowManagerProcess.isManager(executable: path, bundleId: metadata.identifier,
+                                                  bundleExecutable: metadata.executable)
+            else { continue }
+            guard let before = try api.identity(pid), before.uid == api.userId else { continue }
+            guard let verifiedPath = try api.executable(pid), let after = try api.identity(pid) else { continue }
+            guard before == after, path == verifiedPath else { throw WindowManagerAdmissionError.uncertainInventory }
+            let identifier = metadata.executable == URL(filePath: path).lastPathComponent ? metadata.identifier : nil
+            result.append(WindowManagerProcess(pid: pid, startedSeconds: after.seconds,
+                startedMicroseconds: after.microseconds, executable: path, bundleId: identifier))
+        }
+        return result
+    }
+}
+
+private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI {
+    var userId: UInt32 { getuid() }
+    var ownPid: Int32 { getpid() }
+
+    private func scanError(_ stage: String, pid: Int32 = 0, count: Int32 = 0, code: Int32 = 0) -> NSError {
+        NSError(domain: "AquaSpace.ProcessInventory", code: Int(code), userInfo: [NSLocalizedDescriptionKey:
+            "Cannot establish process identity (\(stage), pid \(pid), bytes \(count), errno \(code)). Refusing window control."])
+    }
+
+    func pids() throws -> [Int32] {
+        let needed = proc_listpids(UInt32(PROC_UID_ONLY), userId, nil, 0)
+        guard needed > 0 else { throw scanError("list-size", count: needed, code: errno) }
         var capacity = Int(needed) / MemoryLayout<Int32>.size + 64
         for _ in 0 ..< 3 {
             var pids = [Int32](repeating: 0, count: capacity)
             let bytes = pids.count * MemoryLayout<Int32>.size
             let count = unsafe pids.withUnsafeMutableBytes {
-                unsafe proc_listpids(UInt32(PROC_UID_ONLY), uid, $0.baseAddress, Int32(bytes))
+                unsafe proc_listpids(UInt32(PROC_UID_ONLY), userId, $0.baseAddress, Int32(bytes))
             }
             guard count > 0, count % Int32(MemoryLayout<Int32>.size) == 0 else {
-                throw WindowManagerAdmissionError.uncertainInventory
+                throw scanError("list-pids", count: count, code: errno)
             }
             if count >= bytes { capacity *= 2; continue }
-            var result: [WindowManagerProcess] = []
-            for pid in Set(pids.prefix(Int(count) / MemoryLayout<Int32>.size)) where pid > 0 && pid != getpid() {
-                if let process = try inspect(pid), process.uid == uid,
-                   WindowManagerProcess.isManager(executable: process.value.executable,
-                                                  bundleId: process.value.bundleId,
-                                                  bundleExecutable: process.bundleExecutable)
-                { result.append(process.value) }
-            }
-            return result
+            return Array(pids.prefix(Int(count) / MemoryLayout<Int32>.size))
         }
-        throw WindowManagerAdmissionError.uncertainInventory
+        throw scanError("list-truncated")
     }
 
-    private static func info(_ pid: Int32) throws -> proc_bsdinfo? {
+    func identity(_ pid: Int32) throws -> WindowManagerProcessBirth? {
         var value = proc_bsdinfo()
         errno = 0
         let count = unsafe proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &value, Int32(MemoryLayout<proc_bsdinfo>.size))
+        let code = errno
         guard count == MemoryLayout<proc_bsdinfo>.size else {
-            if errno == ESRCH { return nil }
-            throw WindowManagerAdmissionError.uncertainInventory
+            if code == ESRCH { return nil }
+            throw scanError("bsd-info", pid: pid, count: count, code: code)
         }
         if value.pbi_status == 5 { return nil } // SZOMB cannot control windows.
-        guard value.pbi_pid == pid else { throw WindowManagerAdmissionError.uncertainInventory }
-        return value
+        guard value.pbi_pid == pid else { throw scanError("pid-mismatch", pid: pid, count: Int32(value.pbi_pid)) }
+        return WindowManagerProcessBirth(pid: pid, uid: value.pbi_uid,
+                                        seconds: value.pbi_start_tvsec, microseconds: value.pbi_start_tvusec)
     }
 
-    private static func inspect(_ pid: Int32) throws -> (value: WindowManagerProcess, uid: UInt32, bundleExecutable: String?)? {
-        guard let before = try info(pid) else { return nil }
+    func executable(_ pid: Int32) throws -> String? {
         var path = [CChar](repeating: 0, count: 4096 /* PROC_PIDPATHINFO_MAXSIZE */)
         errno = 0
         let count = unsafe path.withUnsafeMutableBytes { unsafe proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
+        let code = errno
         guard count > 0 else {
-            if errno == ESRCH { return nil }
-            throw WindowManagerAdmissionError.uncertainInventory
+            if code == ESRCH { return nil }
+            throw scanError("pid-path", pid: pid, count: count, code: code)
         }
-        guard let after = try info(pid) else { return nil }
-        guard before.pbi_start_tvsec == after.pbi_start_tvsec,
-              before.pbi_start_tvusec == after.pbi_start_tvusec, before.pbi_uid == after.pbi_uid else {
-            throw WindowManagerAdmissionError.uncertainInventory
-        }
-        let executable = String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    func metadata(_ executable: String) throws -> WindowManagerBundleMetadata {
         let url = URL(filePath: executable)
-        var identifier: String?
-        var bundleExecutable: String?
-        if url.deletingLastPathComponent().lastPathComponent == "MacOS",
-           url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Contents" {
-            let plist = url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "Info.plist")
-            guard let metadata = try unsafe PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any] else {
-                throw WindowManagerAdmissionError.uncertainInventory
-            }
-            bundleExecutable = metadata["CFBundleExecutable"] as? String
-            if bundleExecutable == url.lastPathComponent { identifier = metadata["CFBundleIdentifier"] as? String }
+        guard url.deletingLastPathComponent().lastPathComponent == "MacOS",
+              url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Contents"
+        else { return WindowManagerBundleMetadata() }
+        let plist = url.deletingLastPathComponent().deletingLastPathComponent().appending(path: "Info.plist")
+        guard let metadata = try unsafe PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any] else {
+            throw scanError("bundle-plist")
         }
-        return (WindowManagerProcess(pid: pid, startedSeconds: after.pbi_start_tvsec,
-                    startedMicroseconds: after.pbi_start_tvusec, executable: executable, bundleId: identifier),
-                after.pbi_uid, bundleExecutable)
+        return WindowManagerBundleMetadata(identifier: metadata["CFBundleIdentifier"] as? String,
+                                           executable: metadata["CFBundleExecutable"] as? String)
     }
 }

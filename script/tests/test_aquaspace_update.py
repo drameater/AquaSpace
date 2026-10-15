@@ -408,6 +408,7 @@ class FakeLibProc:
         self.path = str(executable).encode()
         self.arg_list = ['--restore-session', '/directory with spaces/session.json']
         self.path_error = None
+        self.info_error = None
         self.birth = 123
         self.change_birth = False
         self.info_reads = 0
@@ -418,6 +419,8 @@ class FakeLibProc:
         return 4
 
     def proc_pidinfo(self, pid, flavor, argument, buffer, size):
+        if self.info_error:
+            ctypes.set_errno(self.info_error); return 0
         self.info_reads += 1
         info = ctypes.cast(buffer, ctypes.POINTER(update.BsdInfo)).contents
         info.pbi_pid = pid; info.pbi_uid = os.getuid(); info.pbi_status = 2
@@ -449,6 +452,19 @@ class ProcessInspectionTests(unittest.TestCase):
 
     def test_inaccessible_process_information_fails_closed(self):
         self.lib.path_error = errno.EPERM
+        with self.assertRaises(update.UpdateError): self.inspector.managers()
+
+    def test_unrelated_helper_and_embedded_cli_need_no_bsd_identity_permission(self):
+        for path in [Path(self.tmp.name) / 'system/protected-helper',
+                     self.app / 'Contents/MacOS/aquaspace-cli']:
+            with self.subTest(path=path):
+                self.lib.path = str(path).encode()
+                self.lib.info_error = errno.EPERM
+                self.assertEqual(self.inspector.managers(), [])
+                self.assertEqual(self.lib.info_reads, 0)
+
+    def test_manager_with_denied_bsd_identity_still_blocks_update(self):
+        self.lib.info_error = errno.EPERM
         with self.assertRaises(update.UpdateError): self.inspector.managers()
 
     def test_process_exiting_during_scan_is_not_a_phantom_manager(self):
@@ -540,6 +556,21 @@ class NativeBackendTests(unittest.TestCase):
             session = self.native.capture_session(old, cli_path)
         self.assertEqual(session['workspace'], 'work')
         self.assertEqual(sum(call.args[0][1:] == ['management-status'] for call in cli.call_args_list), 2)
+
+    def test_session_capture_allows_empty_workspace_without_hiding_other_errors(self):
+        old = self.inspector.inspect(1234)
+        status = dict(pid=1234, phase='controlling', controlsWindows=True, readOnly=False, originalPids=[])
+        def query(args):
+            if args[1:] == ['management-status']: return json.dumps(status)
+            if args[1:] == ['list-workspaces', '--focused']: return 'empty-test-workspace'
+            if args[1:3] == ['list-windows', '--focused']: raise update.UpdateError('No window is focused')
+            return ''
+        with patch.object(self.native, 'run', side_effect=query):
+            result = self.native.capture_session(old, 'fake-cli')
+        self.assertEqual(result['focusedWindow'], '')
+        self.assertEqual(result['workspace'], 'empty-test-workspace')
+        with patch.object(self.native, 'run', side_effect=update.UpdateError('Uncertain ownership')):
+            with self.assertRaises(update.UpdateError): self.native.capture_session(old, 'fake-cli')
 
 
 class CommandHelpTests(unittest.TestCase):
