@@ -114,7 +114,12 @@ handle use, independent CF retention, stale-element errors and failed window rea
 All these tests block native-library loading, subprocesses and signals. They
 execute no application, installed CLI, native process reader or real AX operation.
 
-These changes have **offline validation only**. The earlier 31-assertion live
-record applies to the previous System Events driver and creation ordering. The
-new direct-AX path and reordered creation need a separately authorized live run;
-neither app was launched or installed during this repair.
+The repair checkpoint was validated offline without app launch or installation.
+A separately authorized live run on **2026-10-15** then passed **31 assertions**
+against the exact committed direct-AX driver and reordered creation path. It
+preserved all 11 baseline assignments/fullscreen states and original Ghostty
+window 21423 on workspace 2; 913 process inventories observed the same sole
+AquaSpace. All disposable windows/processes were removed. Final desktop focus
+differed from the initial snapshot, so full focus restoration is not claimed.
+See the [complete live record](../../../dev-docs/aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15)
+for evidence and the final read-only focus check.

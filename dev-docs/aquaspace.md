@@ -305,3 +305,56 @@ This repair was performed entirely offline. No AquaSpace or Ghostty launch, real
 process/window inspection, live test, installation or push occurred. The new AX
 path and creation order have not yet been validated live. The prior 31 live
 assertions must not be relabeled as a live run of these changes.
+
+
+## Fixed Ghostty harness live validation after 4508f0e8 — 2026-10-15
+
+The user authorized running the repaired harness on the dedicated test workspaces.
+The exact committed runner and native AX driver from `4508f0e8` completed on the
+first attempt, passing **31 live assertions**. The diagnostic binaries matched
+the hashes saved by the earlier completed run, and their source matched the
+committed helper sources. Accessibility trust was checked without prompting
+before starting; no permission change was needed.
+
+All six actual native-menu operations used retained AX targets in isolated
+Ghostty PID 9973: three merges and three detachments. The suite verified initial
+creation on test workspace A, tab creation, a two-tab group move to B, member
+selections, cross-workspace merge into a bare destination on A, three-to-two and
+two-to-one detachment, independent movement, merging three bare windows onto B,
+repeated selections, and a final detach/move/remerge onto A. Native membership
+was read through Ghostty's scripting API independently of AquaSpace's model.
+No positional System Events targeting or terminal keystrokes were used.
+
+**913 independent process inventories** observed the same sole AquaSpace PID
+68598, kernel birth `[1792033211, 996731]`, with no scanner errors. Background
+window monitoring recorded **419 snapshots**. Per-operation checks and final
+read-only verification preserved all **11 original windows' workspace and
+fullscreen states**; the final rows also match their original layout fields.
+Original Ghostty window **21423 remained floating on workspace 2**, with unchanged
+native tab/terminal identities. All disposable tabs were closed, only isolated
+Ghostty PID 9973 exited, and only original Ghostty PID 60264 remained afterward.
+Installed AquaSpace and CLI hashes still match release `.7` from `f13337a2`.
+The installed manager was reused without launch, stop, pause, resume, rebuild or
+installation. Nothing was pushed.
+
+The initial desktop snapshot reported workspace 1/focused window 11344. Final
+read-only verification reported workspace 2/focused window 11584. All original
+window assignments/layout/fullscreen fields still matched. The exact timing and
+cause of the focus difference were not established; the harness conditionally
+restores only when a test workspace remains focused. A stricter separate final
+focus-equality assertion consequently failed, while all preservation, process,
+cleanup, native menu and installed-hash assertions had passed. Verification was
+repeated without treating focus equality as an invariant or issuing corrective
+focus/workspace commands. This run establishes the tab/workspace and ownership
+checks above, and does **not** claim complete restoration of desktop focus.
+
+Evidence: `.debug/aquaspace/ghostty-topology/run-20261015-004359/`
+(`baseline.json`, `baseline-app-identities.json`, `isolated-process.json`,
+`created.json`, `events.jsonl`, `process-samples.jsonl`, `window-samples.jsonl`,
+`results.json`, `final-verification.json`). The final verification includes the
+commit, source/helper hashes, six retained-target responses, original/final focus
+metadata, installed-hash confirmation and cleanup checks. Preflight is saved in
+`.debug/aquaspace/ghostty-topology/preflight-20261015-1792039433040629000.json`.
+These live validation notes are included in a local documentation checkpoint
+after `4508f0e8`. No further live tests were run while preparing the checkpoint,
+and nothing was pushed.

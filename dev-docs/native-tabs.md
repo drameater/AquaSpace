@@ -114,3 +114,13 @@ mutation targets. Both are repaired with verified test-workspace focus before
 creation and retained PID-bound AX menu elements. New offline regressions cover
 the creation ordering and process-churn/error paths. The revised harness has not
 been run live; see the [offline repair record](aquaspace.md#offline-ghostty-harness-isolation-repair-after-4072970d).
+
+
+The repaired harness from `4508f0e8` subsequently passed a separately authorized
+31-assertion live Ghostty run on 2026-10-15 using retained native AX menu targets.
+Original window 21423 stayed floating on workspace 2 with unchanged native tab
+and terminal identities; all 11 baseline window assignments/fullscreen states
+were preserved. The same sole AquaSpace was observed in 913 process inventories,
+and all disposable tabs/processes were cleaned up. Final desktop focus differed
+from the initial snapshot and was left unchanged during read-only verification;
+complete focus restoration is not claimed. See the [full live validation](aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15).
