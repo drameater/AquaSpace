@@ -15,7 +15,8 @@ terminal UUID. The native-menu driver requires the unique test title prefix for
 **every** exposed window, checks the selected title, and checks the PID of every
 accessibility element. `native_menu.py` binds an application accessibility element
 to the disposable PID once, retains the copied window/menu elements, and uses
-those exact references for activation, menu presses and menu cancellation.
+those exact references for menu presses and menu cancellation. The menu driver
+never activates a background app.
 It never enumerates System Events processes or resolves a target by display name
 or list position. Process-list changes cannot redirect those retained references;
 a stale element produces an error without selecting another process. Ambiguous
@@ -78,6 +79,12 @@ installed AquaSpace CLI. Supply that actual baseline, for example:
 python3 -B script/native-tabs-smoke/ghostty-topology/live.py \
   --run-live --expect-existing-window 21423:2
 ```
+
+If another window occupies the default test pair, leave it untouched and select
+a fresh empty pair with `--test-workspace-prefix native-tab-test-ghostty-focus-20261015`.
+The prefix must start with `native-tab-test-` and contain only lowercase ASCII
+letters, digits and hyphens. All original windows, including windows on the old
+test pair, remain in the new preservation baseline.
 
 Without `--run-live` and an explicit baseline, the runner exits before writing
 files, compiling anything, inspecting native processes, or launching applications.
@@ -207,10 +214,34 @@ it requires the target to remain foreground immediately before each menu press.
 All existing process-birth, manager, original-window, native tab/terminal identity,
 prefix and ambiguity checks remain in place.
 
-**Rebuild `script-driver` before a future authorized live run.** The runner now
-requires its read-only `ghostty-topology-foreground-v1` capability response and
-refuses old helpers before capturing a session or launching disposable Ghostty.
+**Rebuild `script-driver` before a future authorized live run.** At this offline
+checkpoint the runner required the read-only `ghostty-topology-foreground-v1`
+capability and refused old helpers before session capture or disposable launch.
+The current v2 capability is described below.
 Neither helper nor either window manager was rebuilt or launched during this
 offline repair; the Objective-C helper received a syntax-only compiler check.
 These changes are not yet live-validated. The earlier 32-assertion run predates
 this repair. See the [offline repair record](../../../dev-docs/aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).
+
+## Initial activation follow-up and interrupted live runs after eff15f35
+
+The live check found that creation and CLI movement can update model focus while
+the original Ghostty instance remains native foreground. The runner now performs
+one explicit initial activation after its first exact tab/terminal pair exists,
+while the preceding native source still passes the execution gate. The helper
+retains and rechecks that granted source immediately before activation. Native
+activation is awaited read-only, with no action retry; any different user focus
+revokes permission. Selection and menu operations do not regain activation paths.
+The current helper capability is **`ghostty-topology-foreground-v2`**; rebuild it
+with the command above. A v1 helper is now refused.
+
+All **143 offline tests** pass, including initial activation, no-retry and user
+focus refusal cases plus inert rejection of invalid workspace prefixes. The
+helper was rebuilt and the v2 path reached real native merges/detachments, but
+the live attempts did **not** complete: a baseline Zen window disappeared in
+one attempt and a new Zen window took foreground on a test workspace in another.
+The guards refused restoration rather than overriding those changes. All
+disposable processes were cleaned up; original Ghostty window 21423 stayed on
+workspace 2, and 1,636 process samples saw the same sole AquaSpace. A later
+read-only snapshot matched the original desktop focus, but this is not a passing
+restoration result. See the [attempt record](../../../dev-docs/aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).

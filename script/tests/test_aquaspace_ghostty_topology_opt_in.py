@@ -42,5 +42,11 @@ class GhosttyTopologyOptInTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.invoke(['--run-live', '--expect-existing-window', value], 2)
 
+    def test_personal_or_malformed_workspace_prefix_is_inert(self):
+        for prefix in ('personal', 'native-tab-test-bad space', 'native-tab-test-'+'a'*96):
+            with self.subTest(prefix=prefix):
+                self.invoke(['--run-live','--expect-existing-window','21423:2',
+                             '--test-workspace-prefix',prefix],2)
+
 if __name__ == '__main__':
     unittest.main()

@@ -563,3 +563,85 @@ must not be relabeled as its validation. A future explicitly authorized live
 run must first rebuild the diagnostic script driver. The foreground checks are
 bounded observations around mutations; they do not constitute an atomic macOS
 lock against an input event arriving after the final check.
+
+## Foreground-guard live attempts after eff15f35 — 2026-10-15
+
+The user authorized rebuilding the diagnostic helper and running the harness on
+test workspaces, checking desktop focus, original Ghostty placement and sole
+manager ownership. Only `script-driver` was rebuilt. Neither window manager was
+rebuilt, installed, restarted, paused or launched. Nothing was pushed.
+
+The first attempt ran the exact `eff15f35` source with the rebuilt v1 helper:
+`run-20261015-014619`, disposable Ghostty PID **29203**. It passed nine assertions
+then refused a workspace transition. Original Ghostty PID **60264**, window
+**21423**, remained native foreground while the manager model selected the test
+windows. Removing redundant activation had also removed the initial native app
+handoff needed for a separately launched instance. The gate correctly refused
+when the group left the bootstrap workspace; it did not issue a restoration
+request after revocation. All disposable tabs/processes were removed. Its
+`abort-verification.json` confirms all 11 original rows and original Ghostty
+native tab/terminal identities were unchanged, with the same sole AquaSpace.
+
+The follow-up adds exactly one explicit initial native activation after the
+first owned tab/terminal pair exists. The runner's execution gate validates the
+unchanged source before dispatch; the helper retains its source application and
+window and checks them again immediately before normal app activation. The
+runner waits read-only for the owned native/model focus and never retries the
+activation. A new user foreground app still revokes permission. Selection and
+native-menu paths retain their foreground checks and do not activate apps.
+The helper capability was advanced to `ghostty-topology-foreground-v2` so a stale
+v1 helper cannot bypass this interface requirement. Three added offline tests
+cover the exact one-shot handoff, refusal after a user switch, and an ignored
+activation without retries. They failed before the repair and now pass.
+
+A Zen window **25795**, PID **51309**, appeared on the old test workspace B
+between attempts. A guarded preparation check stopped without any focus write
+when it observed this extra window. The runner now accepts a validated
+`--test-workspace-prefix` so an occupied test pair can be left untouched. One
+additional offline test covers invalid/personal prefixes, before native APIs or
+file writes. All **143 AquaSpace Python offline tests** passed before continuing.
+The v2 Objective-C helper built successfully with ApplicationServices linked and
+normal activation options. No ownership or ambiguity check was relaxed.
+
+The two v2 attempts used
+`native-tab-test-ghostty-focus-20261015-a` and `-b`:
+
+- `run-20261015-015041`, disposable PID **30257**: passed **21 assertions**,
+  including real merges and detachments. It included all 12 existing windows in
+  its preservation baseline. Zen row **25795** disappeared during the run;
+  background monitoring stopped the suite, and the unchanged preservation gate
+  refused restoration. Cleanup removed only the disposable Ghostty process.
+  The final cleanup observation matched original native/model focus without a
+  restoration request, but this failed run is not a focus-restoration pass.
+- `run-20261015-015240`, disposable PID **33310**: captured a fresh baseline of
+  the 11 remaining original windows and passed **12 assertions**. A new Zen
+  window **25984** appeared on test workspace A and was its actual native/model
+  foreground when the suite next selected A. The execution guard revoked
+  permission immediately. Cleanup left Zen focus alone, made no restoration
+  request, and removed only disposable Ghostty PID 33310. The cause of Zen's
+  transient window activity was not established; no helper command targeted Zen.
+
+Live testing stopped after those interruptions. **No attempt completed** the
+full topology/restoration suite. The last attempt demonstrates refusal to
+overwrite foreign foreground focus; it does not establish successful normal
+restoration after the new handoff. Counts from failed attempts must not be
+combined into a passing suite.
+
+Across the three attempts, **1,636 native process inventories** observed the same
+sole AquaSpace PID **68598**, birth `[1792033211, 996731]`, with no process-monitor
+errors. The attempts recorded 65, 398 and 194 window snapshots respectively.
+Original Ghostty window **21423 stayed floating on workspace 2**, with unchanged
+native tab/terminal identities. Final read-only verification found all 11
+long-lived original rows unchanged, only original Ghostty PID 60264 remaining,
+and all three disposable PIDs exited. At that later snapshot, actual native and
+model focus both again matched **workspace 2, window 11584, ChatGPT PID 52214**.
+No manual focus reset was issued to produce that snapshot.
+
+Evidence is saved in each run directory under
+`.debug/aquaspace/ghostty-topology/`; the last run's `final-verification.json`
+contains the cross-run checks, installed/source/helper hashes, current focus and
+the explicit incomplete result. The initial-activation repair, workspace-prefix
+support, four added offline tests and these notes are included in a local
+checkpoint after `eff15f35`. No additional tests were run when creating this
+checkpoint. A complete live restoration run remains pending a desktop
+without the interfering Zen window activity.

@@ -112,12 +112,12 @@ static NSDictionary *describe(GhosttyApplication *app) {
 }
 int main(int argc, const char *argv[]) { @autoreleasepool { @try {
     if (argc == 2 && strcmp(argv[1], "--capabilities") == 0) {
-        puts("ghostty-topology-foreground-v1"); return 0;
+        puts("ghostty-topology-foreground-v2"); return 0;
     }
     if (argc < 3) [NSException raise:@"Arguments" format:@"Expected PID and operation"];
     pid_t pid = (pid_t)atoi(argv[1]); NSString *op = @(argv[2]);
     ForegroundGuard *foreground = nil;
-    if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"]) {
+    if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
         if (argc < 5 || strcmp(argv[argc-2], "--foreground") != 0)
             [NSException raise:@"Foreground" format:@"Foreground grant required"];
         NSData *data = [@(argv[argc-1]) dataUsingEncoding:NSUTF8StringEncoding];
@@ -162,6 +162,13 @@ int main(int argc, const char *argv[]) { @autoreleasepool { @try {
         } else if ([op isEqual:@"select"]) {
             [foreground check];
             [(GhosttyObject *)targetTab selectTab]; result=describe(app);
+        } else if ([op isEqual:@"activate"]) {
+            if (![(NSString *)value([(GhosttyObject *)targetTab name]) hasPrefix:@"AeroSpace-NativeTabs-"])
+                [NSException raise:@"Identity" format:@"Not a disposable tab"];
+            [foreground check];
+            if (![native activateWithOptions:0])
+                [NSException raise:@"Foreground" format:@"Initial activation refused"];
+            result=@{@"activationRequested":@YES};
         } else if ([op isEqual:@"close"]) { [(GhosttyObject *)targetTab closeTab]; result=@{@"closed":@YES}; }
         else [NSException raise:@"Operation" format:@"Unknown operation"];
     }

@@ -154,3 +154,13 @@ no manager lifecycle path was added. All 139 AquaSpace Python offline tests pass
 including 26 added methods. The new helper source received a syntax-only check;
 neither apps nor helper binaries were launched, rebuilt or installed. These
 changes have not been live-validated. See the [offline focus-safety repair](aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).
+
+The authorized live attempts after `eff15f35` exposed a missing initial native
+activation for the disposable instance; a guarded one-shot handoff and four
+additional offline tests bring the suite to 143 passing Python tests. The v2
+helper was rebuilt and real merge/detach checks ran, but a disappearing baseline
+Zen window and later foreign Zen foreground caused safe aborts. No full live
+restoration pass is claimed. All disposable processes were removed, original
+Ghostty window 21423 remained floating on workspace 2 with unchanged native
+identities, and all 1,636 process samples observed the same sole AquaSpace. See
+the [complete attempt record](aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).

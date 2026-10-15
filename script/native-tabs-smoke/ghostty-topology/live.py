@@ -5,11 +5,16 @@ import sys
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--run-live', action='store_true', help='Explicitly authorize launching disposable Ghostty windows and native menu actions')
 parser.add_argument('--expect-existing-window', action='append', required=False, default=[], metavar='ID:WORKSPACE', help='Required preservation baseline; repeat for multiple windows')
+parser.add_argument('--test-workspace-prefix', default='native-tab-test-ghostty-topology', help='Dedicated empty workspace pair prefix (must start with native-tab-test-)')
 args = parser.parse_args()
 if not args.run_live:
     parser.error('Live execution requires --run-live; no application or native process APIs were used.')
 if not args.expect_existing_window:
     parser.error('Supply --expect-existing-window ID:WORKSPACE from the current session.')
+if (not args.test_workspace_prefix.startswith('native-tab-test-')
+        or len(args.test_workspace_prefix) > 96
+        or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in args.test_workspace_prefix)):
+    parser.error('Use a dedicated lowercase native-tab-test- workspace prefix.')
 expectations = []
 for expectation in args.expect_existing_window:
     window, separator, workspace = expectation.partition(':')
@@ -30,7 +35,7 @@ for helper in ('script-driver', 'launch-ghostty'):
 HERE.mkdir(parents=True,exist_ok=True)
 OUT=HERE/('run-'+time.strftime('%Y%m%d-%H%M%S'));OUT.mkdir();(HERE/'current').write_text(str(OUT))
 N=u.NativeSystem();CLI=Path('/Applications/AquaSpace.app/Contents/MacOS/aquaspace-cli')
-A='native-tab-test-ghostty-topology-a';B='native-tab-test-ghostty-topology-b'
+A=args.test_workspace_prefix+'-a';B=args.test_workspace_prefix+'-b'
 prefix='AeroSpace-NativeTabs-'+uuid.uuid4().hex[:12]+'-'
 stop=threading.Event();errors=[];checks=[];created={};pid=None;birth=None;manager=None;baseline={};samples=[];wsamples=[]
 focus_controller=None;focus_ax=None;activity=None
@@ -89,7 +94,7 @@ def driver(op,*args,personal=False):
  if not personal:isolated()
  target=personal if personal else pid
  extra=[]
- if op in ('create','add','select'):
+ if op in ('create','add','select','activate'):
   if personal:raise RuntimeError('No personal-process mutations')
   snapshot=focus_guard('before-script-'+op)
   extra=['--foreground',json.dumps(dict(pid=snapshot.pid,title=snapshot.title,hasWindow=snapshot.window is not None))]
@@ -147,6 +152,22 @@ def fresh(label,anchor=None,workspace=A):
  else:v=driver('create',prefix+label)
  created[label]=v;save('created.json',created);preserved();return v
 
+def activate_initial(label):
+ # Creation and CLI focus can leave another instance of the same bundle native
+ # foreground. Make the initial, explicitly guarded handoff before leaving A.
+ native();source=focus_guard('before-initial-activation')
+ if source.pid==pid:return
+ try:
+  c=created[label];driver('activate',c['tab'],c['terminal'])
+  end=time.monotonic()+5
+  while time.monotonic()<end:
+   if focus_guard('initial-activation-poll').pid==pid:return
+   time.sleep(.1)
+  raise focus_restore.FocusError('Initial native activation did not complete; no retry')
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
+
 def select(label):
  native();c=created[label];driver('select',c['tab'],c['terminal']);time.sleep(.2);preserved()
  rr=[r for r in own_rows() if r[3]==prefix+label]
@@ -181,7 +202,7 @@ def record_cleanup_focus(phase):
   try:focus_controller.observe(phase)
   except Exception as error:event('focus-observation-error',phase=phase,error=repr(error))
 
-if N.run([HERE/'script-driver','--capabilities'],timeout=5)!='ghostty-topology-foreground-v1':
+if N.run([HERE/'script-driver','--capabilities'],timeout=5)!='ghostty-topology-foreground-v2':
  raise RuntimeError('Rebuild the foreground-guarded diagnostic helper before running live')
 manager,status=ownership();session=N.capture_session(manager,CLI);baseline={r[0]:r for r in session['windows']}
 save('baseline-app-identities.json',cli('list-windows','--all','--format','%{window-id}\t%{workspace}\t%{app-name}\t%{app-pid}').splitlines())
@@ -219,6 +240,7 @@ try:
   preserved();focus_guard('initial-window-poll')
   if time.monotonic()>end:raise RuntimeError('New test window not observed')
   time.sleep(.1)
+ activate_initial('a')
  move('a',A);settle(dict([G('a',A)]),'standalone anchored on test workspace A')
  fresh('b','a');settle(dict([G('ab',A)]),'two native Ghostty tabs share one workspace slot')
  move('b',B);settle(dict([G('ab',B)]),'native tab group moved to test workspace B')
