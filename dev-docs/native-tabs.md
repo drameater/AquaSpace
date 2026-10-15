@@ -213,3 +213,13 @@ all nine baseline assignments were preserved in 626 samples. All 1,812 process
 inventories saw the same sole AquaSpace PID 42527, with no manager lifecycle
 changes. Disposable PID 7126 and its tabs were removed. Nothing was pushed.
 See the [v4 live validation record](aquaspace.md#v4-ghostty-live-validation-after-388b3117--2026-10-15).
+
+The subsequent offline review found that cleanup's final focus observation
+separated its empty-process/identity checks from a PID-only termination helper.
+The repair rechecks after observation, requires independent retained-application,
+kernel identity and empty-window validation inside the native termination
+receiver, and removes the Swift PID-only command. Admission now requires v5;
+v3/v4 libraries remain refused. Both original reproductions now refuse unsafe
+termination, all 183 Python tests and 26 native cases with fake APIs pass, and no
+diagnostic helper/library or app was rebuilt or launched. Live validation is
+pending. See the [offline cleanup repair](aquaspace.md#offline-cleanup-termination-repair-after-c56ce874--2026-10-15).

@@ -2,6 +2,10 @@
 #import <AppKit/AppKit.h>
 #import <ScriptingBridge/ScriptingBridge.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <libproc.h>
+#import <sys/proc_info.h>
+#import <unistd.h>
+#import <limits.h>
 
 // Retain the caller's exact in-process AX references across enumeration and recheck
 // immediately before a creation/selection. Neither failure nor cleanup activates
@@ -119,6 +123,68 @@ static NSDictionary *describe(GhosttyApplication *app) {
     }
     return @{@"groups":groups};
 }
+
+// Termination is a background-only operation. Keep the verified native process
+// object through membership reads; never re-resolve a PID after those reads.
+static uint64_t processNumber(id value, uint64_t maximum) {
+    if (![value isKindOfClass:NSNumber.class] ||
+        CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() ||
+        CFNumberIsFloatType((__bridge CFNumberRef)value) ||
+        [value compare:@0] == NSOrderedAscending || [value compare:@(maximum)] == NSOrderedDescending)
+        [NSException raise:@"Identity" format:@"Invalid pinned process identity"];
+    return [value unsignedLongLongValue];
+}
+static void requireProcessIdentity(pid_t pid, NSArray *birth) {
+    struct proc_bsdinfo info = {0}, after = {0};
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) ||
+        info.pbi_status == 5 || info.pbi_pid != pid || info.pbi_uid != getuid() ||
+        info.pbi_start_tvsec != [birth[1] unsignedLongLongValue] ||
+        info.pbi_start_tvusec != [birth[2] unsignedLongLongValue] ||
+        info.pbi_uid != [birth[3] unsignedLongLongValue] ||
+        proc_pidpath(pid, path, sizeof(path)) <= 0 ||
+        strcmp(path, "/Applications/Ghostty.app/Contents/MacOS/ghostty") != 0 ||
+        proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after)) != sizeof(after) ||
+        after.pbi_status == 5 || after.pbi_pid != info.pbi_pid || after.pbi_uid != info.pbi_uid ||
+        after.pbi_start_tvsec != info.pbi_start_tvsec || after.pbi_start_tvusec != info.pbi_start_tvusec)
+        [NSException raise:@"Identity" format:@"Disposable process identity changed before termination"];
+}
+static void requireEmptyGhostty(GhosttyApplication *app) {
+    id current = windows(app);
+    // A failed Apple event can return nil: it is never evidence of emptiness.
+    if (![current isKindOfClass:NSArray.class] || [current count] != 0)
+        [NSException raise:@"Ownership" format:@"Unowned or unreadable remaining windows; leaving process alone"];
+}
+static NSDictionary *terminateEmptyGhostty(pid_t pid, NSDictionary *proof) {
+    if (![proof isKindOfClass:NSDictionary.class] ||
+        ![proof[@"birth"] isKindOfClass:NSArray.class] || [proof[@"birth"] count] != 4 ||
+        ![proof[@"protected"] isKindOfClass:NSArray.class] || ![proof[@"protected"] count])
+        [NSException raise:@"Identity" format:@"Pinned disposable identity required for termination"];
+    NSArray *birth = proof[@"birth"];
+    if (processNumber(birth[0], INT_MAX) != pid || !processNumber(birth[1], UINT64_MAX))
+        [NSException raise:@"Identity" format:@"Invalid pinned PID or birth"];
+    processNumber(birth[2], 999999);
+    processNumber(birth[3], UINT32_MAX);
+    for (id protected in proof[@"protected"])
+        if (!processNumber(protected, INT_MAX) || [protected intValue] == pid)
+            [NSException raise:@"Identity" format:@"Refusing protected process termination"];
+    requireProcessIdentity(pid, birth);
+    NSRunningApplication *native = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!native || ![native.bundleIdentifier isEqual:@"com.mitchellh.ghostty"] ||
+        ![native.executableURL.path isEqual:@"/Applications/Ghostty.app/Contents/MacOS/ghostty"] || native.terminated)
+        [NSException raise:@"Identity" format:@"Disposable native application identity changed"];
+    GhosttyApplication *app = (GhosttyApplication *)[SBApplication applicationWithProcessIdentifier:pid];
+    app.timeout = 10 * 60;
+    requireEmptyGhostty(app);
+    requireProcessIdentity(pid, birth);
+    // Recheck after the first blocking enumeration and kernel validation.
+    requireEmptyGhostty(app);
+    requireProcessIdentity(pid, birth);
+    if (![native terminate])
+        [NSException raise:@"Termination" format:@"Disposable termination refused; no retry"];
+    return @{@"terminationRequested":@YES};
+}
+
 static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {
     if (![request isKindOfClass:NSDictionary.class] || ![request[@"argv"] isKindOfClass:NSArray.class])
         [NSException raise:@"Arguments" format:@"Invalid diagnostic request"];
@@ -133,6 +199,10 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
     }
     if (argc < 3) [NSException raise:@"Arguments" format:@"Expected PID and operation"];
     pid_t pid = (pid_t)atoi(argv[1]); NSString *op = @(argv[2]);
+    if ([op isEqual:@"terminate"]) {
+        if (argc != 3 || pid <= 0) [NSException raise:@"Arguments" format:@"Unexpected termination arguments"];
+        return terminateEmptyGhostty(pid, request[@"process"]);
+    }
     AquaSpaceGhosttyForegroundGuard *foreground = nil;
     if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
         foreground = [[AquaSpaceGhosttyForegroundGuard alloc] initWithSnapshot:request[@"foreground"] application:sourceApp window:sourceWindow];
@@ -189,8 +259,8 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
 
 // There is deliberately no executable entrypoint or metadata-only fallback.
 const char *AquaSpaceGhosttyDriverCapabilities(void) {
-    // v4 requires retained roots plus fresh system/AX foreground observations.
-    return "ghostty-topology-retained-source-v4";
+    // v5 also requires receiver-side pinned-process and empty-window termination.
+    return "ghostty-topology-retained-source-v5";
 }
 void AquaSpaceGhosttyDriverFree(void *result) { free(result); }
 char *AquaSpaceGhosttyDriverRun(const char *json, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {

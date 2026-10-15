@@ -7,9 +7,10 @@ stayed on workspace 3, disposable tabs/processes were removed, and 1,812 manager
 inventories observed the same sole AquaSpace. See the
 [completed v4 run](../../../dev-docs/aquaspace.md#v4-ghostty-live-validation-after-388b3117--2026-10-15).
 
-Current admission requires **`ghostty-topology-retained-source-v4`**. The rebuilt
-v4 library passed admission and the full live suite; older v3 libraries remain
-refused. Earlier validation sections retain their exact historical build/results.
+Current source admission requires **`ghostty-topology-retained-source-v5`** for
+guarded cleanup termination. This repair has only offline validation; the
+diagnostic library has not been rebuilt. The earlier v4 live result above remains
+historical. Both v3 and v4 libraries are now refused before capture or launch.
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
@@ -60,6 +61,14 @@ Cleanup closes only exact recorded tab/terminal pairs. It terminates the
 pinned disposable process only after its native window list is empty, with its
 kernel birth identity and executable still matching. An unrecognized remaining
 tab is left alone and reported. It never relaunches a manager after an error.
+After the final cleanup focus observation, manager/original-window preservation,
+process identity and empty membership are checked again. Termination then uses
+the in-process library, not a PID-only subprocess command. The receiver validates
+the supplied birth/UID and protected PIDs, retains the matching native application,
+and repeats independent kernel identity/executable and native empty-window reads
+immediately before its single termination request. Missing or malformed native
+window replies refuse termination. No focus write, logging or subprocess startup
+intervenes between those final checks and the request.
 
 ## Build the diagnostic helpers
 
@@ -377,3 +386,33 @@ subprocesses and signals are blocked in the adapter tests. No diagnostic library
 was rebuilt or loaded, no app/helper was launched, and no live test or installation
 was performed for this repair. The earlier 32-assertion result remains a record
 of its exact v3 binary; it is not a new v4 live-validation result.
+
+## Offline cleanup termination repair after c56ce874
+
+Review reproduced two ways cleanup could reach termination after its earlier
+checks: an unrecorded tab could appear during the final focus observation, or
+the recorded PID could refer to a different process. The runner now revalidates
+after that observation and passes the expected identity into the native receiver.
+`LaunchGhostty.swift` no longer exposes a `terminate` command. Receiver-side
+checks live in `ScriptDriver.m`; no executable fallback or action retry exists.
+The required library capability is now **`ghostty-topology-retained-source-v5`**,
+so an unrecompiled v4 library cannot admit this run. All existing focus, exact tab/
+terminal, destination, original-window and manager checks remain in place.
+
+All **183 Python offline tests** pass. The two new reproductions first failed
+against the old runner and now reject termination. Further cases verify manager
+uncertainty, identity proof forwarding, malformed/protected identities, v4
+rejection, receiver errors without retry and removal of the PID-only entrypoint.
+The actual native termination guard also passes **26 cases** against fake process,
+Scripting Bridge and native application APIs:
+
+```sh
+python3 -B script/test-ghostty-termination-offline.py
+```
+
+That command builds/runs only an isolated test binary using Foundation objects;
+it executes no real process, Ghostty, focus or termination APIs. The native source
+also passes syntax-only checking. No diagnostic helper/library was built, loaded
+or launched, no app or installed CLI was invoked, and no live test, installation
+or push was performed. The new cleanup path awaits separately authorized live
+validation; the earlier v4 result is not a validation of v5.

@@ -1137,3 +1137,54 @@ artifacts and documentation were inspected afterward; no further installed CLI,
 app/helper or live test was invoked. These updated live notes form a local
 documentation checkpoint after `388b3117`. No additional tests or launches were
 performed while creating that checkpoint. Nothing was pushed.
+
+## Offline cleanup termination repair after c56ce874 — 2026-10-15
+
+The v4 checkpoint review reproduced a cleanup safety gap after its last empty-
+membership and process-birth checks. `record_cleanup_focus('before-terminate')`
+can block on model/native reads; afterward the Swift helper resolved a fresh
+application using only PID and bundle ID. An unrecorded tab appearing during that
+observation could be closed, and PID replacement could redirect termination.
+Both reproductions exercised the runner's actual finalizer with fake APIs and
+reached termination under the old code.
+
+The runner now revalidates manager/original-window preservation, pinned process
+birth/executable and empty native membership after that observation. It then
+passes the expected birth tuple and protected original PID list into a new
+in-process `terminate` operation. The receiver independently validates the proof,
+UID, kernel birth and exact installed Ghostty executable, retains the verified
+native application, reads its native empty window list twice and brackets those
+reads with repeated kernel identity checks. An unreadable or malformed list is
+never treated as empty. Kernel identity also brackets executable path reads.
+The final termination request addresses the retained native application, without
+intervening focus observations, logs or subprocess startup. Refusal/uncertain
+responses produce an error without retry or fallback. The Swift PID-only
+termination command has been removed.
+
+The native library and adapter now require
+`ghostty-topology-retained-source-v5`. Existing v3 and v4 libraries are refused
+before session capture or disposable launch. All foreground, destination,
+original-window, native tab/terminal and manager ownership checks remain in force;
+the process inventory and window-manager implementations were not changed.
+
+Offline validation:
+
+- Both added final-observation regressions failed against the old finalizer and
+  now prevent termination, leaving the unrecorded tab/replacement process alone.
+- All **183 Python tests** pass, including manager uncertainty after observation,
+  exact identity forwarding, protected/malformed identity refusal, stale-library
+  rejection, native-error no-retry handling and retired Swift command checks.
+  Native-library loading, subprocesses and signals are blocked in these tests.
+- The actual native guard passes **26 deterministic cases** using fake kernel,
+  Ghostty scripting and native application APIs. They cover unchanged empty
+  cleanup, new tabs, process replacement at binding/enumeration/path/kernel
+  boundaries, unknown window replies, identity errors and refusal without retry.
+  Only a separate test binary was built/run; it executes no real desktop/process
+  APIs. `ScriptDriver.m` also passes syntax-only compilation.
+
+No diagnostic library or helper was rebuilt, loaded or launched; neither app,
+installed CLI nor live process reader was invoked. Nothing was installed or
+pushed. The earlier 32-assertion v4 live validation remains historical; this v5
+cleanup repair has only offline validation and is recorded in a local checkpoint
+after `c56ce874`. No additional tests, builds, installations or app/helper launches
+were performed while creating the checkpoint. Nothing was pushed.

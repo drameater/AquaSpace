@@ -9,8 +9,6 @@ if args == ["frontmost-pid"] {
  let rows = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.mitchellh.ghostty" }.map { ["pid": String($0.processIdentifier), "path": $0.executableURL?.path ?? ""] }
  let data = try JSONSerialization.data(withJSONObject: rows)
  print(String(decoding: data, as: UTF8.self))
-} else if args.first == "terminate", args.count == 2, let pid = Int32(args[1]), let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == "com.mitchellh.ghostty" {
- print(app.terminate())
 } else if args.first == "launch", args.count == 2 {
  let c = NSWorkspace.OpenConfiguration()
  c.createsNewApplicationInstance = true

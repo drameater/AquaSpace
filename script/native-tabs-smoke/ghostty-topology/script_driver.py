@@ -8,8 +8,8 @@ class DriverError(RuntimeError):
 
 
 class ScriptDriver:
-    # Earlier v3 libraries can still contain the cached AppKit foreground reader.
-    CAPABILITY = b'ghostty-topology-retained-source-v4'
+    # v5 adds receiver-side process identity/empty-membership termination guards.
+    CAPABILITY = b'ghostty-topology-retained-source-v5'
     MUTATIONS = frozenset(('create', 'add', 'select', 'activate'))
 
     def __init__(self, path, *, load_library=None):
@@ -35,10 +35,23 @@ class ScriptDriver:
             raise DriverError('Missing retained native reference')
         return ctypes.c_void_p(value)
 
-    def run(self, pid, operation, *arguments, source=None, confirm_source=None):
-        if type(pid) is not int or pid <= 0:
+    def run(self, pid, operation, *arguments, source=None, confirm_source=None,
+            expected_birth=None, protected_pids=None):
+        if type(pid) is not int or not 0 < pid <= 0x7fffffff:
             raise DriverError('Invalid target PID')
         request = dict(argv=[str(pid), operation, *map(str, arguments)])
+        if operation == 'terminate':
+            if (arguments or not isinstance(expected_birth, (tuple, list))
+                    or len(expected_birth) != 4
+                    or any(type(value) is not int for value in expected_birth)
+                    or expected_birth[0] != pid or not 0 < expected_birth[1] <= 0xffffffffffffffff
+                    or not 0 <= expected_birth[2] < 1000000
+                    or not 0 <= expected_birth[3] <= 0xffffffff
+                    or not isinstance(protected_pids, (tuple, list)) or not protected_pids
+                    or any(type(value) is not int or not 0 < value <= 0x7fffffff or value == pid
+                           for value in protected_pids)):
+                raise DriverError('Pinned disposable process identity and protected PIDs required')
+            request['process'] = dict(birth=list(expected_birth), protected=list(protected_pids))
         app, window = ctypes.c_void_p(), ctypes.c_void_p()
         if operation in self.MUTATIONS:
             if source is None or not callable(confirm_source):

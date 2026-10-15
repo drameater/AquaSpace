@@ -293,7 +293,13 @@ finally:
     if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
     if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before termination')
     record_cleanup_focus('before-terminate')
-    event('cleanup-terminate',result=N.run([HERE/'launch-ghostty','terminate',pid],timeout=5))
+    # Focus observations can block. Revalidate afterwards, then let the native
+    # receiver independently bind the expected process and require it empty.
+    preserved()
+    if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before termination')
+    remaining=script_driver.run(pid,'status')
+    if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
+    event('cleanup-terminate',result=script_driver.run(pid,'terminate',expected_birth=birth,protected_pids=protected))
     end=time.monotonic()+5
     while time.monotonic()<end:
      if N.processes._info(pid) is None:break

@@ -23,7 +23,8 @@ def offline():
 class CleanupOrderingTests(unittest.TestCase):
     def fixture(self, *, external=False, drift_after_close=False, focus_ignored=False):
         state = dict(workspace='test-a', window='test-window', foreground='test',
-                     commands=[], closes=[], saved={}, focus_checks=0, released=False)
+                     commands=[], closes=[], saved={}, focus_checks=0, released=False,
+                     birth=(200, 1, 2, 501), remaining=[], terminations=[], native_calls=[], helper_calls=[])
         if external:
             state.update(workspace='new-user-workspace', window='new-user-window', foreground='user')
         baseline = {'11344': ['11344', '1', 'h_tiles', 'false']}
@@ -53,9 +54,10 @@ class CleanupOrderingTests(unittest.TestCase):
                     state.update(workspace='2', window='11584', foreground='other')
                 return '{"closed":true}'
             if 'status' in arguments:
-                return '{"groups":[]}'
+                return __import__('json').dumps({'groups':state['remaining']})
             if 'terminate' in arguments:
-                return 'true'
+                state['terminations'].append(state['birth'])
+                return '{"terminationRequested":true}'
             raise AssertionError('Unexpected process call ' + str(arguments))
 
         def restore_before_cleanup(*args):
@@ -77,12 +79,18 @@ class CleanupOrderingTests(unittest.TestCase):
             verify_after_cleanup=verify_after_cleanup,
             observe=lambda phase: events.append(('focus', phase)),
             report=lambda: {'verified': state['focus_checks'] > 0 and not errors})
+        def native_run(pid, op, *args, **kwargs):
+            state['native_calls'].append((pid,op,args,kwargs))
+            return __import__('json').loads(run([Path('/unused/library'),pid,op,*args]))
+        def helper_run(arguments, **kwargs):
+            state['helper_calls'].append(arguments)
+            return run(arguments, **kwargs)
         scope = dict(
             pid=200, birth=(200, 1, 2, 501), protected=[100], created={'a': {'tab': 'a', 'terminal': 'a-terminal'}},
-            manager=manager, N=SimpleNamespace(run=run, managers=lambda: [manager], processes=SimpleNamespace(_info=lambda pid: None)),
-            script_driver=SimpleNamespace(run=lambda pid,op,*args,**kwargs: __import__('json').loads(run([Path('/unused/library'),pid,op,*args]))),
+            manager=manager, N=SimpleNamespace(run=helper_run, managers=lambda: [manager], processes=SimpleNamespace(_info=lambda pid: None)),
+            script_driver=SimpleNamespace(run=native_run),
             HERE=Path('/unused'), session={'workspace': '1', 'focusedWindow': '11344'}, baseline=baseline,
-            cli=cli, ghost_birth=lambda pid: (200, 1, 2, 501), personal_before=[],
+            cli=cli, ghost_birth=lambda pid: state['birth'], personal_before=[],
             personal_identity=lambda value: [], driver=lambda *args, **kwargs: {},
             own_rows=lambda: [], preserved=lambda: None, diff=lambda value: {}, rows=lambda: baseline,
             check=lambda condition, note, **data: self.assertTrue(condition, note),
@@ -112,6 +120,9 @@ class CleanupOrderingTests(unittest.TestCase):
         self.assertEqual((state['workspace'], state['window']), ('1', '11344'))
         self.assertTrue(state['saved']['results.json']['success'])
         self.assertGreater(state['focus_checks'], 0)
+        self.assertEqual(state['helper_calls'], [])
+        terminations = [call for call in state['native_calls'] if call[1] == 'terminate']
+        self.assertEqual(terminations, [(200,'terminate',(),{'expected_birth':scope['birth'],'protected_pids':[100]})])
 
     def test_new_user_focus_is_not_overridden_and_not_reported_as_pass(self):
         scope, state = self.execute(external=True)
@@ -130,6 +141,42 @@ class CleanupOrderingTests(unittest.TestCase):
         scope, state = self.execute(focus_ignored=True)
         self.assertFalse(state['saved']['results.json']['success'])
         self.assertTrue(scope['errors'])
+
+    def test_unowned_tab_appearing_during_final_focus_observation_is_not_terminated(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def observation(phase):
+                if phase == 'before-terminate':
+                    state['remaining'] = [{'members':[{'tab':'unrecorded','terminal':'foreign'}]}]
+            scope['record_cleanup_focus'] = observation
+            exec(code, scope)
+        self.assertEqual(state['terminations'], [])
+        self.assertFalse(state['saved']['results.json']['success'])
+        self.assertTrue(any('Unowned remaining tabs' in error for error in scope['errors']))
+
+    def test_process_replacement_during_final_focus_observation_is_not_terminated(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def observation(phase):
+                if phase == 'before-terminate': state['birth'] = (200, 999, 999, 501)
+            scope['record_cleanup_focus'] = observation
+            exec(code, scope)
+        self.assertEqual(state['terminations'], [])
+        self.assertFalse(state['saved']['results.json']['success'])
+        self.assertTrue(any('Process changed before termination' in error for error in scope['errors']))
+
+    def test_manager_uncertainty_after_final_observation_prevents_termination(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def observation(phase):
+                if phase == 'before-terminate':
+                    def refuse(): raise RuntimeError('Manager identity/count changed')
+                    scope['preserved'] = refuse
+            scope['record_cleanup_focus'] = observation
+            exec(code, scope)
+        self.assertEqual(state['terminations'], [])
+        self.assertFalse(state['saved']['results.json']['success'])
+        self.assertTrue(any('Manager identity/count changed' in error for error in scope['errors']))
 
 
 import importlib.util

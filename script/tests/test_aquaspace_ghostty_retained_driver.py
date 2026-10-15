@@ -17,7 +17,7 @@ with offline():
 
 
 class RetainedDriverTests(unittest.TestCase):
-    def fixture(self, *, capability=b'ghostty-topology-retained-source-v4', native_error=False):
+    def fixture(self, *, capability=b'ghostty-topology-retained-source-v5', native_error=False):
         calls, frees, buffers = [], [], []
         source = SimpleNamespace(app=0x100000001, window=0x200000002, pid=100, title='~')
         state = dict(foreground_window=source.window, mutated=False)
@@ -107,11 +107,15 @@ class RetainedDriverTests(unittest.TestCase):
             self.assertEqual(loads, ['/fake/legacy-v3.dylib'])
             self.assertEqual(calls, [])
 
+    def test_legacy_v4_library_cannot_admit_unguarded_termination(self):
+        with offline(), self.assertRaisesRegex(driver.DriverError, 'Unsupported diagnostic library'):
+            self.fixture(capability=b'ghostty-topology-retained-source-v4')
+
     def test_native_export_and_adapter_require_the_fresh_reader_capability(self):
         source = (SOURCE/'ScriptDriver.m').read_text()
         exported = re.search(r'const char \*AquaSpaceGhosttyDriverCapabilities\(void\)\s*\{\s*(?://[^\n]*\n\s*)*return "([^"]+)";\s*\}', source)
         self.assertIsNotNone(exported)
-        self.assertEqual(exported.group(1), 'ghostty-topology-retained-source-v4')
+        self.assertEqual(exported.group(1), 'ghostty-topology-retained-source-v5')
         self.assertEqual(exported.group(1).encode('ascii'), driver.ScriptDriver.CAPABILITY)
 
     def test_native_source_is_retained_and_not_recaptured_from_current_focus(self):
@@ -167,6 +171,44 @@ class RetainedDriverTests(unittest.TestCase):
                     d.run(200,op,'tab','terminal')
                     self.assertEqual(calls[0][1:],(None,None))
                     self.assertNotIn('foreground',calls[0][0])
+
+    def test_termination_passes_the_pinned_identity_without_foreground_activation(self):
+        with offline():
+            d, _, state, calls, _ = self.fixture(); state['foreground_window'] = None
+            d.run(200, 'terminate', expected_birth=(200,123,456,501), protected_pids=[100])
+            self.assertEqual(calls[0][0]['process'], {'birth':[200,123,456,501], 'protected':[100]})
+            self.assertEqual(calls[0][1:], (None,None))
+            self.assertNotIn('foreground', calls[0][0])
+
+    def test_missing_malformed_or_protected_termination_identity_never_reaches_native_code(self):
+        cases = [({},()),
+                 ({'expected_birth':(200,123,456,501)},()),
+                 ({'expected_birth':(201,123,456,501),'protected_pids':[100]},()),
+                 ({'expected_birth':(200,123,456,501),'protected_pids':[200]},()),
+                 ({'expected_birth':(200,123,456,501),'protected_pids':[True]},()),
+                 ({'expected_birth':(200,123,1000000,501),'protected_pids':[100]},()),
+                 ({'expected_birth':(200,True,456,501),'protected_pids':[100]},()),
+                 ({'expected_birth':(200,123,456,-1),'protected_pids':[100]},()),
+                 ({'expected_birth':(200,123,456,501),'protected_pids':[100]},('extra',))]
+        with offline():
+            for kwargs, arguments in cases:
+                with self.subTest(kwargs=kwargs, arguments=arguments):
+                    d, _, _, calls, _ = self.fixture()
+                    with self.assertRaises(driver.DriverError): d.run(200,'terminate',*arguments,**kwargs)
+                    self.assertEqual(calls, [])
+
+    def test_native_termination_refusal_is_freed_without_retry_or_helper_fallback(self):
+        with offline():
+            d, _, _, calls, frees = self.fixture(native_error=True)
+            with self.assertRaises(driver.DriverError):
+                d.run(200,'terminate',expected_birth=(200,123,456,501),protected_pids=[100])
+            self.assertEqual(len(calls),1)
+            self.assertEqual(len(frees),1)
+
+    def test_swift_helper_has_no_pid_only_termination_entrypoint(self):
+        source = (SOURCE/'LaunchGhostty.swift').read_text()
+        self.assertNotIn('args.first == "terminate"', source)
+        self.assertNotIn('.terminate()', source)
 
 
 if __name__ == '__main__':
