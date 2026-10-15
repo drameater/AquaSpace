@@ -223,3 +223,12 @@ v3/v4 libraries remain refused. Both original reproductions now refuse unsafe
 termination, all 183 Python tests and 26 native cases with fake APIs pass, and no
 diagnostic helper/library or app was rebuilt or launched. Live validation is
 pending. See the [offline cleanup repair](aquaspace.md#offline-cleanup-termination-repair-after-c56ce874--2026-10-15).
+
+After explicit authorization, the rebuilt v5 diagnostic library passed all **32
+real Ghostty checks**, including native merges/detachments, the new guarded
+in-process termination and stable native/model focus restoration before and after
+cleanup. Original Ghostty window 28264 stayed on its fresh baseline workspace 1
+with unchanged native identities; all nine baseline assignments were preserved
+in 565 samples. All 1,900 manager samples saw the same sole AquaSpace PID 42527.
+Only disposable PID 53112 was terminated, no manager lifecycle action occurred,
+and nothing was pushed. See the [v5 live validation record](aquaspace.md#v5-ghostty-live-validation-after-3fd4ba73--2026-10-15).

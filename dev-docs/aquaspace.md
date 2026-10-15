@@ -1188,3 +1188,63 @@ pushed. The earlier 32-assertion v4 live validation remains historical; this v5
 cleanup repair has only offline validation and is recorded in a local checkpoint
 after `c56ce874`. No additional tests, builds, installations or app/helper launches
 were performed while creating the checkpoint. Nothing was pushed.
+
+## v5 Ghostty live validation after 3fd4ba73 — 2026-10-15
+
+After explicit authorization, only `script-driver.dylib` was rebuilt from
+`3fd4ba73`. The harness admitted its required
+`ghostty-topology-retained-source-v5` capability and completed the full real
+Ghostty native-menu suite. No manager was rebuilt, installed, launched, stopped
+or restarted. The Swift helper was not rebuilt; its existing binary supplied
+read-only observations and the disposable launch. Cleanup invoked the new
+in-process termination operation.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-173153/` passed **all 32
+assertions**, `success=true`, with no errors. Disposable windows alone used
+`native-tab-test-ghostty-v5-20261015-a` / `-b`. The suite performed three actual
+native merges and three detachments, including cross-workspace merging,
+three-tab and two-to-one detachment, independent movement, merging three bare
+windows, repeated selections and the final detach/move/remerge cycle.
+
+- The fresh preflight found original Ghostty window **28264 on workspace 1**;
+  that current assignment was the preservation baseline. The test did not return
+  it to workspace 3 from the older v4 record. It stayed floating on workspace 1
+  in all **565 original-window samples** and the final model. Original PID
+  **17528** and its native tab/terminal identities remained unchanged.
+- All **nine baseline windows** retained workspace/fullscreen state, with zero
+  recorded mismatches. This fresh baseline does not retest the earlier
+  stock-to-fork hidden-Zen handoff limitation.
+- All **1,900 manager samples** observed the same sole AquaSpace PID **42527**,
+  birth `(1792081221, 893887)`, at the installed path. Peak count was one.
+  Control/inventory ownership checks also passed throughout the guarded actions
+  and final verification. No window-manager lifecycle action occurred.
+- Original workspace **1**, model window **28122**, and its exact retained native
+  app/window (PID **15654**) were restored before cleanup. Three matching samples
+  spanned **0.591 seconds**; after cleanup three matching samples spanned
+  **0.564 seconds**. Focus finished `verified-after-cleanup`, `verified=true`,
+  with no revocation and only one restoration request.
+- Exact recorded tabs were closed before cleanup requested native v5 termination
+  of the empty, pinned disposable PID **53112**, birth
+  `(1792099915, 410460)`. `cleanup-terminate` records
+  `{"terminationRequested":true}` from the library, and the disposable PID was
+  confirmed exited. No disposable managed windows remained. The removed Swift
+  PID-only termination command was not invoked; no terminal input was sent.
+
+Saved `results.json`, `events.jsonl`, baseline, process/window samples and
+`completion-summary.json` retain the evidence. SHA-256 values:
+
+- Native source: `929bfee4b6da367d66939d80fc0b989bb0bb16cc1e1f4955a01c1d2c745bf355`.
+- Python adapter: `48eddf7b644aa3a1acb9510969f43eb3535e9782dbfaa038b4217ac9f107e58b`.
+- Rebuilt v5 library: `f42d643d084ce9d27012c444e6997c7e0469ac308dcf46e1ea0a564c357da769`.
+
+Installed app/CLI hashes in that summary match the previous installation. The
+earlier v4 result remains historical evidence for its exact binary; this is the
+new v5 result. The unsafe-arrival/replacement cases were validated with offline
+regressions, not injected into this live run.
+
+The user was told to resume desktop use after completion. Only saved artifacts,
+source/binary files and documentation were inspected afterward; no further live
+process/focus query, installed CLI, app/helper or live test was invoked. Nothing
+was pushed. These live validation notes form a local documentation checkpoint
+after `3fd4ba73`. No additional tests, builds, installations or app/helper launches
+were performed while creating the checkpoint.
