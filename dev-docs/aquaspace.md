@@ -1750,3 +1750,64 @@ these additional fixes have offline validation only. Both fixes, regressions and
 diagnosis notes form the local checkpoint after `fa59aeb4`. Creating this
 checkpoint involved no additional tests, builds, installations, app/helper
 launches or live checks. Nothing was pushed.
+
+## Focus-fixed v7 Ghostty live validation after f6c7d2fd — 2026-10-15
+
+The user authorized running the committed focus-fixed harness on dedicated test
+workspaces, verifying native merging/detaching, desktop restoration, existing
+Ghostty preservation and sole-manager ownership. The unchanged installed manager/
+CLI, existing launcher helper and previously built v7 native library were reused.
+No app or diagnostic helper/library was rebuilt, no manager lifecycle action or
+installation occurred, and nothing was pushed.
+
+Run `.debug/aquaspace/ghostty-topology/run-20261015-194416/` used the fresh empty
+pair `native-tab-test-ghostty-focus-fixed-20261015-{a,b}` and completed on its
+first attempt with **32 assertions passed**, `success: true`, `errors: []`:
+
+- Six real native menu events record **three merges and three detachments**.
+  Cross-workspace destination merging, three-tab and two-to-one detachments,
+  independent movement, merging three bare windows, repeated selections and
+  final detach/move/remerge all passed. Fresh native membership, exact retained
+  requested-window selection after blocking callbacks, pinned target proof and
+  no-retry/cancellation policies remained enabled.
+- **2,240 process inventories** all observed the same sole installed AquaSpace
+  PID **42527**, birth `(1792081221, 893887)`, executable
+  `/Applications/AquaSpace.app/Contents/MacOS/AquaSpace`, bundle `local.aquaspace`.
+  Peak manager count was **1**; no manager was launched, paused or stopped.
+- **935 original-window samples** preserved all **eight fresh-baseline** workspace
+  and fullscreen assignments with zero drift. Existing Ghostty **window 28264**
+  remained on **workspace 1**. Its original process **17528** retained selected
+  tab, tab and terminal identities before and after cleanup.
+- The exact original desktop focus returned to **workspace 1**, model window
+  **28146**, and the retained native **ChatGPT PID 15689** window. Three matching
+  pre-cleanup samples spanned **0.815997917 seconds**; three matching post-cleanup
+  samples spanned **0.706928666 seconds**. Status is `verified-after-cleanup`,
+  `verified: true`, `revoked: null`, with one guarded focus-window restoration
+  request. Fresh exact native/model restoration-source validation and retained
+  source checks across target validation were enabled; no focus retry occurred.
+- Three exact tab/terminal closes and final termination passed strict native/
+  model background admission with focus on the restored ChatGPT window. Only
+  disposable PID **81303**, birth `(1792107859, 507692)`, was terminated and its
+  exit was confirmed. No disposable managed windows or `cleanup-incomplete`
+  events remained. Native process-lifetime/background/empty-membership guards
+  were unchanged.
+
+Results, events, baseline, process/window samples and `completion-summary.json`
+retain the evidence. Python source SHA-256:
+runner `e5398fb52352bb30220a146ce59df4b4169ecb51344a6c06bad88f29d58ee9ba`;
+menu `fd14afc7fa35a2e4cbe32196fa42dfc80a37a0306bc9e29a0c832b63660162b4`;
+focus policy `fbd1c5a4ce3f946d8bb1083c667949ea9ca04bcef6c6d0a8db761de94ad7bd85`.
+Native source/adapter/library and installed app/CLI hashes match the preceding
+record; the v7 library remains
+`73861d20dd39c95baa264c81428e73d4229ee7d56efc5dbd70b32993c8568735`.
+The 223-test offline evidence covers unsafe ownership/source-change cases;
+those cases were not injected into this live run. Earlier runs retain their
+individual results and exact source/binary identities.
+
+The user was told to resume desktop use after completion. Only saved artifacts,
+source/binary files and documentation were inspected afterward; no additional
+live query, installed CLI, app/helper or live test was invoked. Nothing was
+installed or pushed. These live validation notes form the local documentation
+checkpoint after `f6c7d2fd`. Creating this checkpoint involved no additional
+tests, builds, installations, app/helper launches or live checks. Nothing was
+pushed.

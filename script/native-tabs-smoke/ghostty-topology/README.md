@@ -4,17 +4,18 @@ Latest authorized **v7** validation on **2026-10-15** passed **32 assertions**, 
 all native merge/detach cycles and stable native/model desktop focus restoration.
 All eight baseline assignments were preserved; original Ghostty window 28264
 stayed on its current baseline workspace 1, disposable tabs/processes were removed,
-and 2,392 manager inventories observed the same sole AquaSpace. Three direct native
-merges and three detachments passed with the closed-menu reader fix. See the
-[completed fixed v7 run](../../../dev-docs/aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
+and 2,240 manager inventories observed the same sole AquaSpace. Three direct native
+merges and three detachments passed with exact restoration-source admission and
+the final retained-menu selection checks enabled. See the
+[completed focus-fixed v7 run](../../../dev-docs/aquaspace.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
 
 The subsequent review found two remaining focus-admission gaps. Current Python
 source now requires fresh exact native/model ownership for restoration and
 rechecks the retained requested menu window after the last membership callback.
-All **223 Python offline tests** pass, including both reproduced failures; these
-additional fixes have not been live-tested. The successful v7 result above is
-historical for its committed Python source and library. The native v7 library
-is unchanged. See the [offline focus repair](../../../dev-docs/aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
+All **223 Python offline tests** passed, including both reproduced failures,
+before the separately authorized complete live run above validated the committed
+fixes. The native v7 library is unchanged; no rebuild or installation was needed.
+See the [offline focus repair](../../../dev-docs/aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
 
 Current source admission requires **`ghostty-topology-retained-source-v7`** for
 pinned foreground targets and exact menu membership. The earlier v7 library
@@ -30,7 +31,8 @@ v6 validation and failed v7 attempts remain historical records for their exact b
 The subsequent offline repair dispatches the retained menu item directly from
 the closed menu tree, keeping fresh exact membership checks before its single
 press. It never opens the menu first or falls back to cached membership.
-All **211 Python offline tests** passed before the successful live retry above.
+All **211 Python offline tests** passed before the earlier successful menu-reader
+live retry recorded [here](../../../dev-docs/aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
 The first fixed-v7 attempt stopped on a real Helium focus change before menu
 dispatch; its disposable process was safely removed without changing that focus.
 The subsequent complete retry followed renewed explicit idle confirmation. See

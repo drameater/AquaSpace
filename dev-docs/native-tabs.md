@@ -317,3 +317,13 @@ actual runner/policy functions with fake APIs. No apps, helpers, diagnostic
 libraries, live readers or installed CLIs were launched/loaded; no rebuild,
 installation, live test or push occurred. The successful v7 live result remains
 historical for its exact checkpoint; see the [offline focus repair](aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
+
+The subsequently authorized live run of `f6c7d2fd` passed **all 32 Ghostty checks**
+with exact restoration-source admission and final retained-menu selection checks
+enabled. Three real native merges and three detachments passed. Original desktop
+focus was stably restored before/after cleanup; all eight fresh-baseline window
+assignments remained unchanged in **935 samples**, including Ghostty **28264** on
+workspace **1** with its native identities intact. **2,240 manager samples** saw
+the same sole AquaSpace PID **42527**, peak one. Only disposable PID **81303**
+exited; no disposable windows remained. No rebuild, manager lifecycle action,
+installation or push occurred. See the [focus-fixed v7 live record](aquaspace.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
