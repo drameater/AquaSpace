@@ -293,3 +293,15 @@ menu-tracking read failure and late ownership/focus changes. No app, helper,
 native diagnostic library or live API was launched/loaded for this repair; no
 installation or push occurred. The earlier failed live result remains failed;
 see the [offline diagnosis and repair](aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
+
+The subsequently authorized fixed-v7 retry passed all **32 real Ghostty checks**,
+including three direct native merges, three detachments, independent movement,
+repeated tab selection and stable desktop focus before and after cleanup.
+All eight fresh-baseline assignments were unchanged in **699 samples**; existing
+Ghostty window **28264** stayed on workspace **1** with its native tab/terminal
+identities intact. **2,392 manager samples** saw the same sole AquaSpace PID
+**42527**, peak count one. Only disposable PID **68465** exited. The first fixed
+attempt had stopped on a Helium foreground change before any menu action and
+was safely cleaned up without a focus write; it remains failed. No manager
+lifecycle action, rebuild, installation or push occurred. See the
+[complete fixed-v7 record](aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).

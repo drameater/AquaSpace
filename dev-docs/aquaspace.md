@@ -1605,3 +1605,76 @@ not relabeled as passing. The repair, regressions and notes form the local
 checkpoint after `34e0f9af`. Creating this checkpoint involved no additional
 tests, builds, installations, app/helper launches or live checks. Nothing was
 pushed.
+
+## Fixed v7 Ghostty live validation after 1789ab2d — 2026-10-15
+
+The user authorized running the fixed harness on dedicated test workspaces,
+verifying native merge/detach, focus restoration, existing Ghostty preservation
+and sole-manager ownership. The committed Python menu fix and already built v7
+library were used unchanged. No manager or diagnostic helper/library was rebuilt,
+no installation or manager lifecycle action occurred, and nothing was pushed.
+
+The first fixed-path attempt,
+`.debug/aquaspace/ghostty-topology/run-20261015-191915/`, passed ten preliminary
+checks before native/model focus changed from the test to existing Helium window
+28101 on workspace 5. The source of that foreground change was not attributed.
+The execution guard stopped before any merge/detach/menu dispatch, issued zero
+restoration requests, and closed its two exact recorded tabs in the background.
+The error latch then prevented normal final termination. A separate fresh
+sole-manager/baseline/process-birth/executable/empty-membership/background check
+admitted the same v7 guarded termination of only disposable PID **67545**, birth
+`(1792106356, 867849)`. Exit and unchanged native/model focus were confirmed;
+`supplemental-cleanup.json` records zero focus writes. All **339 manager samples**
+saw the same sole AquaSpace; **105 window samples** preserved all eight fresh
+baseline assignments. This run remains failed, with no menu or restoration pass.
+
+After the user explicitly confirmed "Desktop is idle—retry", the unchanged
+harness completed `.debug/aquaspace/ghostty-topology/run-20261015-192022/` on the
+fresh empty pair `native-tab-test-ghostty-v7-retry-20261015-{a,b}`:
+
+- **All 32 assertions passed**, `success: true`, `errors: []`. Six actual native
+  menu events record three merges and three detachments. The cross-workspace
+  merge onto destination A, three-tab detachment, two-to-one detachment, merge
+  of three bare windows onto B, further selection/detachment/movement and final
+  remerge onto A all passed using direct retained closed-menu item presses.
+  The menu-open membership-read failure did not recur. Fresh exact membership,
+  target proof, retained AX roots, foreground and ambiguity guards stayed enabled.
+- **2,392 process inventories** all observed the same sole installed AquaSpace
+  PID **42527**, birth `(1792081221, 893887)`, executable
+  `/Applications/AquaSpace.app/Contents/MacOS/AquaSpace`, bundle `local.aquaspace`.
+  Peak manager count was **1**; no manager was launched, paused or stopped.
+- **699 original-window samples** preserved all **eight fresh-baseline** workspace
+  and fullscreen assignments with zero drift. Existing Ghostty **window 28264**
+  remained on **workspace 1**; original process **17528** retained its native
+  selected-tab, tab and terminal identities before and after cleanup.
+- The exact original focus returned to **workspace 1**, model window **28146**,
+  and retained native **ChatGPT PID 15689** window. Three matching pre-cleanup
+  observations spanned **0.517396250 seconds**; three matching post-cleanup
+  observations spanned **0.502698250 seconds**. The report is
+  `verified-after-cleanup`, `verified: true`, `revoked: null`, with one guarded
+  focus-window restoration request and no retry.
+- All three closes and final termination passed strict background admissions
+  with native/model focus on the restored ChatGPT window. The native v7 receiver
+  independently validated process lifetime, exact tab/terminal pairs, background
+  state and final empty native/AX window lists. Only disposable PID **68465**,
+  birth `(1792106423, 909609)`, was terminated, and its exit was confirmed.
+  No disposable managed windows or `cleanup-incomplete` events remained.
+
+Results, native membership/menu events, baseline, process/window samples and
+`completion-summary.json` retain the evidence. Native source SHA-256 remains
+`dc3537027531c9825c6efd05fbc8f1e2451f71e6455b48fd674164c2bf7ebd3b`;
+adapter `cddd83296f81f7a24f75c61d3f8da30fd577583ad1f10cc3346364c43ffed472`;
+menu policy `fe6c85399cf507706e5ccfe2b15ebb4dfa86c19124057f8c0c6892543ebc04e4`;
+v7 library `73861d20dd39c95baa264c81428e73d4229ee7d56efc5dbd70b32993c8568735`.
+Installed manager/CLI hashes matched the preceding record. The prior failed
+v7 menu-open run and the fixed-path foreground-interrupted attempt remain failed;
+this complete retry does not relabel them. Existing unsafe-case offline regression
+evidence remains separate; those failures were not injected into the live run.
+
+The user was told to resume desktop use after completion. Only saved artifacts,
+source/binary files and documentation were inspected afterward; no additional
+live query, installed CLI, app/helper or live test was invoked. Nothing was
+installed or pushed. These live validation notes form the local documentation
+checkpoint after `1789ab2d`. Creating this checkpoint involved no additional
+tests, builds, installations, app/helper launches or live checks. Nothing was
+pushed.

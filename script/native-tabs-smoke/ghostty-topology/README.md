@@ -1,28 +1,32 @@
 # Real Ghostty native merge/detach checks
 
-Latest authorized **v6** validation on **2026-10-15** passed **32 assertions**, including
+Latest authorized **v7** validation on **2026-10-15** passed **32 assertions**, including
 all native merge/detach cycles and stable native/model desktop focus restoration.
-All seven baseline assignments were preserved; original Ghostty window 28264
+All eight baseline assignments were preserved; original Ghostty window 28264
 stayed on its current baseline workspace 1, disposable tabs/processes were removed,
-and 1,893 manager inventories observed the same sole AquaSpace. See the
-[completed v6 run](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
+and 2,392 manager inventories observed the same sole AquaSpace. Three direct native
+merges and three detachments passed with the closed-menu reader fix. See the
+[completed fixed v7 run](../../../dev-docs/aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
 
 Current source admission requires **`ghostty-topology-retained-source-v7`** for
-pinned foreground targets and exact menu membership. The authorized v7 library
+pinned foreground targets and exact menu membership. The earlier v7 library
 rebuild/live attempt stopped before its first merge when the native membership
 read failed after opening the Window menu. It passed 12 preliminary checks,
 preserved all eight baseline assignments and observed the same sole AquaSpace
 in 800 samples, but did not validate merge/detach or focus restoration. Separately
 authorized background recovery removed all disposable tabs/processes while
 preserving the new ChatGPT focus. See the [v7 attempt and recovery](../../../dev-docs/aquaspace.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
-Older libraries, including v6, are refused before capture or launch. The completed v6 run above
-and its first interrupted attempt remain historical records for their exact build.
+Older libraries, including v6, are refused before capture or launch. The earlier
+v6 validation and failed v7 attempts remain historical records for their exact builds.
 
 The subsequent offline repair dispatches the retained menu item directly from
 the closed menu tree, keeping fresh exact membership checks before its single
 press. It never opens the menu first or falls back to cached membership.
-All **211 Python offline tests** pass; this revised dispatch has not been live
-tested. See the [offline menu-tracking repair](../../../dev-docs/aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
+All **211 Python offline tests** passed before the successful live retry above.
+The first fixed-v7 attempt stopped on a real Helium focus change before menu
+dispatch; its disposable process was safely removed without changing that focus.
+The subsequent complete retry followed renewed explicit idle confirmation. See
+the [offline menu-tracking repair](../../../dev-docs/aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
