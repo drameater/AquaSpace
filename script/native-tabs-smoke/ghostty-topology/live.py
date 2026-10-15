@@ -214,6 +214,13 @@ def record_cleanup_focus(phase):
   try:focus_controller.observe(phase)
   except Exception as error:event('focus-observation-error',phase=phase,error=repr(error))
 
+def require_background_cleanup(phase):
+ # A restoration failure can leave our own app foreground. Observations for
+ # admission must fail closed, unlike best-effort diagnostic observations.
+ current=focus_controller.observe(phase)
+ if current.pid==pid or current.model['pid']==pid:
+  raise focus_restore.FocusError('Disposable Ghostty is not confirmed background; leaving cleanup incomplete')
+
 script_driver=ScriptDriver(HERE/'script-driver.dylib')
 manager,status=ownership();session=N.capture_session(manager,CLI);baseline={r[0]:r for r in session['windows']}
 save('baseline-app-identities.json',cli('list-windows','--all','--format','%{window-id}\t%{workspace}\t%{app-name}\t%{app-pid}').splitlines())
@@ -287,7 +294,9 @@ finally:
      peers=N.managers()
      if len(peers)!=1 or peers[0].identity!=manager.identity:raise RuntimeError('No cleanup mutation with uncertain manager ownership')
      record_cleanup_focus('before-close-'+c['tab'])
-     event('cleanup',result=script_driver.run(pid,'close',c['tab'],c['terminal']))
+     if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before close')
+     require_background_cleanup('admit-close-'+c['tab'])
+     event('cleanup',result=script_driver.run(pid,'close',c['tab'],c['terminal'],expected_birth=birth,protected_pids=protected))
      record_cleanup_focus('after-close-'+c['tab'])
     remaining=script_driver.run(pid,'status')
     if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
@@ -299,6 +308,7 @@ finally:
     if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before termination')
     remaining=script_driver.run(pid,'status')
     if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
+    require_background_cleanup('admit-terminate')
     event('cleanup-terminate',result=script_driver.run(pid,'terminate',expected_birth=birth,protected_pids=protected))
     end=time.monotonic()+5
     while time.monotonic()<end:
@@ -306,7 +316,9 @@ finally:
      time.sleep(.1)
     check(N.processes._info(pid) is None,'only disposable Ghostty process exited')
     record_cleanup_focus('after-terminate')
-  except BaseException as e:errors.append('Cleanup: '+repr(e));success=False
+  except BaseException as e:
+   errors.append('Cleanup: '+repr(e));success=False
+   event('cleanup-incomplete',pid=pid,recorded_tabs=list(created.values()),error=repr(e))
  try:
   preserved();check(not own_rows(),'no disposable managed windows remain')
   check(personal_identity(driver('status',personal=protected[0]))==personal_before,'existing Ghostty native identities preserved after cleanup')

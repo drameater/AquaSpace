@@ -8,8 +8,8 @@ class DriverError(RuntimeError):
 
 
 class ScriptDriver:
-    # v5 adds receiver-side process identity/empty-membership termination guards.
-    CAPABILITY = b'ghostty-topology-retained-source-v5'
+    # v6 also requires fail-closed native background admission for cleanup.
+    CAPABILITY = b'ghostty-topology-retained-source-v6'
     MUTATIONS = frozenset(('create', 'add', 'select', 'activate'))
 
     def __init__(self, path, *, load_library=None):
@@ -40,8 +40,10 @@ class ScriptDriver:
         if type(pid) is not int or not 0 < pid <= 0x7fffffff:
             raise DriverError('Invalid target PID')
         request = dict(argv=[str(pid), operation, *map(str, arguments)])
-        if operation == 'terminate':
-            if (arguments or not isinstance(expected_birth, (tuple, list))
+        if operation in ('close', 'terminate'):
+            if ((operation == 'terminate' and arguments)
+                    or (operation == 'close' and (len(arguments) != 2 or any(not isinstance(v,str) or not v for v in arguments)))
+                    or not isinstance(expected_birth, (tuple, list))
                     or len(expected_birth) != 4
                     or any(type(value) is not int for value in expected_birth)
                     or expected_birth[0] != pid or not 0 < expected_birth[1] <= 0xffffffffffffffff

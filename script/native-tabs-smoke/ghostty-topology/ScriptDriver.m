@@ -155,11 +155,11 @@ static void requireEmptyGhostty(GhosttyApplication *app) {
     if (![current isKindOfClass:NSArray.class] || [current count] != 0)
         [NSException raise:@"Ownership" format:@"Unowned or unreadable remaining windows; leaving process alone"];
 }
-static NSDictionary *terminateEmptyGhostty(pid_t pid, NSDictionary *proof) {
+static NSArray *cleanupBirth(pid_t pid, NSDictionary *proof) {
     if (![proof isKindOfClass:NSDictionary.class] ||
         ![proof[@"birth"] isKindOfClass:NSArray.class] || [proof[@"birth"] count] != 4 ||
         ![proof[@"protected"] isKindOfClass:NSArray.class] || ![proof[@"protected"] count])
-        [NSException raise:@"Identity" format:@"Pinned disposable identity required for termination"];
+        [NSException raise:@"Identity" format:@"Pinned disposable identity required for cleanup"];
     NSArray *birth = proof[@"birth"];
     if (processNumber(birth[0], INT_MAX) != pid || !processNumber(birth[1], UINT64_MAX))
         [NSException raise:@"Identity" format:@"Invalid pinned PID or birth"];
@@ -167,7 +167,52 @@ static NSDictionary *terminateEmptyGhostty(pid_t pid, NSDictionary *proof) {
     processNumber(birth[3], UINT32_MAX);
     for (id protected in proof[@"protected"])
         if (!processNumber(protected, INT_MAX) || [protected intValue] == pid)
-            [NSException raise:@"Identity" format:@"Refusing protected process termination"];
+            [NSException raise:@"Identity" format:@"Refusing protected process cleanup"];
+    return birth;
+}
+static void requireBackgroundGhostty(pid_t pid, BOOL requireEmpty) {
+    AXUIElementRef target = AXUIElementCreateApplication(pid);
+    CFArrayRef snapshot = NULL;
+    pid_t owner = 0;
+    BOOL valid = target && AXUIElementGetPid(target, &owner) == kAXErrorSuccess && owner == pid &&
+        AXUIElementSetMessagingTimeout(target, 2.0) == kAXErrorSuccess;
+    if (valid) {
+        // Read target foreground and windows together. For termination this
+        // also catches a new window during the last blocking background read.
+        NSArray *attributes = @[(__bridge NSString *)kAXFrontmostAttribute, (__bridge NSString *)kAXWindowsAttribute];
+        valid = AXUIElementCopyMultipleAttributeValues(target, (__bridge CFArrayRef)attributes, 0, &snapshot) == kAXErrorSuccess &&
+            snapshot && CFGetTypeID(snapshot) == CFArrayGetTypeID() && CFArrayGetCount(snapshot) == 2;
+        if (valid) {
+            CFTypeRef frontmost = CFArrayGetValueAtIndex(snapshot, 0);
+            CFTypeRef windows = CFArrayGetValueAtIndex(snapshot, 1);
+            valid = frontmost && CFGetTypeID(frontmost) == CFBooleanGetTypeID() && !CFBooleanGetValue(frontmost) &&
+                windows && CFGetTypeID(windows) == CFArrayGetTypeID() && (!requireEmpty || CFArrayGetCount(windows) == 0);
+        }
+    }
+    if (snapshot) CFRelease(snapshot);
+    if (target) CFRelease(target);
+    // Never substitute AppKit's cached frontmostApplication/isActive here.
+    ProcessSerialNumber frontProcess = {0, 0};
+    pid_t frontPid = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    OSStatus status = GetFrontProcess(&frontProcess);
+    if (status == noErr) status = GetProcessPID(&frontProcess, &frontPid);
+#pragma clang diagnostic pop
+    if (!valid || status != noErr || frontPid <= 0 || frontPid == pid)
+        [NSException raise:@"Foreground" format:@"Disposable Ghostty is not confirmed background; leaving cleanup incomplete"];
+}
+static NSDictionary *closeBackgroundTab(pid_t pid, NSArray *birth, GhosttyObject *tab) {
+    // The caller already matched both recorded tab and terminal identities.
+    // Revalidate after that enumeration, before touching the retained proxy.
+    requireProcessIdentity(pid, birth);
+    requireBackgroundGhostty(pid, NO);
+    requireProcessIdentity(pid, birth);
+    [tab closeTab];
+    return @{@"closed":@YES};
+}
+static NSDictionary *terminateEmptyGhostty(pid_t pid, NSDictionary *proof) {
+    NSArray *birth = cleanupBirth(pid, proof);
     requireProcessIdentity(pid, birth);
     NSRunningApplication *native = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (!native || ![native.bundleIdentifier isEqual:@"com.mitchellh.ghostty"] ||
@@ -179,6 +224,8 @@ static NSDictionary *terminateEmptyGhostty(pid_t pid, NSDictionary *proof) {
     requireProcessIdentity(pid, birth);
     // Recheck after the first blocking enumeration and kernel validation.
     requireEmptyGhostty(app);
+    requireProcessIdentity(pid, birth);
+    requireBackgroundGhostty(pid, YES);
     requireProcessIdentity(pid, birth);
     if (![native terminate])
         [NSException raise:@"Termination" format:@"Disposable termination refused; no retry"];
@@ -202,6 +249,12 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
     if ([op isEqual:@"terminate"]) {
         if (argc != 3 || pid <= 0) [NSException raise:@"Arguments" format:@"Unexpected termination arguments"];
         return terminateEmptyGhostty(pid, request[@"process"]);
+    }
+    NSArray *closeBirth = nil;
+    if ([op isEqual:@"close"]) {
+        if (argc != 5 || pid <= 0) [NSException raise:@"Arguments" format:@"Unexpected close arguments"];
+        closeBirth = cleanupBirth(pid, request[@"process"]);
+        requireProcessIdentity(pid, closeBirth);
     }
     AquaSpaceGhosttyForegroundGuard *foreground = nil;
     if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
@@ -251,7 +304,7 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
             if (![native activateWithOptions:0])
                 [NSException raise:@"Foreground" format:@"Initial activation refused"];
             result=@{@"activationRequested":@YES};
-        } else if ([op isEqual:@"close"]) { [(GhosttyObject *)targetTab closeTab]; result=@{@"closed":@YES}; }
+        } else if ([op isEqual:@"close"]) { result=closeBackgroundTab(pid, closeBirth, targetTab); }
         else [NSException raise:@"Operation" format:@"Unknown operation"];
     }
     return result;
@@ -259,8 +312,8 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
 
 // There is deliberately no executable entrypoint or metadata-only fallback.
 const char *AquaSpaceGhosttyDriverCapabilities(void) {
-    // v5 also requires receiver-side pinned-process and empty-window termination.
-    return "ghostty-topology-retained-source-v5";
+    // v6 also requires fresh, fail-closed background admission for all cleanup.
+    return "ghostty-topology-retained-source-v6";
 }
 void AquaSpaceGhosttyDriverFree(void *result) { free(result); }
 char *AquaSpaceGhosttyDriverRun(const char *json, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {

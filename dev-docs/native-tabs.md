@@ -232,3 +232,13 @@ with unchanged native identities; all nine baseline assignments were preserved
 in 565 samples. All 1,900 manager samples saw the same sole AquaSpace PID 42527.
 Only disposable PID 53112 was terminated, no manager lifecycle action occurred,
 and nothing was pushed. See the [v5 live validation record](aquaspace.md#v5-ghostty-live-validation-after-3fd4ba73--2026-10-15).
+
+The subsequent offline review found that failed focus restoration still allowed
+foreground disposable tabs to close. Cleanup now requires confirmed background
+admission before each close/termination, with independent fresh native checks at
+the operation boundary; uncertainty leaves the remainder intact and reports
+incomplete cleanup. Exact tab/terminal, process, manager and original-window
+ownership checks remain in force. Admission now requires v6, with stale v5
+libraries refused. All 190 Python tests and 52 native cases with fake APIs pass;
+no diagnostic library/helper or app was rebuilt/launched, and live validation
+remains pending. See the [offline background-cleanup repair](aquaspace.md#offline-background-cleanup-focus-repair-after-943558e3--2026-10-15).

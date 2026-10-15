@@ -1248,3 +1248,66 @@ process/focus query, installed CLI, app/helper or live test was invoked. Nothing
 was pushed. These live validation notes form a local documentation checkpoint
 after `3fd4ba73`. No additional tests, builds, installations or app/helper launches
 were performed while creating the checkpoint.
+
+## Offline background-cleanup focus repair after 943558e3 — 2026-10-15
+
+Source review found that restoration failure only marked the run failed; cleanup
+still closed recorded tabs even if disposable Ghostty remained foreground.
+Its last foreground close could hand focus to an unrelated original window or
+workspace. Best-effort cleanup observations logged focus-read errors but did not
+establish background admission. The earlier ignored-focus regression modeled
+that handoff and checked failure reporting without preventing the close.
+
+The runner now independently requires confirmed native and model background
+focus before every close and termination. Admission uses the actual read-only
+focus observer, including its retained-root/final foreground confirmation;
+unreadable focus, stale model focus on the disposable process, or foreground
+Ghostty refuses the mutation. Confirmed background cleanup still works after a
+user switches elsewhere, without regaining focus or retrying restoration. On
+refusal it records `cleanup-incomplete` with the disposable PID and exact recorded
+tab identities and leaves remaining disposable tabs/process untouched.
+
+The native receiver independently checks the target's typed AX foreground and
+window attributes plus the system's fresh foreground PID after blocking target
+enumeration. It never uses cached AppKit foreground state. Kernel birth/UID and
+exact executable checks bracket that final background read. Exact tab/terminal
+resolution is unchanged; closes additionally require the pinned birth/protected
+PID proof already required by termination. Termination keeps both Scripting
+Bridge empty-window reads and also requires an empty AX window list in its final
+background snapshot, catching a new window during that read. Neither cleanup
+operation activates an app or retries a failed action. The manager inventory,
+destination ownership, original-window and execution-focus guards are unchanged.
+
+Native export and Python admission now require
+`ghostty-topology-retained-source-v6`, refusing stale v5 libraries before capture
+or launch. The existing diagnostic library was not rebuilt or loaded.
+
+Offline validation:
+
+- Five failing cases reproduced the old finalizer: ignored restoration,
+  unreadable focus, foreground return before the first close, foreground return
+  between closes, and an empty disposable process becoming foreground before
+  termination. All now leave the unsafe remainder untouched, with no extra focus
+  write or successful-run claim.
+- All **190 Python tests** pass. Additional coverage exercises the real focus
+  observer through cleanup admission, stale model/native disagreement, late
+  focus changes during observation logging, pinned exact-close identity
+  forwarding, protected-process refusal and stale-v5 admission rejection.
+  Native loads, subprocesses and signals are blocked in these tests.
+- All **52 native cases** pass using fake process, focus, Ghostty scripting and
+  application APIs against the actual close/termination guard source. Coverage
+  includes foreground and unreadable/malformed snapshots, disagreement between
+  AX and fresh system foreground, late focus acquisition, process replacement
+  during background reads, and new windows during termination admission. The
+  earlier identity/empty-membership refusal cases still pass. Only an isolated
+  test binary was built/run; no real desktop/process API is executed by it.
+- `ScriptDriver.m` passed syntax-only compilation; the diff passes whitespace
+  checks.
+
+No app or diagnostic helper/library was launched or rebuilt, no installed CLI or
+live process/focus reader was invoked, and no live test or installation occurred.
+Nothing was pushed. The v5 live validation remains historical evidence for its
+exact binary; the v6 background-cleanup repair has offline validation only and
+is recorded in a local checkpoint after `943558e3`. No additional tests, builds,
+installations or app/helper launches were performed while creating the checkpoint.
+Nothing was pushed.

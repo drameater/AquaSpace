@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise the actual termination guard against fake process and Ghostty APIs.
+"""Exercise the actual cleanup guards against fake process, focus and Ghostty APIs.
 
 Only the isolated test binary is built/run. No diagnostic helper/library, native
-process reader, Ghostty scripting event, app activation or termination is used.
+process/focus reader, Ghostty scripting event, app activation or termination is used.
 """
 from pathlib import Path
 import subprocess
@@ -17,6 +17,7 @@ prelude = r'''
 #import <libproc.h>
 #import <sys/proc_info.h>
 #import <limits.h>
+#import <ApplicationServices/ApplicationServices.h>
 static uint64_t liveBirth;
 static uid_t liveUid;
 static int infoReads, pathReads, windowReads, bindings, terminations;
@@ -24,6 +25,11 @@ static BOOL shortInfo, deniedPath, wrongPath, zombie, foreignBundle, badNativePa
 static BOOL unownedWindow, unreadableWindows, malformedWindows, refuseTermination;
 static int changeOnWindow, unownedOnWindow, changeOnInfo;
 static BOOL changeOnPath, changeOnBind;
+static pid_t foregroundPid, axOwner;
+static BOOL axFrontmost, unreadableBackground, badFrontmostType, badAXWindows, unreadableFrontPid;
+static BOOL changeOnBackground, newWindowOnBackground;
+static int foregroundOnWindow, closes;
+static BOOL closeMode, takeFocusOnBackground, badSnapshotCount;
 @interface FakeRunningApplication : NSObject
 @property NSString *bundleIdentifier;
 @property NSURL *executableURL;
@@ -53,6 +59,7 @@ static NSArray *windows(GhosttyApplication *app) {
     windowReads++;
     if(changeOnWindow==windowReads)liveBirth++;
     if(unownedOnWindow==windowReads)unownedWindow=YES;
+    if(foregroundOnWindow==windowReads)foregroundPid=200;
     if(unreadableWindows)return nil;
     if(malformedWindows)return (NSArray *)@"not an array";
     return unownedWindow?@[@"unrecorded-tab"]:@[];
@@ -74,6 +81,36 @@ static int FakePath(int pid,void *buffer,uint32_t size) {
     strlcpy(buffer,path,size);return (int)strlen(path);
 }
 static uid_t FakeUid(void) { return 501; }
+@interface GhosttyObject : NSObject
+- (void)closeTab;
+@end
+@implementation GhosttyObject
+- (void)closeTab { closes++; }
+@end
+static AXUIElementRef FakeCreateApp(pid_t pid) { return (AXUIElementRef)CFRetain(CFSTR("exact-target-app")); }
+static AXError FakeAXPid(AXUIElementRef app,pid_t *pid) { *pid=axOwner;return kAXErrorSuccess; }
+static AXError FakeTimeout(AXUIElementRef app,float timeout) { return kAXErrorSuccess; }
+static AXError FakeSnapshot(AXUIElementRef app,CFArrayRef attributes,AXCopyMultipleAttributeOptions options,CFArrayRef *result) {
+    *result=NULL;
+    if(CFArrayGetCount(attributes)!=2)abort();
+    if(unreadableBackground)return kAXErrorCannotComplete;
+    if(changeOnBackground)liveBirth++;
+    if(newWindowOnBackground)unownedWindow=YES;
+    if(takeFocusOnBackground)foregroundPid=200;
+    id front=badFrontmostType?@"false":@(axFrontmost);
+    id windows=badAXWindows?(id)@"not an array":(unownedWindow?@[@"new-window"]:@[]);
+    *result=(CFArrayRef)CFBridgingRetain(badSnapshotCount?@[]:@[front,windows]);return kAXErrorSuccess;
+}
+static OSStatus FakeFront(ProcessSerialNumber *serial) { serial->highLongOfPSN=0;serial->lowLongOfPSN=foregroundPid;return unreadableFrontPid?-50:0; }
+static OSStatus FakeFrontPid(const ProcessSerialNumber *serial,pid_t *pid) { *pid=(pid_t)serial->lowLongOfPSN;return 0; }
+#define AXUIElementCreateApplication FakeCreateApp
+#define AXUIElementGetPid FakeAXPid
+#define AXUIElementSetMessagingTimeout FakeTimeout
+#define AXUIElementCopyMultipleAttributeValues FakeSnapshot
+#define GetFrontProcess FakeFront
+#define GetProcessPID FakeFrontPid
+#define kAXFrontmostAttribute CFSTR("AXFrontmost")
+#define kAXWindowsAttribute CFSTR("AXWindows")
 #define NSRunningApplication FakeRunningApplication
 #define SBApplication GhosttyApplication
 #define proc_pidinfo FakeInfo
@@ -86,16 +123,18 @@ static BOOL checkCase(NSString *name,BOOL shouldPass,NSDictionary *(^proof)(void
     shortInfo=deniedPath=wrongPath=zombie=foreignBundle=badNativePath=nativeTerminated=NO;
     unownedWindow=unreadableWindows=malformedWindows=refuseTermination=NO;
     changeOnWindow=unownedOnWindow=changeOnInfo=0;changeOnPath=changeOnBind=NO;
+    foregroundPid=100;axOwner=200;axFrontmost=unreadableBackground=badFrontmostType=badAXWindows=unreadableFrontPid=NO;
+    changeOnBackground=newWindowOnBackground=takeFocusOnBackground=badSnapshotCount=NO;foregroundOnWindow=closes=0;
     setup();BOOL passed=NO;
     @autoreleasepool { @try {
-        NSDictionary *result=terminateEmptyGhostty(200,proof());
-        passed=[result[@"terminationRequested"] isEqual:@YES];
+        NSDictionary *result=closeMode?closeBackgroundTab(200,cleanupBirth(200,proof()),[GhosttyObject new]):terminateEmptyGhostty(200,proof());
+        passed=[result[closeMode?@"closed":@"terminationRequested"] isEqual:@YES];
     } @catch(NSException *error) { passed=NO; } }
     // Refusal must not issue any termination, except when testing the API's
     // uncertain/negative reply itself, which must produce exactly one attempt.
     int expected=shouldPass||refuseTermination?1:0;
-    if(passed!=shouldPass || terminations!=expected || bindings>1 || windowReads>2) {
-        fprintf(stderr,"FAIL: %s (accepted=%d expected=%d terminations=%d)\n",name.UTF8String,passed,shouldPass,terminations);return NO;
+    if(passed!=shouldPass || terminations!=(closeMode?0:expected) || closes!=(closeMode?expected:0) || bindings>1 || windowReads>2) {
+        fprintf(stderr,"FAIL: %s (accepted=%d expected=%d terminations=%d closes=%d)\n",name.UTF8String,passed,shouldPass,terminations,closes);return NO;
     }
     printf("PASS: %s\n",name.UTF8String);return YES;
 }
@@ -128,6 +167,33 @@ int main(void) { @autoreleasepool {
     ok &= checkCase(@"negative identity refuses",NO,^{return @{@"birth":@[@200,@123,@456,@(-1)],@"protected":@[@100]};},^{});
     ok &= checkCase(@"out-of-range identity refuses",NO,^{return @{@"birth":@[@200,@123,@1000000,@501],@"protected":@[@100]};},^{});
     ok &= checkCase(@"termination refused is not retried",NO,valid,^{refuseTermination=YES;});
+    ok &= checkCase(@"foreground disposable cannot terminate",NO,valid,^{foregroundPid=200;axFrontmost=YES;});
+    ok &= checkCase(@"fresh system foreground overrides false AX flag",NO,valid,^{foregroundPid=200;});
+    ok &= checkCase(@"true AX foreground overrides other system PID",NO,valid,^{axFrontmost=YES;});
+    ok &= checkCase(@"focus change during final membership read refuses",NO,valid,^{foregroundOnWindow=2;});
+    ok &= checkCase(@"unreadable background snapshot refuses",NO,valid,^{unreadableBackground=YES;});
+    ok &= checkCase(@"unreadable fresh foreground refuses",NO,valid,^{unreadableFrontPid=YES;});
+    ok &= checkCase(@"nonboolean foreground attribute refuses",NO,valid,^{badFrontmostType=YES;});
+    ok &= checkCase(@"malformed AX windows refuses",NO,valid,^{badAXWindows=YES;});
+    ok &= checkCase(@"foreign PID background element refuses",NO,valid,^{axOwner=999;});
+    ok &= checkCase(@"replacement during background read refuses",NO,valid,^{changeOnBackground=YES;});
+    ok &= checkCase(@"new window during background read refuses",NO,valid,^{newWindowOnBackground=YES;});
+    ok &= checkCase(@"focus acquired during final background read refuses",NO,valid,^{takeFocusOnBackground=YES;});
+    ok &= checkCase(@"incomplete background snapshot refuses",NO,valid,^{badSnapshotCount=YES;});
+    closeMode=YES;
+    ok &= checkCase(@"exact background tab closes once",YES,valid,^{});
+    ok &= checkCase(@"background exact close leaves other tabs alone",YES,valid,^{unownedWindow=YES;});
+    ok &= checkCase(@"foreground tab is not closed",NO,valid,^{foregroundPid=200;axFrontmost=YES;});
+    ok &= checkCase(@"close rejects false AX background when system is foreground",NO,valid,^{foregroundPid=200;});
+    ok &= checkCase(@"close rejects true AX foreground despite other system PID",NO,valid,^{axFrontmost=YES;});
+    ok &= checkCase(@"close rejects focus acquired during native background read",NO,valid,^{takeFocusOnBackground=YES;});
+    ok &= checkCase(@"close rejects unreadable target background",NO,valid,^{unreadableBackground=YES;});
+    ok &= checkCase(@"close rejects unreadable system foreground",NO,valid,^{unreadableFrontPid=YES;});
+    ok &= checkCase(@"close rejects malformed background snapshot",NO,valid,^{badSnapshotCount=YES;});
+    ok &= checkCase(@"close rejects foreign target AX owner",NO,valid,^{axOwner=999;});
+    ok &= checkCase(@"close rejects process replacement during background read",NO,valid,^{changeOnBackground=YES;});
+    ok &= checkCase(@"close rejects executable replacement",NO,valid,^{wrongPath=YES;});
+    ok &= checkCase(@"close rejects protected process",NO,^{return @{@"birth":@[@200,@123,@456,@501],@"protected":@[@200]};},^{});
     return ok?0:1;
 } }
 '''

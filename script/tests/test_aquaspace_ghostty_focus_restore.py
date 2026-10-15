@@ -74,10 +74,14 @@ class CleanupOrderingTests(unittest.TestCase):
                 raise RuntimeError('Desktop focus not restored')
             return True
 
+        def observe(phase):
+            events.append(('focus',phase))
+            current_pid = {'test':200,'original':100,'user':300,'other':400}[state['foreground']]
+            return SimpleNamespace(pid=current_pid, model={'pid':current_pid})
         controller = SimpleNamespace(
             restore_before_cleanup=restore_before_cleanup,
             verify_after_cleanup=verify_after_cleanup,
-            observe=lambda phase: events.append(('focus', phase)),
+            observe=observe,
             report=lambda: {'verified': state['focus_checks'] > 0 and not errors})
         def native_run(pid, op, *args, **kwargs):
             state['native_calls'].append((pid,op,args,kwargs))
@@ -102,8 +106,12 @@ class CleanupOrderingTests(unittest.TestCase):
             sys=SimpleNamespace(exit=lambda code: None), A='test-a', B='test-b', prefix='test-',
             record_cleanup_focus=lambda phase: events.append(('focus', phase)),
             focus_controller=controller,
+            focus_restore=SimpleNamespace(FocusError=RuntimeError),
             focus_ax=SimpleNamespace(close=lambda: state.__setitem__('released', True)))
         tree = ast.parse((SOURCE / 'live.py').read_text())
+        helpers = [node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name == 'require_background_cleanup']
+        exec(compile(ast.Module(body=helpers,type_ignores=[]),str(SOURCE/'live.py'),'exec'),scope)
         final = next(node.finalbody for node in reversed(tree.body)
                      if isinstance(node, ast.Try) and node.finalbody)
         return compile(ast.Module(body=final, type_ignores=[]), str(SOURCE / 'live.py'), 'exec'), scope, state
@@ -141,6 +149,54 @@ class CleanupOrderingTests(unittest.TestCase):
         scope, state = self.execute(focus_ignored=True)
         self.assertFalse(state['saved']['results.json']['success'])
         self.assertTrue(scope['errors'])
+        self.assertEqual(state['closes'], [])
+        self.assertEqual(state['terminations'], [])
+        self.assertEqual(state['foreground'], 'test')
+        self.assertEqual(state['workspace'], 'test-a')
+
+    def test_unreadable_focus_leaves_disposable_tabs_and_process_untouched(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def unreadable(phase): raise RuntimeError('Native focus unreadable')
+            scope['focus_controller'].observe = unreadable
+            exec(code, scope)
+        self.assertEqual(state['closes'], [])
+        self.assertEqual(state['terminations'], [])
+        self.assertFalse(state['saved']['results.json']['success'])
+
+    def test_focus_returning_to_disposable_before_close_prevents_handoff(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def changed(phase):
+                if phase.startswith('before-close-'): state['foreground'] = 'test'
+            scope['record_cleanup_focus'] = changed
+            exec(code, scope)
+        self.assertEqual(state['closes'], [])
+        self.assertEqual(state['terminations'], [])
+        self.assertEqual(state['foreground'],'test')
+
+    def test_focus_is_checked_before_every_close_without_restoration_retry(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            scope['created']['b'] = {'tab':'b','terminal':'b-terminal'}
+            def changed(phase):
+                if phase == 'after-close-b': state['foreground'] = 'test'
+            scope['record_cleanup_focus'] = changed
+            exec(code, scope)
+        self.assertEqual(state['closes'], ['original'])
+        self.assertEqual(state['terminations'], [])
+        self.assertEqual(state['commands'], [('focus','--window-id','11344')])
+
+    def test_foreground_empty_process_is_not_terminated(self):
+        with offline(), contextlib.redirect_stdout(io.StringIO()):
+            code, scope, state = self.fixture()
+            def changed(phase):
+                if phase == 'before-terminate': state['foreground'] = 'test'
+            scope['record_cleanup_focus'] = changed
+            exec(code, scope)
+        self.assertEqual(state['closes'], ['original'])
+        self.assertEqual(state['terminations'], [])
+        self.assertEqual(state['foreground'],'test')
 
     def test_unowned_tab_appearing_during_final_focus_observation_is_not_terminated(self):
         with offline(), contextlib.redirect_stdout(io.StringIO()):
@@ -290,6 +346,26 @@ class FocusEnvironment:
 
 
 class FocusPolicyTests(unittest.TestCase):
+    def test_cleanup_admission_uses_real_read_only_focus_observations_and_refuses_uncertainty(self):
+        for problem in ('background','foreground','stale-model','unreadable','logging-change'):
+            with self.subTest(problem=problem), offline():
+                f=FocusEnvironment();f.capture();f.external_focus()
+                if problem=='foreground': f.test_focus()
+                elif problem=='stale-model': f.model['pid']=200
+                elif problem=='unreadable':
+                    def unreadable(): raise policy.FocusError('Native focus unreadable')
+                    f.focused_application=unreadable
+                elif problem=='logging-change': f.controller.log=lambda phase,data:f.test_focus()
+                node=next(n for n in ast.parse((SOURCE/'live.py').read_text()).body
+                          if isinstance(n,ast.FunctionDef) and n.name=='require_background_cleanup')
+                scope=dict(focus_controller=f.controller,pid=200,focus_restore=policy)
+                exec(compile(ast.Module(body=[node],type_ignores=[]),str(SOURCE/'live.py'),'exec'),scope)
+                if problem=='background': scope['require_background_cleanup']('admit-close')
+                else:
+                    with self.assertRaises(policy.FocusError): scope['require_background_cleanup']('admit-close')
+                self.assertEqual(f.commands,[])
+                self.assertEqual(f.activations,[])
+
     def test_focus_switch_during_window_or_title_read_never_authorizes_restore(self):
         for boundary in ('window', 'title'):
             with self.subTest(boundary=boundary), offline():

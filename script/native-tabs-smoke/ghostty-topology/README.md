@@ -7,10 +7,10 @@ stayed on its current baseline workspace 1, disposable tabs/processes were remov
 and 1,900 manager inventories observed the same sole AquaSpace. See the
 [completed v5 run](../../../dev-docs/aquaspace.md#v5-ghostty-live-validation-after-3fd4ba73--2026-10-15).
 
-Current source admission requires **`ghostty-topology-retained-source-v5`** for
-guarded cleanup termination. The rebuilt v5 library passed admission, native
-cleanup termination and the full live suite. Both v3 and v4 libraries remain
-refused before capture or launch. Earlier results retain their historical builds.
+Current source admission requires **`ghostty-topology-retained-source-v6`** for
+background-only cleanup. This repair has offline validation only; the diagnostic
+library has not been rebuilt. The earlier v5 run above remains historical.
+Older libraries, including v5, are refused before capture or launch.
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
@@ -69,6 +69,16 @@ and repeats independent kernel identity/executable and native empty-window reads
 immediately before its single termination request. Missing or malformed native
 window replies refuse termination. No focus write, logging or subprocess startup
 intervenes between those final checks and the request.
+Before each close or termination, cleanup must also positively establish that
+the disposable process is background in both native and model focus. An
+unreadable admission observation or foreground disposable stops cleanup, leaves remaining
+tabs/process intact, and records `cleanup-incomplete` with the recorded IDs.
+Safe background cleanup can still proceed after a failed restoration without
+overriding a user's new focus. The native receiver independently checks fresh
+system foreground plus the target's typed AX foreground/window attributes after
+blocking enumeration. Exact-ID closes now require the pinned process proof too.
+Termination retains its independent empty Scripting Bridge reads and additionally
+requires an empty AX window list in the final background snapshot.
 
 ## Build the diagnostic helpers
 
@@ -416,3 +426,31 @@ also passes syntax-only checking. No diagnostic helper/library was built, loaded
 or launched, no app or installed CLI was invoked, and no live test, installation
 or push was performed. The new cleanup path awaits separately authorized live
 validation; the earlier v4 result is not a validation of v5.
+
+## Offline background-cleanup repair after 943558e3
+
+The v5 review found that failed restoration could leave disposable Ghostty
+foreground while cleanup still closed its tabs. The existing ignored-focus test
+reported failure but allowed the last-close handoff to an unrelated workspace.
+Cleanup now requires a strict read-only background admission before every close
+and termination. Uncertainty leaves the remaining disposable tabs/process alone
+and records an incomplete cleanup; it does not retry focus restoration.
+
+Native close and termination independently require a typed target AX background
+snapshot and fresh system foreground PID after blocking target enumeration.
+Process birth/UID/executable checks bracket the background read. Exact tab and
+terminal checks remain unchanged, closes now require the protected-process proof,
+and termination retains its native empty-membership checks plus an empty AX
+window list. The new capability is **`ghostty-topology-retained-source-v6`**;
+stale v5 libraries are rejected before session capture or disposable launch.
+
+Five offline failure cases first reproduced the old behavior and now prevent
+unsafe cleanup. All **190 Python tests** pass, including real read-only focus
+policy admission, safe external-user-focus cleanup, stale model foreground,
+late observation/logging changes and pinned-close proof forwarding. All **52
+native cases** pass using fake process, focus and Ghostty APIs, exercising the
+actual close/termination guards. No app, diagnostic helper/library, installed CLI
+or live reader was launched or loaded. Only the isolated test binary was built/
+run; the native source also passed syntax-only checking. No installation, live
+test or push occurred. The earlier v5 live run is historical; v6 remains awaiting
+separately authorized diagnostic rebuild and live validation.
