@@ -183,3 +183,82 @@ The harness stops on unexpected errors and never starts a fallback manager. It c
 ## Local installation history
 
 The original AeroSpace 0.21.3-Beta app and CLI are saved under `.debug/native-tabs/install-backup/`. Before separation, the native-tabs patch temporarily replaced that installation; the separation restores those original files and installs the patched fork under its own name. Native tab implementation and validation details are in [native-tabs.md](native-tabs.md).
+
+
+## Automated native Ghostty merge/detach validation after a243c7f0
+
+The user explicitly authorized an isolated AppleScript/System Events harness after
+the computer-use tool refused Ghostty. Ghostty 1.3.1's installed scripting API and
+actions do not expose native merge/detach commands; sending a scripted key goes
+to the terminal surface. The completed harness instead invokes Ghostty's actual
+**Window → Merge All Windows** and **Move Tab to New Window** menus. It sends no
+terminal keystrokes and verifies actual native tab groups through Ghostty's own
+scripting API, independently of AquaSpace's window/workspace model.
+
+The test launches a separate process of the installed Ghostty application using
+`NSWorkspace`'s new-instance option. Its throwaway configuration suppresses user
+configuration, saved-state restoration and initial windows, and runs idle
+`/bin/cat` terminals. The original Ghostty PID 60264 is excluded from mutations.
+Every created tab is identified by its tab ID and focused terminal UUID. Before
+menu operations, all native members must be recorded test tabs and every exposed
+AX window must have the unique test prefix. System Events addresses the process
+by index from a single snapshot of UNIX PIDs, then rechecks that PID before
+activation and each menu click. This avoids ambiguous name-based references to
+the two identically named application processes. A changed index fails closed.
+
+The completed run passed **31 assertions** on
+`native-tab-test-ghostty-topology-a` and `native-tab-test-ghostty-topology-b`:
+
+- A two-tab native group moves and retains its workspace through selections.
+- Native merging of that group into a bare destination across workspaces produces
+  one three-tab group on the destination workspace; selecting each member keeps it there.
+- Detaching from three tabs preserves the source workspace, and the detached tab
+  moves independently without moving the remaining two-tab group.
+- Detaching from the remaining two-tab group produces two independent bare windows.
+- Merging all three bare windows chooses the other destination workspace, and
+  selecting each member preserves it.
+- A further detach, independent move and remerge uses the moved destination.
+- Cleanup removes all disposable tabs and exits only the isolated Ghostty process.
+
+The same installed AquaSpace PID **68598**, kernel birth
+`[1792033211, 996731]`, was reused throughout. No manager was launched, stopped,
+paused, resumed, rebuilt or installed. In the completed suite, **1,046 independent
+native process inventories** observed exactly that one manager, with no scanner
+errors. **367 background window snapshots**, plus per-operation checks, preserved
+all **12 original windows' workspace assignments and fullscreen flags**. Original
+Ghostty window **21423 stayed floating on workspace 2**, with the same native tab
+and terminal UUID. Final read-only verification confirmed only original Ghostty
+PID 60264 remained, no disposable process/windows remained, and AquaSpace still
+reported exclusive control with a verified empty peer inventory. Installed app
+and CLI hashes still match release `.7` from `f13337a2`.
+
+Earlier attempts are retained separately, rather than counted as completed
+successes. A helper ARC return-ownership declaration caused a crash after creating
+its first tab; its exact isolated PID, birth time, title and tab/terminal identity
+were verified before cleanup. Direct-object scripting commands also needed their
+object proxy rather than the application proxy. Subsequent attempts stopped
+before the first merge on foreground/name-resolution guards; another stopped
+when baseline window 23718 disappeared (its application/cause was not captured).
+One later attempt passed the first merge and both detach boundaries, then stopped
+before remerging because processes exited during a per-process System Events
+scan. A single primitive-ID snapshot replaced that scan. No ambiguity or baseline
+preservation guard was relaxed; no production AquaSpace fix was needed.
+
+Local evidence: `.debug/aquaspace/ghostty-topology/run-20261014-233015/`
+(`baseline.json`, `baseline-app-identities.json`, `isolated-process.json`,
+`created.json`, `events.jsonl`, `process-samples.jsonl`, `window-samples.jsonl`,
+`results.json`, and `final-verification.json`). Interrupted attempts are sibling
+`run-*` directories; the initial helper failure has a separate verified cleanup
+record. The executed working harness/helpers are in the parent directory.
+
+The reusable source is saved under
+[`script/native-tabs-smoke/ghostty-topology/`](../script/native-tabs-smoke/ghostty-topology/README.md).
+Its runner retains the tested core and adds repository-relative paths, an explicit
+`--run-live` gate and a required `--expect-existing-window ID:WORKSPACE` baseline.
+Those entrypoint changes were checked offline; the live suite used the working
+copy described above. Four offline tests block subprocesses, signals, native
+library loading and fixture writes, and verify that help, missing opt-in, missing
+baseline and malformed baseline cannot reach live actions. The existing retired
+lifecycle runners remain retired. These sources, offline guard tests and
+validation notes are included in a local checkpoint after `a243c7f0`; nothing was
+pushed. No additional live tests were run while preparing that checkpoint.

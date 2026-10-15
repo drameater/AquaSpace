@@ -89,3 +89,20 @@ The implementation uses public AX/CG APIs and AeroSpace's existing AX-to-window-
 ## Earlier local installation on 2026-10-14
 
 Before the fork was separated, the optimized arm64 app was installed at `/Applications/AeroSpace.app`, with its matching CLI at the existing Homebrew symlink target. Both report `0.21.3-native-tabs.20261014`. The original app and CLI are backed up under `.debug/native-tabs/install-backup/`. All 11 pre-existing window IDs, their workspace assignments, floating/fullscreen settings, and focus were restored. The existing user configuration passed dry-run validation. A further 10 assertions against the installed build verified live Ghostty creation, moving the group, six tab switches, final-sibling closure, and cleanup; original terminal identities and workspace assignments were unchanged. Test evidence is saved under `.debug/native-tabs/`. That temporary replacement has since been removed: original AeroSpace is restored and the patch is installed separately as AquaSpace. Current installation and handoff validation are documented in [aquaspace.md](aquaspace.md).
+
+
+## Real Ghostty native-menu topology validation
+
+The previously blocked Ghostty merge/detach checks now have a completed,
+explicitly authorized isolated System Events run. **31 live assertions** passed
+against installed AquaSpace `.7` and real Ghostty 1.3.1 native menus: cross-workspace
+merging, selecting every merged member, detaching from three tabs and from two
+tabs to bare windows, independent movement, bare-window merging and repeated
+remerge cycles. Ghostty's own native membership API provides the independent
+oracle. Original window 21423 stayed floating on workspace 2 with unchanged tab
+and terminal identities. All 12 baseline windows retained workspace/fullscreen
+state, all disposable windows/processes were removed, and 1,046 native inventories
+observed the same sole AquaSpace process. No manager lifecycle action or rebuild
+was needed. See the [full record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
+and [opt-in harness](../script/native-tabs-smoke/ghostty-topology/README.md), including
+setup failures, cleanup, evidence and the four offline entrypoint guard tests.

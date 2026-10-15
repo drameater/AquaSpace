@@ -133,3 +133,12 @@ The fix is now installed as AquaSpace `0.21.3-aquaspace.20261014.7`, with app/CL
 The completed suite passed 109 assertions using disposable Ghostty terminals on dedicated test workspaces. It exercised three-tab creation, group movement and repeated selections, two independently observed active native Space changes, inactive/selected closes, and cleanup. Existing window 21423 stayed on workspace 2 after every operation and across 108 background window samples; original terminal identities and all 12 baseline workspace assignments were preserved. Two earlier setup/observer limitations were corrected in the harness, with no source changes or repeated installation. This supplies foreground application/Space-boundary coverage, not a captured replay of the earlier missing AX trace or Ghostty merge/detach coverage.
 
 The [full installation and live record](aquaspace.md#ghostty-fix-installation-and-live-validation-after-f13337a2) includes evidence paths and the later focus/fullscreen changes observed after successful cleanup. Final read-only checks confirm the original Ghostty workspace, all baseline workspace assignments, exclusive ownership, installation hashes, and closed disposable windows without overwriting newer desktop state. These live validation notes are included in a local documentation checkpoint after `f13337a2`; nothing was pushed.
+
+
+The subsequent explicitly authorized isolated Ghostty native-menu suite completed
+31 live assertions against the installed `f13337a2` release. Actual Ghostty merges,
+three-to-two and two-to-one detach boundaries, independent moves and remerges all
+passed while existing window 21423 stayed on workspace 2. No production changes
+were needed. The [validation record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
+distinguishes the completed suite from earlier harness setup/lookup failures and
+records independent native membership and single-manager monitoring.
