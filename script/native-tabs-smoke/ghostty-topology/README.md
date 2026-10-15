@@ -1,5 +1,12 @@
 # Real Ghostty native merge/detach checks
 
+Latest authorized validation on **2026-10-15** passed **32 assertions**, including
+all native merge/detach cycles and stable native/model desktop focus restoration.
+All nine baseline assignments were preserved; original Ghostty window 28264
+stayed on workspace 3, disposable tabs/processes were removed, and 1,720 manager
+inventories observed the same sole AquaSpace. See the
+[completed fresh-reader run](../../../dev-docs/aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).
+
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
 Run it only when foreground interaction on dedicated test workspaces is authorized.
@@ -284,3 +291,65 @@ stale-library rejection and native-response cleanup without retries. The native
 source passed a syntax-only compiler check. No apps, diagnostic helpers or
 diagnostic native libraries were launched/loaded; no live test or installation
 was performed. Live validation remains pending. See the [repair record](../../../dev-docs/aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).
+
+## Lost-executable process inventory and first v3 live attempt
+
+The controller and Python inventory readers can now authenticate the specific
+Word/Excel widgets whose original executables have been replaced while they
+remain running. This is a kernel signing proof, not an exception for process
+names: exact vendor/identifier, Developer ID validation, hardened runtime,
+enforcement/library validation, stable code hash and before/after kernel process
+and exec generation must all agree. Every signing read is bound to that exec
+generation. Only an ENOENT path failure can use the fallback; unknown or
+unverifiable processes continue to block. No additional privilege is required.
+
+The command wrapper also preserves empty tab-separated fields and whitespace
+in window titles, removing only line endings. All **173 Python tests** and
+**22 Swift ownership tests** pass, including the new inventory and parsing
+regressions. See the [diagnosis and handoff record](../../../dev-docs/aquaspace.md#lost-executable-inventory-repair-and-ordered-handoff--2026-10-15).
+
+The first v3 live attempt after that repair reached initial creation/activation,
+then stopped when native/model focus returned to the original desktop window.
+The execution gate refused further foreground work and cleanup closed only the
+disposable process. This attempt is not a merge/detach or restoration pass.
+Its 124 process inventories saw one AquaSpace; original Ghostty window 28264
+stayed on workspace 3 with unchanged native identities. A complete run requires
+an idle desktop. Always inspect the current window/workspace baseline rather
+than reusing IDs from earlier examples or validation records.
+
+## Fresh foreground reader in the in-process library
+
+An idle live attempt exposed stale AppKit foreground state inside the Python
+host. The native guard now checks the retained application's AX foreground flag
+and the system's fresh foreground PID directly, while retaining all original
+application/window/root/title/PID checks. Neither an unreadable live query nor
+matching cached state authorizes a mutation. The helper does not run an AppKit
+event loop or activate a window to refresh its observation.
+
+Run the actual native guard against offline API stubs with:
+
+```sh
+python3 -B script/test-ghostty-foreground-offline.py
+```
+
+All 13 cases pass, including stale-cache false rejection and false acceptance,
+late focus changes, same-title root replacement, unreadable queries and
+windowless-source handling. No real desktop APIs are executed by those tests.
+All 173 Python tests remain passing. Rebuild `script-driver.dylib` with the command
+above to include the fresh reader; no manager rebuild is needed for this change.
+
+The fresh-reader live attempt passed initial tab grouping, movement and selection,
+then stopped on a real native/model foreground change to Raycast. Disposable
+cleanup, sole-manager observations and existing Ghostty preservation passed their
+separate checks, but complete merge/detach and guarded focus restoration remain
+pending. See the [attempt and regression record](../../../dev-docs/aquaspace.md#in-process-foreground-cache-repair-and-idle-attempts--2026-10-15).
+
+A later uninterrupted portion of the next run did pass the core real native
+merge/detach cases, including a cross-workspace destination merge, both three-tab
+and two-to-one detachments, independent movement, merging three bare windows and
+all subsequent selections on destination B. Another real Raycast foreground
+change stopped it before the final repeated cycle/restoration. That interrupted
+run did not establish restoration success; see the
+[extended attempt](../../../dev-docs/aquaspace.md#extended-native-mergedetach-attempt-after-renewed-idle-confirmation).
+Switching back to this chat during the test also ends foreground authorization;
+leave the desktop untouched until completion is reported.

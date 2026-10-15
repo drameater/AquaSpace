@@ -57,9 +57,24 @@
     }
     if (title) CFRelease(title);
     if (window) CFRelease(window);
-    NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
-    if (!matches || front.processIdentifier != _pid || !front.isActive)
-        [NSException raise:@"Foreground" format:@"Desktop focus changed; refusing tab mutation"];
+    // AppKit caches frontmostApplication/isActive until its event loop runs.
+    // This library runs in Python: read the retained app's AX flag and query
+    // the system foreground process directly, without pumping arbitrary events.
+    CFTypeRef frontmost = NULL;
+    error = AXUIElementCopyAttributeValue(_app, kAXFrontmostAttribute, &frontmost);
+    BOOL appIsFrontmost = error == kAXErrorSuccess && frontmost &&
+        CFGetTypeID(frontmost) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)frontmost);
+    if (frontmost) CFRelease(frontmost);
+    ProcessSerialNumber frontProcess = {0, 0};
+    pid_t frontPid = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    OSStatus frontStatus = GetFrontProcess(&frontProcess);
+    if (frontStatus == noErr) frontStatus = GetProcessPID(&frontProcess, &frontPid);
+#pragma clang diagnostic pop
+    if (!matches || !appIsFrontmost || frontStatus != noErr || frontPid != _pid)
+        [NSException raise:@"Foreground" format:@"Desktop focus changed; refusing tab mutation (window=%d, title=%d, frontmost=%d, expectedPid=%d, frontPid=%d, status=%d)",
+            matches, titleMatches, appIsFrontmost, _pid, frontPid, (int)frontStatus];
 }
 - (void)dealloc {
     if (_window) CFRelease(_window);

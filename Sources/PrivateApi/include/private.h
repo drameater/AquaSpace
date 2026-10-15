@@ -6,6 +6,8 @@
 #include <libproc.h>
 #include <sys/proc_info.h>
 
+#include "process_inventory.h"
+
 // Potential alternative 1?
 // func allWindowsOnCurrentMacOsSpace() {
 //     let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionOnScreenOnly)

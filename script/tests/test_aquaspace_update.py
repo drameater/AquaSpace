@@ -499,6 +499,13 @@ class NativeBackendTests(unittest.TestCase):
         self.native.processes = self.inspector
         self.native.children = {}
 
+    def test_cli_output_preserves_empty_fields_and_title_whitespace(self):
+        for stdout in ('123\t1\t456\t\n', '123\t1\t456\t a title \n', '\tleading\t\r\n'):
+            with self.subTest(stdout=stdout):
+                reply = unittest.mock.Mock(returncode=0, stdout=stdout, stderr='')
+                with patch('aquaspace_update.subprocess.run', return_value=reply):
+                    self.assertEqual(self.native.run(['fake-cli']), stdout.rstrip('\r\n'))
+
     def test_native_launch_retains_child_with_restore_session_arguments(self):
         session = Path(self.tmp.name) / 'a folder/session.json'
         child = unittest.mock.Mock(pid=1234)

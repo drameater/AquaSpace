@@ -22,14 +22,16 @@ def main():
     for directory in [source, headers, tests]: directory.mkdir(parents=True, exist_ok=True)
     for path in ['model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift']:
         shutil.copy2(root / 'Sources/AppBundle' / path, source / Path(path).name)
-    # Only public process headers, no AppKit/AX or app entrypoint in this test.
-    (headers / 'process.h').write_text('#include <libproc.h>\n#include <sys/proc_info.h>\n')
+    # Only process/signing declarations, no AppKit/AX or app entrypoint in this test.
+    shutil.copy2(root / 'Sources/PrivateApi/include/process_inventory.h', headers / 'process_inventory.h')
+    (headers / 'process.h').write_text('#include <libproc.h>\n#include <sys/proc_info.h>\n#include "process_inventory.h"\n')
     (headers.parent / 'process.c').write_text('''#include "process.h"
 #include <stdlib.h>
 // Fail immediately if a regression accidentally invokes native process APIs.
 int proc_listpids(uint32_t kind, uint32_t uid, void *buf, int size) { abort(); }
 int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buf, int size) { abort(); }
 int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
+int csops_audittoken(pid_t pid, unsigned int op, void *buf, size_t size, void *token) { abort(); }
 ''')
     for name in ['WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift']:
         path = root / 'Sources/AppBundleTests' / name

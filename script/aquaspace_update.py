@@ -65,9 +65,16 @@ class BsdInfo(ctypes.Structure):
                 ('pbi_start_tvusec', ctypes.c_uint64)]
 
 
+class UniqueInfo(ctypes.Structure):
+    # XNU proc_uniqidentifierinfo ABI (56 bytes); idversion changes on exec.
+    _fields_ = [('uuid', ctypes.c_ubyte * 16), ('uniqueid', ctypes.c_uint64),
+                ('parent_uniqueid', ctypes.c_uint64), ('idversion', ctypes.c_int32),
+                ('parent_version', ctypes.c_int32), ('reserved', ctypes.c_uint64 * 2)]
+
+
 class DarwinProcesses:
     """Use kernel executable paths, never pgrep/argv or application display names."""
-    def __init__(self, lib=None):
+    def __init__(self, lib=None, codesign=None):
         if lib is None:
             if sys.platform != 'darwin':
                 raise UpdateError('Installing requires macOS; offline tests are portable.')
@@ -79,6 +86,72 @@ class DarwinProcesses:
             lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
             lib.proc_pidpath.restype = ctypes.c_int
         self.lib = lib
+        self.codesign = codesign
+
+    def _unique(self, pid):
+        value = UniqueInfo()
+        if self.lib.proc_pidinfo(pid, 17, 0, ctypes.byref(value), ctypes.sizeof(value)) != 56:
+            raise UpdateError(f'Cannot establish process {pid} exec generation.')
+        if not value.uniqueid or value.idversion <= 0 or not any(value.uuid):
+            raise UpdateError(f'Invalid process {pid} exec generation.')
+        return (bytes(value.uuid), value.uniqueid, value.idversion)
+
+    def _signed_widget(self, pid):
+        """Only recognize the immutable vendor widget, never guess an unknown path.
+
+        A deleted/replaced main executable can make proc_pidpath return ENOENT
+        for a live process. XNU still binds signing reads to its original image.
+        PID-version tokens pin every read across exec as well as PID reuse.
+        """
+        before = self._info(pid)
+        if before is None: return True  # Kernel-confirmed exited/zombie process.
+        unique = self._unique(pid)
+        if self.codesign is None:
+            self.codesign = ctypes.CDLL(None, use_errno=True)
+            self.codesign.csops_audittoken.argtypes = [ctypes.c_int, ctypes.c_uint,
+                ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+            self.codesign.csops_audittoken.restype = ctypes.c_int
+        token = (ctypes.c_uint32 * 8)()
+        token[5], token[7] = pid, unique[2]
+
+        def read(op, size):
+            buffer = ctypes.create_string_buffer(size)
+            if self.codesign.csops_audittoken(pid, op, buffer, size, ctypes.byref(token)) != 0:
+                raise UpdateError(f'Cannot verify process {pid} running signature (operation {op}).')
+            return buffer.raw
+
+        def string(op):
+            data = read(op, 1024)
+            length = int.from_bytes(data[4:8], 'big')
+            if data[:4] != bytes(4) or not 10 <= length <= len(data) or data[length-1] != 0 or 0 in data[8:length-1]:
+                raise UpdateError(f'Malformed process {pid} signing identity.')
+            try: return data[8:length-1].decode('ascii')
+            except UnicodeError as error: raise UpdateError('Invalid signing identity encoding.') from error
+
+        def signature():
+            return (int.from_bytes(read(0, 4), sys.byteorder),
+                    int.from_bytes(read(17, 4), sys.byteorder), string(11), string(14), read(5, 20))
+
+        proof = signature()
+        flags, category, identifier, team, cdhash = proof
+        # Valid signed hardened code, enforced pages and library validation;
+        # prohibit ad-hoc, debugging, task access, killed or invalid-allowed code.
+        required = 0x20011101  # SIGNED | RUNTIME | ENFORCEMENT | HARD | VALID
+        forbidden = 0x11000026  # DEBUGGED | KILLED | INVALID_ALLOWED | GET_TASK_ALLOW | ADHOC
+        if (flags & required != required or flags & forbidden or not flags & 0x2010
+                or category != 6  # Kernel-validated Developer ID, not a self-asserted team string.
+                or team != 'UBF8T346G9'
+                or identifier not in ('com.microsoft.Word.widgetextension', 'com.microsoft.Excel.widgetextension')
+                or not any(cdhash)):
+            raise UpdateError(f'Process {pid} has no verified nonmanager identity; refusing the update.')
+        repeated = signature()
+        after = self._info(pid)
+        after_unique = self._unique(pid)
+        birth = lambda info: (info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec, info.pbi_uid)
+        if (after is None or before.pbi_uid != os.getuid() or birth(before) != birth(after)
+                or unique != after_unique or proof != repeated):
+            raise UpdateError(f'Process {pid} identity changed during signed-image verification.')
+        return True
 
     def _info(self, pid):
         info = BsdInfo()
@@ -97,7 +170,9 @@ class DarwinProcesses:
         ctypes.set_errno(0)
         count = self.lib.proc_pidpath(pid, buf, len(buf))
         if count <= 0:
-            if ctypes.get_errno() == errno.ESRCH: return None
+            code = ctypes.get_errno()
+            if code == errno.ESRCH: return None
+            if code == errno.ENOENT and self._signed_widget(pid): return None
             raise UpdateError(f'Cannot inspect process {pid} executable; refusing the update.')
         return Path(os.fsdecode(buf.value))
 
@@ -243,7 +318,8 @@ class NativeSystem:
                                 capture_output=True, text=True, timeout=timeout)
         if result.returncode:
             raise UpdateError(result.stderr.strip() or f'Command failed: {args[0]}')
-        return result.stdout.strip()
+        # Empty final CLI fields and title whitespace are data, not decoration.
+        return result.stdout.rstrip('\r\n')
 
     def verify_bundle(self, path):
         self.run(['codesign', '--verify', '--strict', path], timeout=15)

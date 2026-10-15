@@ -176,3 +176,22 @@ checking. No app/helper or diagnostic library was launched/loaded, built or
 installed. This repair is included in a local checkpoint after `ec38b622` and is
 not live-validated. No additional tests were run when creating the checkpoint. See the
 [destination and source-identity repair record](aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).
+
+An idle run of the in-process diagnostic library subsequently found stale AppKit
+foreground metadata. The guard now uses fresh system foreground PID and retained
+source AX foreground reads, preserving exact root/title/owner checks. Thirteen
+offline native guard cases and all 173 Python tests pass. The repaired live run
+passed tab grouping/movement/selection, then stopped when native/model focus
+returned to Raycast. Original Ghostty window 28264 stayed on workspace 3 and only
+AquaSpace was observed, but merging/detachment and guarded restoration are still
+pending. See the [fresh-reader diagnosis and interrupted attempts](aquaspace.md#in-process-foreground-cache-repair-and-idle-attempts--2026-10-15).
+
+A later authorized run after the user closed Raycast **completed all 32 real
+Ghostty assertions**, including three native merges, three native detachments,
+repeated movement/selection and stable exact native/model focus restoration both
+before and after cleanup. Original Ghostty window 28264 stayed floating on
+workspace 3 with unchanged native identities, all nine fresh-baseline assignments
+were preserved in 895 samples, and 1,720 process inventories saw the same sole
+AquaSpace PID 42527. All disposable tabs/processes were removed. Earlier failed
+attempts remain failed; the separate hidden-Zen handoff limitation is unchanged.
+See the [completed fresh-reader validation](aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).

@@ -729,3 +729,331 @@ Automation behavior and complete foreground restoration still need a separately
 authorized live run; earlier live results must not be relabeled as this repair's
 validation. Destination/focus checks remain bounded observations rather than an
 atomic macOS lock against events arriving after the final check.
+
+## Diagnostic rebuild and blocked preflight after c2a304e1 — 2026-10-15
+
+The user authorized rebuilding the diagnostic library and running the fixed
+Ghostty harness on the dedicated test workspace. The documented ARC dynamic
+library build completed successfully, producing
+`.debug/aquaspace/ghostty-topology/script-driver.dylib`. No manager or launcher
+helper was rebuilt or installed, and the library was not loaded during preflight.
+
+Read-only preflight at approximately 16:03 UTC could not establish the harness's
+required sole installed AquaSpace controller. A process-list observation showed
+stock AeroSpace PID 15583 and Ghostty PID 17528, with no AquaSpace process.
+Independent kernel inspection verified PID 15583's executable as
+`/Applications/AeroSpace.app/Contents/MacOS/AeroSpace`, bundle `bobko.aerospace`,
+UID 501 and birth tuple `(1792077772, 930920)`. AquaSpace's installed CLI did not
+respond and subsequently reported connection refused. Historical window 21423,
+workspace 2 and the prior AquaSpace PID were not assumed to describe this session.
+
+The complete process inventory also failed closed: `proc_pidpath(1071)` returned
+zero with errno 2 for a live Word widget process. `ps` reported
+`/Applications/Microsoft Word.app/Contents/PlugIns/WordWidget_mac.appex/Contents/MacOS/WordWidget_mac`,
+and that file existed, but neither that display nor file existence was accepted
+as a substitute for the required authoritative executable read. The same failure
+occurred outside the command sandbox. No process was skipped, no scanner or
+ownership check was weakened, and the partial process observations are not a
+successful single-manager verification.
+
+No disposable Ghostty process or windows were launched; the live runner and its
+launcher were not invoked. Neither manager was started, stopped or switched,
+and no workspace/focus mutation was requested. Existing-window preservation,
+native merge/detach behavior and desktop focus restoration remain unvalidated
+for this checkpoint. A future run first needs a complete verified process
+inventory and a safe handoff to the installed AquaSpace controller, then a fresh
+window/focus baseline. Nothing was pushed. These notes are local and uncommitted.
+
+## Lost-executable inventory repair and ordered handoff — 2026-10-15
+
+The process-inventory failure was reproducible outside the command sandbox.
+Word widget PID 1071 was alive (BSD status 2) while `proc_pidpath` returned
+ENOENT. Its kernel code-directory hash was
+`ecf9e46032ffbc2c05e9d39383f57401c1ba6b71`; the installed arm64 Word widget
+reported `a5b385e4f46afecee3374f59c713dddc351e97a1`. The running image and current
+file were therefore different. This is consistent with a replaced executable;
+it does not establish the precise filesystem operation responsible for the
+lookup failure. The normal Security-framework process lookup also failed.
+Excel widget PID 1072 had the same live-process/path failure.
+
+Both the Swift controller scanner and Python installer/diagnostic scanner now
+support a narrow alternative proof for ENOENT. They identify these two specific
+nonmanager images from kernel code-signing data, rather than from `ps`, argv,
+display names, an on-disk replacement, or a missing-file assumption. Acceptance
+requires all of the following:
+
+- Exact signed identifier `com.microsoft.Word.widgetextension` or
+  `com.microsoft.Excel.widgetextension` and team `UBF8T346G9`.
+- Kernel-validated Developer ID category 6, valid signed hardened code, enforced
+  executable pages and library validation. Ad-hoc, debugged, task-access-enabled,
+  killed and invalid-allowed processes are refused.
+- A nonzero running code-directory hash, with two complete equal signing proofs.
+- Equal before/after PID, kernel birth time, UID, main-image UUID, unique process
+  ID and exec version. Every signing read uses `csops_audittoken`, binding it to
+  the captured PID/exec version so a replacement image cannot supply the proof.
+
+Unknown images, other Microsoft applications, unreadable proofs and permissions
+errors still block. Unsupported kernel operations also block. No failed process
+is skipped merely because its name looks unrelated, and no manager candidate's
+path, bundle, birth or exclusivity checks were removed. This fallback establishes
+an authenticated known nonmanager; it does not invent an executable path.
+The read-only XNU ABI is declared locally and requires no root, entitlement,
+SIP change or injection. The isolated Swift tests replace the added syscall with
+an aborting stub, just like the existing process calls.
+
+The ABI and trust-category semantics were checked against Apple's
+[XNU code-signing implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_proc.c),
+[signing flags/categories](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/cs_blobs.h)
+and [exec-generation structure](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h).
+The first two sources describe kernel-owned image signing data; the last defines
+the 56-byte generation record. An installed replacement's static signature is
+not used to authenticate the already running image.
+
+The old committed Python scanner reproduced the lost-executable error against
+the same injected kernel fixture. Ten new Python test methods cover acceptance,
+unknown/manager identity refusal, wrong team, invalid trust/runtime flags, empty
+hashes, denied/short/malformed reads, PID birth/exec/hash changes, token-bound
+read failure, permission denial and process exit. Six new Swift tests exercise
+the same acceptance/refusal policy. The native Swift reader was also compiled
+alone into a read-only probe, which agreed with Python that stock AeroSpace
+PID 15583 was the sole manager. No window-control code runs in that probe.
+
+The first handoff attempt exposed a separate command-wrapper issue: `.strip()`
+removed an empty final title field and title whitespace. A regression failed
+for all three such output examples before the fix. `NativeSystem.run` now
+removes only line endings. The focus/ambiguity checks themselves were unchanged.
+All **173 AquaSpace Python tests** and **22 Swift ownership tests** pass.
+
+The repaired source was built and signed as
+`0.21.3-aquaspace.20261015.1`, using cached dependencies and the macOS 26.5 SDK.
+Build output is `.debug/aquaspace/inventory-build.log`; the staged app and hashes
+are in `.debug/aquaspace/release/`. The installed controller includes the Swift
+inventory repair; the Python scanner is used by the updater and Ghostty harness.
+
+Two pre-handoff attempts stopped before signaling or installation. The first
+hit the empty-title parsing error. The second could not establish coherent
+native/model focus: it observed loginwindow and later native Raycast focus while
+stock metadata still had an empty title. No guard was bypassed. A later fresh
+read had matching stock/native window identity and title; the third attempt
+captured that current baseline and proceeded.
+
+The ordered switch is recorded in
+`.debug/aquaspace/inventory-switch/run-20261015-122020/`. It confirmed stock
+AeroSpace PID 15583 exited, then used the guarded installer in file-only mode.
+Every installation phase and the exact spawn boundary recorded zero managers.
+Only then was installed AquaSpace launched once with the saved stock session.
+Its sole PID is **42527**, kernel birth `(1792081221, 893887)`. The installation
+transaction is `/Applications/.aquaspace-update-00559b0a15c6421da2c06f5d2914790b`.
+The controller reports verified inventory, controlling state and no peers.
+**218 independent inventories** observed a peak of one manager, including seven
+empty inventories. There was no fallback, pause/resume, recovery or second launch.
+
+Original Ghostty PID 17528 retained native tab/terminal identities, and its window
+**28264 stayed on workspace 3**. Repeated read-only native/model focus observations
+matched the exact original retained app/window and workspace after startup.
+However, the broader all-window handoff comparison did not pass: hidden Zen
+window 28122 was omitted from AquaSpace's managed inventory, although a later
+read confirmed that exact window still existed natively in Zen. This observation
+is retained as a handoff limitation, not relabeled a disappearing native window
+or a complete all-window preservation pass. No foreign window was moved to
+accommodate the comparison.
+
+### First Ghostty attempt after the inventory repair
+
+The same installed AquaSpace PID was reused on fresh empty workspaces
+`native-tab-test-ghostty-c2a304e1-20261015-a` and `-b`. The v3 library loaded and
+passed its retained-source checks through initial creation and activation.
+During the first topology poll, both actual native and model focus returned to
+the original Obsidian window/workspace. The execution gate permanently revoked
+foreground permission and stopped. This is not a merge/detach or restoration pass.
+Only the exact disposable tab/terminal was closed; disposable PID 43120 exited.
+No restoration write overrode the departed foreground. All **124 manager
+inventories** saw the same sole AquaSpace; window samples recorded no baseline
+assignment drift during the attempt. Original Ghostty window 28264 stayed on
+workspace 3 with unchanged native identities.
+
+Evidence is `.debug/aquaspace/ghostty-topology/run-20261015-122117/`. Its failed
+`results.json` is retained. A separate later read confirmed Ghostty preservation,
+sole verified AquaSpace and disposable cleanup, but also found that original
+Finder window 28450 was no longer managed. That later desktop change is not
+rewritten as a full baseline preservation success. Further foreground testing
+waits for the user to confirm an idle desktop. Nothing was pushed; source,
+regressions and these notes remain local and uncommitted.
+
+## In-process foreground cache repair and idle attempts — 2026-10-15
+
+After the user confirmed an idle desktop, the first attempt reused sole installed
+AquaSpace PID 42527 and stopped after initial creation/activation, before adding
+the second tab. The runner's independent native/model observations still agreed
+on the disposable window. Instrumenting the library's refusal distinguished
+window/title validation from foreground PID: `window=1, title=1`, but AppKit
+reported the preceding application's PID 3456 rather than test PID 51371.
+The same refusal reproduced on the next isolated attempt. This was a diagnostic
+reader defect, not evidence of an unauthorized source-window replacement.
+
+`NSWorkspace.frontmostApplication` and `NSRunningApplication.isActive` can retain
+stale state in the long-running Python host without an AppKit event loop. The
+native guard now reads `AXFrontmost` from its exact retained source application
+and queries the system foreground process directly with the read-only
+`GetFrontProcess` / `GetProcessPID` APIs. It does not pump arbitrary pending
+AppKit events or fall back to cached state. Both fresh reads must succeed and
+agree on the captured PID. Retained application/window identity, window-owner
+PID, exact native root equality and title checks remain in place, including
+windowless-source rules. Every check still runs immediately before mutation.
+Failure details expose only identity/check outcomes, not titles or terminal input.
+
+A new native offline harness, `script/test-ghostty-foreground-offline.py`, compiles
+the production Objective-C foreground guard against deterministic API stubs.
+Real AX, AppKit workspace/application and process/focus APIs are never called;
+Foundation/CoreFoundation objects stand in for independently retained roots.
+Against the old implementation eight assertions failed: stale cache false
+rejection, stale matching cache false acceptance, late foreground departure,
+background AX source, nonboolean/unreadable AX data, and unreadable system
+foreground/PID. All **13 native guard cases** pass with the repair, including
+same-PID/same-title replacement refusal, changed-title refusal, foreign window
+ownership and windowless-source checks. All **173 Python tests** also still pass.
+No window manager was rebuilt, installed or relaunched during this follow-up;
+only the diagnostic library was rebuilt.
+
+Live evidence retained without converting interrupted checks into passes:
+
+- `run-20261015-124027`: eight assertions before stale AppKit rejection; 159
+  manager inventories and 48 original-window samples.
+- `run-20261015-124139`: eight assertions and the instrumented stale-cache proof;
+  160 manager inventories and 48 original-window samples.
+- `run-20261015-124412`: fresh-reader build passed creation, two-tab single-slot
+  behavior, moving the group to test workspace B and selecting tab A there. After
+  tab B selection, an initial topology sample was correct, then **both** native
+  and model foreground returned to the original Raycast window 28308 on workspace
+  1. The execution gate stopped and permanently revoked foreground permission.
+  This run reached 11 assertions, with 387 manager inventories and 206 window
+  samples. It did not reach merging/detachment or establish restoration success.
+
+All **706 manager inventories** across these three attempts observed the same
+sole AquaSpace, and all **302 original-window samples** had no assignment drift.
+Each disposable Ghostty process was cleaned up using exact recorded identities.
+The final separate read confirmed all ten windows in the latest baseline retained
+workspace/fullscreen state, original Ghostty window **28264 remained floating on
+workspace 3** with unchanged tab/terminal identities, no disposable windows
+remained, and only original Ghostty PID 17528 was running. Native/model focus then
+agreed on Raycast window 28308/workspace 1. This separate read does not override
+the revoked transaction or establish a successful guarded restoration.
+
+The latest post-abort report records source/library hashes. Source
+`ScriptDriver.m` is `d56047c7c0f5d5e3dd5f10849c162ef643b825cbb4ba4d3510e0d4c438286f0b`;
+rebuilt library is `422bd2821971e8f39b1d4f3b1f309489423525eb152416e29de8263a87aaf115`.
+The diagnostic repair took longer than the initially requested two-minute idle
+window. Further foreground runs wait for clarification whether Raycast was used
+or refocused itself. No ownership/ambiguity guard was relaxed, no terminal input
+was sent, and nothing was pushed. Changes and notes remain local and uncommitted.
+
+### Extended native merge/detach attempt after renewed idle confirmation
+
+The user confirmed that they had used Raycast during the previous attempt and
+that the desktop was idle again. Run
+`.debug/aquaspace/ghostty-topology/run-20261015-124846/` reused the same sole
+AquaSpace PID 42527 and the unchanged fresh-reader library. It created a new
+owned disposable Ghostty process (PID 55417) on the empty workspace pair
+`native-tab-test-ghostty-final-idle-20261015-a` / `-b`.
+
+This attempt passed real Ghostty native-menu checks for merging a two-tab group
+into the independent destination on A, selecting all three merged tabs without
+workspace changes, detaching from three tabs while preserving A, moving that tab
+independently to B, a two-to-one detachment on A, and merging the resulting three
+bare windows into destination B. All three remerged selections retained B.
+These core operations were reached and passed; the additional repeated detach,
+move and remerge cycle was not reached.
+
+About 100 seconds into the run, both native and model foreground changed to the
+existing Raycast window 28308/workspace 1 between destination validation and the
+final `before-script-select` check. The gate refused the next selection, revoked
+foreground permission, and closed the three exact disposable tabs in the
+background. PID 55417 exited. The run records **24 assertions**, including
+cleanup, but `success=false`: it did not establish guarded focus restoration or
+complete the full suite. Its failure record is not relabeled as a successful run.
+
+All **1,593 manager inventories** observed the same sole AquaSpace. All **461
+original-window samples** preserved workspace/fullscreen state. A separate
+post-abort read confirmed all ten baseline assignments, original Ghostty window
+28264 floating on workspace 3 with unchanged tab/terminal identities, no remaining
+test windows, and only original Ghostty PID 17528. A later focus read was on a
+personal ChatGPT window/workspace 3; the harness did not overwrite that state.
+Across the four idle attempts, **2,299 process inventories** and **763 window
+samples** record the same exclusive controller and no original assignment drift.
+
+Further foreground testing waits for clarification about the latest Raycast
+activation. Switching to a personal app, including this chat, during the native
+menu test necessarily ends its foreground authorization. No guard is relaxed
+for an incomplete test, and no native action is retried after an uncertain reply.
+
+## Completed fresh-reader Ghostty validation — 2026-10-15
+
+The user reported **no input during run 124846** and said they would close Raycast
+before retrying. Its foreground change must therefore not be attributed to user
+input. Read-only preflight then confirmed no Raycast window in the manager model,
+original Ghostty window 28264 still on workspace 3 and native ChatGPT foreground.
+The exact cause of Raycast's earlier activation was not isolated. This final run
+succeeded after the user closed its window; that is the observed condition, not
+proof of a particular Raycast or macOS bug.
+
+The complete run is
+`.debug/aquaspace/ghostty-topology/run-20261015-125356/`.
+It reused the same sole installed AquaSpace PID **42527** and the unchanged
+fresh-reader diagnostic library, with no manager rebuild, installation or launch.
+Dedicated workspaces were
+`native-tab-test-ghostty-no-raycast-20261015-a` and `-b`.
+Disposable installed Ghostty PID **60331** was distinct from protected original
+PID **17528**. No terminal input or process-name-based targeting was used.
+
+**All 32 assertions passed, `success=true`, with no errors.** Native Ghostty
+membership was independently checked through its scripting API while the actual
+retained native menu elements performed three merges and three detachments.
+The run covered initial two-tab single-slot behavior, cross-workspace group
+movement, all selections, merging into a bare destination across workspaces,
+three-tab detachment, independent detached-window movement, two-to-one detach,
+merging three bare windows, a second detach/move/remerge cycle and cleanup.
+All destination-ownership, native tab/terminal, retained source-root, foreground,
+original-window, process-birth and ambiguity checks remained enabled.
+
+Preservation and restoration evidence:
+
+- Original Ghostty window **28264 remained floating on workspace 3** in all
+  **895 original-window samples** and in the final model. Its original native
+  tab/terminal identities were unchanged before and after cleanup.
+- All **nine windows in this run's fresh baseline** retained their workspace and
+  fullscreen state; no preservation sample recorded a mismatch. This baseline
+  was captured after the user closed Raycast and does not relabel the earlier
+  hidden-Zen handoff omission as repaired or preserved by that handoff.
+- All **1,720 process inventories** saw exactly the same sole AquaSpace PID 42527,
+  birth `(1792081221, 893887)`, executable `/Applications/AquaSpace.app/Contents/MacOS/AquaSpace`.
+  The process-monitor peak was one. Runtime ownership/inventory checks also passed
+  at every guarded operation and final verification.
+- Before closing the test tabs, the harness restored starting workspace **3**,
+  model window **28146**, and the exact retained native ChatGPT application/window
+  (PID **15689**). Three matching samples spanned **1.218 seconds** before cleanup.
+- After closing only exact recorded test tab/terminal pairs and terminating only
+  the empty disposable process, three more matching native/model samples spanned
+  **2.015 seconds**. The final focus report is `verified-after-cleanup`,
+  `verified=true`, with no revocation. This is the completed guarded restoration
+  result, rather than an independent later desktop snapshot.
+- No disposable managed windows remained, and disposable PID 60331 was confirmed
+  exited. Original Ghostty identities survived cleanup.
+
+`results.json`, `events.jsonl`, `baseline.json`, `process-samples.jsonl`,
+`window-samples.jsonl` and the derived `completion-summary.json` retain the proof.
+The source/library hashes match the earlier fresh-reader build:
+`d56047c7c0f5d5e3dd5f10849c162ef643b825cbb4ba4d3510e0d4c438286f0b` and
+`422bd2821971e8f39b1d4f3b1f309489423525eb152416e29de8263a87aaf115`.
+The installed app/CLI hashes recorded in the completion summary are
+`854ae357aabd875a709c09fbab9f9a49896f3548359b959e82873aa7b5aad394` and
+`04eb00cf789fd45b2e8ca9ae924921ac2260074cfb96f695d55d14ae78fdc2ea`.
+
+The native reader repair remains covered by 13 offline guard cases; all 173
+Python tests and 22 Swift ownership tests passed during this repair sequence.
+The previously failed live runs remain failed in their own evidence. After the
+completed run the user was told they could resume desktop use; only saved
+artifacts and documentation were inspected afterward. No more live test was run,
+no further manager/helper was launched, and nothing was pushed. The inventory and
+reader repairs, offline regressions and updated notes are included in a local
+checkpoint after `c2a304e1`. No additional tests, installations, or app/helper
+launches were performed when creating this checkpoint.

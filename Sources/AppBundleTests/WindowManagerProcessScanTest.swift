@@ -96,3 +96,97 @@ struct WindowManagerProcessScanTest {
         #expect(try WindowManagerProcesses.peers(using: api).isEmpty)
     }
 }
+
+private final class MissingExecutableStub {
+    var birthReads = 0
+    var generationReads = 0
+    var signatureReads = 0
+    var changeBirth = false
+    var changeGeneration = false
+    var changeHash = false
+    var failGeneration = false
+    var failSignature = false
+    var image = WindowManagerSignedImage(flags: 0x22011111, category: 6,
+        identifier: "com.microsoft.Word.widgetextension", team: "UBF8T346G9", cdhash: [UInt8](repeating: 42, count: 20))
+    var code: Int32 = ENOENT
+
+    func verify() throws -> Bool {
+        try WindowManagerMissingExecutable.resolve(code: code, identity: {
+            self.birthReads += 1
+            return WindowManagerProcessBirth(pid: 1234, uid: 501,
+                seconds: self.changeBirth && self.birthReads > 1 ? 2 : 1, microseconds: 0)
+        }, generation: {
+            self.generationReads += 1
+            if self.failGeneration { throw WindowManagerAdmissionError.uncertainInventory }
+            return WindowManagerExecGeneration(uuid: [UInt8](repeating: 1, count: 16), uniqueId: 42,
+                version: self.changeGeneration && self.generationReads > 1 ? 8 : 7)
+        }, signature: { generation in
+            #expect(generation.version == 7)
+            self.signatureReads += 1
+            if self.failSignature { throw WindowManagerAdmissionError.uncertainInventory }
+            var value = self.image
+            if self.changeHash && self.signatureReads > 1 { value.cdhash[0] = 99 }
+            return value
+        }, userId: 501)
+    }
+}
+
+struct WindowManagerMissingExecutableTest {
+    @Test func deletedVendorWidgetsRequireFullKernelProof() throws {
+        for identifier in ["com.microsoft.Word.widgetextension", "com.microsoft.Excel.widgetextension"] {
+            let api = MissingExecutableStub()
+            api.image.identifier = identifier
+            #expect(try api.verify())
+            #expect(api.birthReads == 2 && api.generationReads == 2 && api.signatureReads == 2)
+        }
+    }
+
+    @Test func permissionErrorsCannotUseTheMissingPathFallback() throws {
+        let api = MissingExecutableStub()
+        api.code = EPERM
+        #expect(try !api.verify())
+        #expect(api.birthReads == 0 && api.signatureReads == 0)
+    }
+
+    @Test func unknownAndManagerIdentitiesStillBlock() {
+        for identifier in ["unknown.widget", "com.microsoft.Word", "bobko.aerospace", "local.aquaspace"] {
+            let api = MissingExecutableStub()
+            api.image.identifier = identifier
+            #expect(throws: (any Error).self) { try api.verify() }
+        }
+    }
+
+    @Test func kernelTrustAndRuntimeRestrictionsCannotBeSpoofedByMatchingStrings() {
+        for category: UInt32 in [0, 1, 3, 4, 5, 7, 10] {
+            let api = MissingExecutableStub()
+            api.image.category = category
+            #expect(throws: (any Error).self) { try api.verify() }
+        }
+        for flags: UInt32 in [0, 0x22011113, 0x22011115, 0x32011111, 0x22011110, 0x22001111, 0x22011101] {
+            let api = MissingExecutableStub()
+            api.image.flags = flags
+            #expect(throws: (any Error).self) { try api.verify() }
+        }
+    }
+
+    @Test func changedProcessExecOrCodeHashCannotPass() {
+        for change in 0 ..< 3 {
+            let api = MissingExecutableStub()
+            api.changeBirth = change == 0
+            api.changeGeneration = change == 1
+            api.changeHash = change == 2
+            #expect(throws: (any Error).self) { try api.verify() }
+        }
+    }
+
+    @Test func missingProofWrongTeamOrZeroHashCannotPass() {
+        for failure in 0 ..< 4 {
+            let api = MissingExecutableStub()
+            api.failGeneration = failure == 0
+            api.failSignature = failure == 1
+            if failure == 2 { api.image.team = "OTHERTEAM" }
+            if failure == 3 { api.image.cdhash = [UInt8](repeating: 0, count: 20) }
+            #expect(throws: (any Error).self) { try api.verify() }
+        }
+    }
+}
