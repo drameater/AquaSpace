@@ -80,6 +80,7 @@ class CleanupOrderingTests(unittest.TestCase):
         scope = dict(
             pid=200, birth=(200, 1, 2, 501), protected=[100], created={'a': {'tab': 'a', 'terminal': 'a-terminal'}},
             manager=manager, N=SimpleNamespace(run=run, managers=lambda: [manager], processes=SimpleNamespace(_info=lambda pid: None)),
+            script_driver=SimpleNamespace(run=lambda pid,op,*args,**kwargs: __import__('json').loads(run([Path('/unused/library'),pid,op,*args]))),
             HERE=Path('/unused'), session={'workspace': '1', 'focusedWindow': '11344'}, baseline=baseline,
             cli=cli, ghost_birth=lambda pid: (200, 1, 2, 501), personal_before=[],
             personal_identity=lambda value: [], driver=lambda *args, **kwargs: {},

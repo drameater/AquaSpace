@@ -164,3 +164,15 @@ restoration pass is claimed. All disposable processes were removed, original
 Ghostty window 21423 remained floating on workspace 2 with unchanged native
 identities, and all 1,636 process samples observed the same sole AquaSpace. See
 the [complete attempt record](aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).
+
+The offline review of `ec38b622` found late destination-occupancy detection and
+loss of the original source-window identity across subprocess admission. The
+runner now validates exact native/model destination ownership before mutations,
+and its diagnostic scripting library receives the original retained AX roots
+in process rather than rebinding by PID/title. Existing ownership and ambiguity
+checks remain; old executable helpers are not a fallback. All 162 offline Python
+tests pass, including 19 added methods, and the native source passes syntax-only
+checking. No app/helper or diagnostic library was launched/loaded, built or
+installed. This repair is included in a local checkpoint after `ec38b622` and is
+not live-validated. No additional tests were run when creating the checkpoint. See the
+[destination and source-identity repair record](aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).

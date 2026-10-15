@@ -645,3 +645,87 @@ support, four added offline tests and these notes are included in a local
 checkpoint after `eff15f35`. No additional tests were run when creating this
 checkpoint. A complete live restoration run remains pending a desktop
 without the interfering Zen window activity.
+
+## Offline destination and retained-source repair after ec38b622
+
+The user authorized fixes and offline regression tests for the two remaining
+review findings, preserving all ownership checks and prohibiting any app/helper
+launch, live test, installation or push. This repair stayed within that scope.
+
+**Destination occupancy.** The old guard checked current foreground ownership
+before selecting a workspace, then discovered a foreign destination occupant
+only afterward. An offline reproduction ran the actual workspace-switch
+function with an unrelated window already on its destination: it issued the
+workspace command and focused that window before raising an error. Creation
+and focus-following moves also lacked a new destination ownership read. The
+saved Zen trace has owned test focus on B before a workspace switch and native
+Zen focus on A afterward. It does not establish exactly when Zen arrived, so
+it should not be read as proof that the foreground change was independent of
+the harness's own workspace command.
+
+The runner now reads both dedicated workspace inventories before any switch,
+creation, selection/focus, move or menu dispatch. A pure policy compares exact
+IDs, workspace, PID and title against the disposable model rows AND the native
+selected tab memberships, already verified against recorded tab/terminal IDs.
+Original IDs, foreign occupants, prefix/PID-only matches, duplicate native
+titles/IDs, missing rows, malformed data and model/native disagreement refuse
+the action and permanently revoke foreground permission. Creation repeats the
+check after switching, and final native source validation occurs after the
+destination reads. No foreign window is moved or closed to make a workspace
+available. The existing manager/process/original-window checks remain.
+
+**Source identity at admission.** The parent previously serialized only PID,
+title and window presence. The child captured whichever native window was
+focused when it started, so a different same-process, same-title window could
+be accepted as a new source. Initial title uniqueness could become stale later.
+Retaining the replacement in that child did not preserve the parent's identity.
+
+`ScriptDriver.m` is now an in-process diagnostic library rather than a standalone
+executable. The inert Python `script_driver.py` adapter passes the original
+retained AX application/window references directly through typed pointer-width
+C parameters, and retains the snapshot object across serialization, final source
+confirmation and the native call. The native guard independently `CFRetain`s
+those exact references, verifies their types/owner and compares current native
+focus with the original window immediately before each mutation. It never
+recaptures a replacement during initialization. The uniquely named Objective-C
+guard avoids class-name collisions in the diagnostic process. Matching title
+and PID cannot replace the original reference.
+
+All scripting API operations and exact-ID background cleanup now use this
+library; the native-menu process retains its existing no-activation policy.
+Initial activation remains one-shot and guarded. Manager ownership, disposable
+birth/executable identity, native tab/terminal IDs, original-window preservation,
+prefix checks, ambiguity rejection and revocation behavior are unchanged or
+stricter. No manager lifecycle, user-app recovery or action-retry path was added.
+
+The new required capability is `ghostty-topology-retained-source-v3`. The runner
+requires `script-driver.dylib`, validates its exports/capability before session
+capture and refuses missing, old or incompatible libraries. It cannot fall back
+to the earlier standalone helper or a metadata-only grant. The build instructions
+now specify `-dynamiclib`; no library or helper binary was built in this repair.
+Future explicitly authorized live validation must build that diagnostic library
+first. Loading it in the runner does not inject code into either manager or
+Ghostty or add macOS privileges. No library was loaded during these offline checks.
+
+Offline validation added **19 test methods** and passed all **162 AquaSpace
+Python tests**. The destination failures were observed against the old runner
+before the guards were added, including a foreign occupant arriving between
+switch and creation. The adapter tests execute the real ctypes boundary with
+fake C entrypoints, check that the exact original full-width pointers cross it,
+and simulate same-PID/same-title replacement for all four foreground operations.
+They also cover windowless sources, missing/invalid pointers, final confirmation
+failure, incompatible APIs and single-release error handling without retry.
+Structural checks verify that native initialization retains the supplied roots
+and contains no source-recapture API or executable entrypoint. These are offline
+policy/adapter proofs, not a run of real AppKit or Scripting Bridge behavior.
+
+`clang -fobjc-arc -fsyntax-only` accepted the native source without producing a
+binary. Native loading, subprocesses, signals and relevant fixture writes are
+blocked in the safety tests. No app/helper was launched, no live process/window
+APIs were called, no installation occurred, and nothing was pushed. The fixes,
+regressions and notes are included in a local checkpoint after `ec38b622`. No
+additional tests were run when creating this checkpoint. Native library linkage,
+Automation behavior and complete foreground restoration still need a separately
+authorized live run; earlier live results must not be relabeled as this repair's
+validation. Destination/focus checks remain bounded observations rather than an
+atomic macOS lock against events arriving after the final check.

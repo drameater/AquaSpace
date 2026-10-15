@@ -97,29 +97,37 @@ class ExecutionFocusTests(unittest.TestCase):
 class RunnerFocusTests(unittest.TestCase):
     def fixture(self):
         f = FocusEnvironment(); f.capture(); f.test_focus()
-        rows = [['test-window', 'test-a', '200', f.test_window.title]]
+        f.model['window'] = '2000'
+        rows = [['2000', 'test-a', '200', f.test_window.title]]
         gate = policy.ExecutionFocus(f.controller, test_pid=lambda: 200, owned_rows=lambda: rows,
                                      workspaces={'test-a', 'test-b'}, prefix='AeroSpace-NativeTabs-offline-unique-')
         calls = []
         def cli(*args):
-            calls.append(('cli', args))
             if args == ('list-workspaces', '--focused'): return f.model['workspace']
+            if args[0] == 'list-windows' and '--workspace' in args:
+                workspace = args[args.index('--workspace')+1]
+                return '\n'.join('\t'.join(row) for row in rows if row[1] == workspace)
+            calls.append(('cli', args))
             if args[0] == 'workspace':
                 f.model.update(workspace=args[1], window='', pid=None, title=None)
             return ''
-        def run(args, **kwargs):
-            calls.append(('helper', args))
-            return json.dumps({'tab':'new', 'terminal':'terminal'})
+        sources = []
+        def run(target, op, *args, source=None, confirm_source=None):
+            if source is not None: confirm_source(source)
+            calls.append(('driver', [Path('/fake/library'),target,op,*args]))
+            sources.append(source)
+            return {'tab':'new', 'terminal':'terminal'}
         def isolated(): f.guard()
         tree = ast.parse((SOURCE / 'live.py').read_text())
-        names = {'focus_guard', 'focus_test_workspace', 'fresh', 'select', 'move', 'menu', 'driver', 'settle', 'activate_initial'}
+        names = {'focus_guard', 'destinations_guard', 'focus_test_workspace', 'fresh', 'select', 'move', 'menu', 'driver', 'settle', 'activate_initial'}
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
         scope = dict(activity=gate, isolated=isolated, preserved=f.guard, focus_controller=f.controller,
-                     native=lambda: {'groups':[{'selected':'tab-a'}]}, pid=200, protected=[100],
+                     native=lambda: {'groups':[{'selected':'tab-a','members':[{'tab':'tab-a','terminal':'term-a','title':f.test_window.title}]}]}, pid=200, protected=[100], baseline={},
                      created={'a':{'tab':'tab-a','terminal':'term-a'}}, own_rows=lambda: rows,
                      prefix='AeroSpace-NativeTabs-offline-unique-', A='test-a', B='test-b',
                      CLI=Path('/fake/cli'), HERE=Path('/fake/helper'), SOURCE=SOURCE,
-                     sys=SimpleNamespace(executable='/fake/python'), N=SimpleNamespace(run=run),
+                     sys=SimpleNamespace(executable='/fake/python'), N=SimpleNamespace(run=lambda *args,**kwargs:'{}'),
+                     script_driver=SimpleNamespace(run=run,sources=sources),
                      cli=cli, json=json, focus_restore=policy, time=SimpleNamespace(sleep=f.pause, monotonic=lambda:f.now),
                      save=lambda *args:None, event=lambda *args, **kwargs:None)
         exec(compile(ast.Module(body=nodes,type_ignores=[]), str(SOURCE / 'live.py'), 'exec'), scope)
@@ -145,12 +153,13 @@ class RunnerFocusTests(unittest.TestCase):
     def test_selection_rechecks_focus_after_helper_before_cli_activation(self):
         with offline():
             f, _, scope, calls = self.fixture()
-            def run(args, **kwargs):
-                calls.append(('helper', args)); f.external_focus()
-                return '{}'
-            scope['N'].run = run
+            def run(target,op,*args,source=None,confirm_source=None):
+                confirm_source(source)
+                calls.append(('driver', [target,op,*args])); f.external_focus()
+                return {}
+            scope['script_driver'].run = run
             with self.assertRaises(policy.FocusError): scope['select']('a')
-            self.assertEqual([kind for kind, _ in calls], ['helper'])
+            self.assertEqual([kind for kind, _ in calls], ['driver'])
 
     def test_workspace_switch_rechecks_focus_before_creating_a_window(self):
         with offline():
@@ -161,7 +170,7 @@ class RunnerFocusTests(unittest.TestCase):
                 return result
             scope['cli'] = cli
             with self.assertRaises(policy.FocusError): scope['fresh']('b')
-            self.assertFalse(any(kind == 'helper' for kind, _ in calls))
+            self.assertFalse(any(kind == 'driver' for kind, _ in calls))
 
     def test_manager_or_window_guard_still_precedes_focus_mutation(self):
         with offline():
@@ -175,10 +184,11 @@ class RunnerFocusTests(unittest.TestCase):
             scope['select']('a'); scope['move']('a','test-b')
             helper = calls[0][1]
             self.assertEqual(helper[1:5], [200,'select','tab-a','term-a'])
-            self.assertEqual(helper[-2], '--foreground')
-            self.assertEqual(json.loads(helper[-1]), {'pid':200,'title':f.test_window.title,'hasWindow':True})
-            self.assertIn(('cli', ('focus','--window-id','test-window')), calls)
-            self.assertIn(('cli', ('move-node-to-workspace','--window-id','test-window','--focus-follows-window','test-b')), calls)
+            source = scope['script_driver'].sources[0]
+            self.assertIs(source.app,f.test)
+            self.assertIs(source.window,f.test_window)
+            self.assertIn(('cli', ('focus','--window-id','2000')), calls)
+            self.assertIn(('cli', ('move-node-to-workspace','--window-id','2000','--focus-follows-window','test-b')), calls)
 
     def test_poll_detects_user_focus_and_latches_before_next_selection(self):
         with offline():
@@ -203,16 +213,17 @@ class RunnerFocusTests(unittest.TestCase):
         with offline():
             f, gate, scope, calls = self.fixture()
             gate.workspace_selected('test-a', f.controller.initial); f.front = f.original
-            def run(args, **kwargs):
-                calls.append(('helper',args))
-                if args[2] == 'activate': f.front = f.test
-                return '{}'
-            scope['N'].run = run
+            def run(target,op,*args,source=None,confirm_source=None):
+                confirm_source(source)
+                self.assertIs(source.window,f.original_window)
+                calls.append(('driver',[Path('/fake/library'),target,op,*args]))
+                if op == 'activate': f.front = f.test
+                return {}
+            scope['script_driver'].run = run
             scope['activate_initial']('a'); scope['activate_initial']('a')
-            mutations = [args for kind,args in calls if kind == 'helper']
+            mutations = [args for kind,args in calls if kind == 'driver']
             self.assertEqual(len(mutations),1)
             self.assertEqual(mutations[0][1:5],[200,'activate','tab-a','term-a'])
-            self.assertEqual(json.loads(mutations[0][-1])['pid'],100)
             self.assertIsNone(gate.carry)
 
     def test_initial_activation_refuses_user_focus_change_without_any_activation(self):
@@ -231,31 +242,38 @@ class RunnerFocusTests(unittest.TestCase):
             self.assertEqual(len(calls),1)
             self.assertIsNotNone(f.controller.revoked)
 
+    def test_personal_status_remains_read_only_before_focus_controller_exists(self):
+        with offline():
+            _, _, scope, calls = self.fixture()
+            scope['focus_controller'] = None
+            scope['driver']('status',personal=100)
+            self.assertEqual(len(calls),1)
+            self.assertEqual(calls[0][1][1:3],[100,'status'])
+            self.assertIsNone(scope['script_driver'].sources[0])
+
 
 class HelperAdmissionTests(unittest.TestCase):
     def test_old_or_unreadable_helper_cannot_reach_live_entrypoint(self):
         tree = ast.parse((SOURCE / 'live.py').read_text())
-        admission = next(n for n in tree.body if isinstance(n,ast.If)
-                         and '--capabilities' in ast.unparse(n.test))
+        admission = next(n for n in tree.body if isinstance(n,ast.Assign)
+                         and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name)
+                         and n.value.func.id == 'ScriptDriver')
         capture = next(n.lineno for n in tree.body if isinstance(n,ast.Assign)
                        and 'capture_session' in ast.unparse(n))
         self.assertLess(admission.lineno, capture)
         code = compile(ast.Module(body=[admission],type_ignores=[]),'<helper admission>','exec')
-        for reply in ('old-helper', 'ghostty-topology-foreground-v1', 'ghostty-topology-foreground-v2', None):
-            with self.subTest(reply=reply), offline():
-                def run(args, **kwargs):
-                    self.assertEqual(args,[Path('/fake/script-driver'),'--capabilities'])
-                    if reply is None: raise RuntimeError('helper failed')
-                    return reply
-                scope = {'N':SimpleNamespace(run=run),'HERE':Path('/fake')}
-                if reply == 'ghostty-topology-foreground-v2': exec(code,scope)
-                else:
-                    with self.assertRaises(RuntimeError): exec(code,scope)
+        with offline():
+            def admit(path):
+                self.assertEqual(path,Path('/fake/script-driver.dylib'))
+                raise RuntimeError('library admission failed')
+            with self.assertRaises(RuntimeError):
+                exec(code,{'ScriptDriver':admit,'HERE':Path('/fake')})
 
     def test_helper_mutation_sites_require_grant_and_only_explicit_activation_activates_app(self):
         source = (SOURCE / 'ScriptDriver.m').read_text()
-        main = source[source.index('int main('):]
-        self.assertIn('Foreground grant required', main)
+        main = source[source.index('static NSDictionary *performOperation('):]
+        self.assertNotIn('int main(',source)
+        self.assertIn('application:sourceApp window:sourceWindow',main)
         self.assertLess(main.index('initWithSnapshot:'),main.index('SBApplication applicationWithProcessIdentifier:'))
         self.assertIn('[foreground check];\n        id tab =', main)
         self.assertIn('[foreground check];\n            [(GhosttyObject *)targetTab selectTab]', main)

@@ -56,10 +56,10 @@ From the repository root (these commands do not build or install a manager):
 
 ```sh
 mkdir -p .debug/aquaspace/ghostty-topology
-clang -fobjc-arc -framework Foundation -framework AppKit -framework ScriptingBridge \
+clang -fobjc-arc -dynamiclib -framework Foundation -framework AppKit -framework ScriptingBridge \
   -framework ApplicationServices \
   script/native-tabs-smoke/ghostty-topology/ScriptDriver.m \
-  -o .debug/aquaspace/ghostty-topology/script-driver
+  -o .debug/aquaspace/ghostty-topology/script-driver.dylib
 swiftc -module-cache-path .debug/aquaspace/ghostty-topology/module-cache \
   script/native-tabs-smoke/ghostty-topology/LaunchGhostty.swift \
   -o .debug/aquaspace/ghostty-topology/launch-ghostty
@@ -67,8 +67,11 @@ swiftc -module-cache-path .debug/aquaspace/ghostty-topology/module-cache \
 
 Scripting Bridge's dynamically generated `new...` commands return autoreleased
 objects: the Objective-C declarations explicitly disable ARC's inferred retained
-return convention. Commands with a direct object (select/activate/close) belong
+return convention. Commands with a direct object (select/close) belong
 to that object's proxy, rather than the application proxy.
+The script driver is now a library loaded by the runner, so retained native
+window references stay in the same process through every guarded mutation.
+It has no executable entrypoint or fallback to the old `script-driver` binary.
 
 ## Explicit live run
 
@@ -217,7 +220,7 @@ prefix and ambiguity checks remain in place.
 **Rebuild `script-driver` before a future authorized live run.** At this offline
 checkpoint the runner required the read-only `ghostty-topology-foreground-v1`
 capability and refused old helpers before session capture or disposable launch.
-The current v2 capability is described below.
+The subsequent v2 attempt and current v3 library are described below.
 Neither helper nor either window manager was rebuilt or launched during this
 offline repair; the Objective-C helper received a syntax-only compiler check.
 These changes are not yet live-validated. The earlier 32-assertion run predates
@@ -232,8 +235,8 @@ while the preceding native source still passes the execution gate. The helper
 retains and rechecks that granted source immediately before activation. Native
 activation is awaited read-only, with no action retry; any different user focus
 revokes permission. Selection and menu operations do not regain activation paths.
-The current helper capability is **`ghostty-topology-foreground-v2`**; rebuild it
-with the command above. A v1 helper is now refused.
+That checkpoint used **`ghostty-topology-foreground-v2`**. It is superseded by the
+retained-source v3 library described below.
 
 All **143 offline tests** pass, including initial activation, no-retry and user
 focus refusal cases plus inert rejection of invalid workspace prefixes. The
@@ -245,3 +248,39 @@ disposable processes were cleaned up; original Ghostty window 21423 stayed on
 workspace 2, and 1,636 process samples saw the same sole AquaSpace. A later
 read-only snapshot matched the original desktop focus, but this is not a passing
 restoration result. See the [attempt record](../../../dev-docs/aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).
+
+## Offline destination and source-identity repair after ec38b622
+
+Destination occupancy is now revalidated before workspace switches, creation,
+selection/focus, focus-following moves and native-menu dispatch. Both test
+workspaces must contain only exact disposable model rows that agree with the
+recorded native selected tabs. Foreign windows, original baseline IDs, unknown
+IDs, duplicate titles/IDs, missing rows, malformed reads and native/model
+disagreement revoke foreground permission before any mutation. Matching the
+Ghostty PID or title prefix alone never authorizes an occupant. Creation checks
+again after a workspace switch, so a newly arrived window cannot bypass the
+earlier switch check. Final source-focus validation still follows these reads.
+
+The source window is no longer reconstructed in a child process from PID/title
+metadata. `script_driver.py` calls `ScriptDriver.m` **in process**, passing the
+runner's original retained AX application/window pointers through typed,
+pointer-width C arguments. The native guard independently retains those exact
+references and compares current focus against them immediately before mutation.
+A same-PID, same-title replacement cannot become a new authorized source.
+Existing target tab/terminal, process birth, manager, prefix, ambiguity and
+original-window protections remain in force. Status and exact-ID cleanup use
+the same library without introducing foreground activation or recovery retries.
+
+The required library capability is **`ghostty-topology-retained-source-v3`**.
+Before a future authorized live run, build `script-driver.dylib` with the updated
+command above. Old executables or mismatched libraries are refused; no executable
+fallback exists. The library is loaded into the diagnostic runner, not either
+window manager or Ghostty. This repair did not build, load or run it.
+
+All **162 AquaSpace offline tests** pass, including 19 added methods covering
+destination arrivals, membership/ambiguity refusal, exact retained references,
+same-title replacement, windowless sources, pointer width, failed confirmation,
+stale-library rejection and native-response cleanup without retries. The native
+source passed a syntax-only compiler check. No apps, diagnostic helpers or
+diagnostic native libraries were launched/loaded; no live test or installation
+was performed. Live validation remains pending. See the [repair record](../../../dev-docs/aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).

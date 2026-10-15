@@ -9,6 +9,37 @@ class FocusError(RuntimeError):
     pass
 
 
+def require_owned_destinations(inventories, owned_rows, native, test_pid, prefix, baseline_ids):
+    """Reject foreign occupants using exact model rows AND native selected tabs."""
+    selected = []
+    for group in native['groups']:
+        matches = [m for m in group['members'] if m['tab'] == group['selected']]
+        if len(matches) != 1:
+            raise FocusError('Native destination selection is ambiguous')
+        selected.append(matches[0]['title'])
+    if len(set(selected)) != len(selected):
+        raise FocusError('Duplicate native destination titles')
+    owned = {}
+    for row in owned_rows:
+        if (len(row) != 4 or not row[0].isdigit() or row[0] in owned or row[0] in baseline_ids
+                or row[1] not in inventories or row[2] != str(test_pid)
+                or row[3] not in selected or not row[3].startswith(prefix)):
+            raise FocusError('Unverified disposable destination row')
+        owned[row[0]] = row
+    if sorted(row[3] for row in owned.values()) != sorted(selected):
+        raise FocusError('Native and model destination membership disagree')
+    for workspace, text in inventories.items():
+        seen = set()
+        for line in text.splitlines():
+            row = line.split('\t', 3)
+            if (len(row) != 4 or row[0] in seen or row[1] != workspace
+                    or owned.get(row[0]) != row):
+                raise FocusError('Foreign or unreadable destination occupant on ' + workspace)
+            seen.add(row[0])
+        if seen != {key for key, row in owned.items() if row[1] == workspace}:
+            raise FocusError('Destination inventory changed during validation on ' + workspace)
+
+
 def read_model(cli):
     workspace = cli('list-workspaces', '--focused')
     try:

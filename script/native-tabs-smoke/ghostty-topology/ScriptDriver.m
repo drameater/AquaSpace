@@ -3,20 +3,20 @@
 #import <ScriptingBridge/ScriptingBridge.h>
 #import <ApplicationServices/ApplicationServices.h>
 
-// Pin the caller's native foreground source across tab enumeration and recheck
+// Retain the caller's exact in-process AX references across enumeration and recheck
 // immediately before a creation/selection. Neither failure nor cleanup activates
 // another app. The Python runner separately verifies model/process ownership.
-@interface ForegroundGuard : NSObject {
+@interface AquaSpaceGhosttyForegroundGuard : NSObject {
     AXUIElementRef _app;
     AXUIElementRef _window;
     pid_t _pid;
     NSString *_title;
 }
-- (instancetype)initWithSnapshot:(NSDictionary *)snapshot;
+- (instancetype)initWithSnapshot:(NSDictionary *)snapshot application:(AXUIElementRef)application window:(AXUIElementRef)window;
 - (void)check;
 @end
-@implementation ForegroundGuard
-- (instancetype)initWithSnapshot:(NSDictionary *)snapshot {
+@implementation AquaSpaceGhosttyForegroundGuard
+- (instancetype)initWithSnapshot:(NSDictionary *)snapshot application:(AXUIElementRef)application window:(AXUIElementRef)window {
     self = [super init];
     if (!self) return nil;
     if (![snapshot isKindOfClass:NSDictionary.class] ||
@@ -26,22 +26,16 @@
     _pid = [snapshot[@"pid"] intValue];
     if (_pid <= 0) [NSException raise:@"Foreground" format:@"Invalid foreground PID"];
     _title = [snapshot[@"title"] isKindOfClass:NSString.class] ? snapshot[@"title"] : nil;
-    _app = AXUIElementCreateApplication(_pid);
-    if (!_app || AXUIElementSetMessagingTimeout(_app, 2.0) != kAXErrorSuccess)
-        [NSException raise:@"Foreground" format:@"Cannot bind foreground app"];
-    CFTypeRef value = NULL;
-    AXError error = AXUIElementCopyAttributeValue(_app, kAXFocusedWindowAttribute, &value);
-    if ([snapshot[@"hasWindow"] boolValue]) {
-        if (error != kAXErrorSuccess || !value || CFGetTypeID(value) != AXUIElementGetTypeID()) {
-            if (value) CFRelease(value);
-            [NSException raise:@"Foreground" format:@"Cannot read granted foreground window"];
-        }
-        _window = (AXUIElementRef)value;
-    } else {
-        if (value) CFRelease(value);
-        if (error != kAXErrorNoValue)
-            [NSException raise:@"Foreground" format:@"Windowless foreground grant changed"];
-    }
+    if (!application || CFGetTypeID(application) != AXUIElementGetTypeID() ||
+        (window && CFGetTypeID(window) != AXUIElementGetTypeID()) ||
+        [snapshot[@"hasWindow"] boolValue] != (window != NULL))
+        [NSException raise:@"Foreground" format:@"Exact retained foreground references required"];
+    _app = (AXUIElementRef)CFRetain(application);
+    if (window) _window = (AXUIElementRef)CFRetain(window);
+    pid_t owner = 0;
+    if (AXUIElementGetPid(_app, &owner) != kAXErrorSuccess || owner != _pid ||
+        AXUIElementSetMessagingTimeout(_app, 2.0) != kAXErrorSuccess)
+        [NSException raise:@"Foreground" format:@"Retained foreground app identity changed"];
     [self check];
     return self;
 }
@@ -110,20 +104,23 @@ static NSDictionary *describe(GhosttyApplication *app) {
     }
     return @{@"groups":groups};
 }
-int main(int argc, const char *argv[]) { @autoreleasepool { @try {
-    if (argc == 2 && strcmp(argv[1], "--capabilities") == 0) {
-        puts("ghostty-topology-foreground-v2"); return 0;
+static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {
+    if (![request isKindOfClass:NSDictionary.class] || ![request[@"argv"] isKindOfClass:NSArray.class])
+        [NSException raise:@"Arguments" format:@"Invalid diagnostic request"];
+    NSArray *arguments = request[@"argv"];
+    if (arguments.count > 16) [NSException raise:@"Arguments" format:@"Too many diagnostic arguments"];
+    int argc = (int)arguments.count + 1;
+    const char *argv[argc]; argv[0] = "in-process-ghostty-driver";
+    for (NSUInteger i = 0; i < arguments.count; i++) {
+        if (![arguments[i] isKindOfClass:NSString.class])
+            [NSException raise:@"Arguments" format:@"Expected string diagnostic argument"];
+        argv[i+1] = [arguments[i] UTF8String];
     }
     if (argc < 3) [NSException raise:@"Arguments" format:@"Expected PID and operation"];
     pid_t pid = (pid_t)atoi(argv[1]); NSString *op = @(argv[2]);
-    ForegroundGuard *foreground = nil;
+    AquaSpaceGhosttyForegroundGuard *foreground = nil;
     if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"] || [op isEqual:@"activate"]) {
-        if (argc < 5 || strcmp(argv[argc-2], "--foreground") != 0)
-            [NSException raise:@"Foreground" format:@"Foreground grant required"];
-        NSData *data = [@(argv[argc-1]) dataUsingEncoding:NSUTF8StringEncoding];
-        NSDictionary *snapshot = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-        foreground = [[ForegroundGuard alloc] initWithSnapshot:snapshot];
-        argc -= 2;
+        foreground = [[AquaSpaceGhosttyForegroundGuard alloc] initWithSnapshot:request[@"foreground"] application:sourceApp window:sourceWindow];
     }
     NSRunningApplication *native = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (![native.bundleIdentifier isEqual:@"com.mitchellh.ghostty"]) [NSException raise:@"Identity" format:@"Not the expected Ghostty PID"];
@@ -172,7 +169,27 @@ int main(int argc, const char *argv[]) { @autoreleasepool { @try {
         } else if ([op isEqual:@"close"]) { [(GhosttyObject *)targetTab closeTab]; result=@{@"closed":@YES}; }
         else [NSException raise:@"Operation" format:@"Unknown operation"];
     }
-    NSError *error=nil; NSData *data=[NSJSONSerialization dataWithJSONObject:result options:0 error:&error];
-    if (!data) [NSException raise:@"Serialization" format:@"%@",error];
-    fwrite(data.bytes,1,data.length,stdout); fputc('\n',stdout); return 0;
-} @catch (NSException *exception) { fprintf(stderr,"%s: %s\n",exception.name.UTF8String,exception.reason.UTF8String); return 2; } } }
+    return result;
+}
+
+// There is deliberately no executable entrypoint or metadata-only fallback.
+const char *AquaSpaceGhosttyDriverCapabilities(void) {
+    return "ghostty-topology-retained-source-v3";
+}
+void AquaSpaceGhosttyDriverFree(void *result) { free(result); }
+char *AquaSpaceGhosttyDriverRun(const char *json, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {
+    @autoreleasepool {
+        NSDictionary *response;
+        @try {
+            if (!json) [NSException raise:@"Arguments" format:@"Missing diagnostic request"];
+            NSData *data = [NSData dataWithBytes:json length:strlen(json)];
+            NSDictionary *request = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+            response = @{@"ok":@YES, @"result":performOperation(request, sourceApp, sourceWindow)};
+        } @catch (NSException *exception) {
+            response = @{@"ok":@NO, @"error":[NSString stringWithFormat:@"%@: %@",exception.name,exception.reason]};
+        }
+        NSData *data = [NSJSONSerialization dataWithJSONObject:response options:0 error:NULL];
+        if (!data) return NULL;
+        return strdup([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String);
+    }
+}

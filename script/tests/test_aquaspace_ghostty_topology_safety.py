@@ -46,6 +46,7 @@ class WorkspaceCreationTests(unittest.TestCase):
         scope = dict(A='test-a', B='test-b', cli=cli, driver=driver,
                      isolated=lambda: None, preserved=lambda: None,
                      focus_guard=lambda phase: None,
+                     destinations_guard=lambda: None,
                      activity=SimpleNamespace(workspace_selected=lambda *args: None),
                      focus_controller=SimpleNamespace(revoke=lambda *args: None),
                      save=lambda *args: None, prefix='test-',

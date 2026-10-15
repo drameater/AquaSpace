@@ -28,9 +28,10 @@ ROOT=Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'script'))
 import aquaspace_update as u
 import focus_restore
 from native_menu import NativeAX
+from script_driver import ScriptDriver
 SOURCE=Path(__file__).resolve().parent
 HERE=ROOT/'.debug/aquaspace/ghostty-topology'
-for helper in ('script-driver', 'launch-ghostty'):
+for helper in ('script-driver.dylib', 'launch-ghostty'):
  if not (HERE/helper).is_file():parser.error('Build the diagnostic helpers first; see '+str(SOURCE/'README.md'))
 HERE.mkdir(parents=True,exist_ok=True)
 OUT=HERE/('run-'+time.strftime('%Y%m%d-%H%M%S'));OUT.mkdir();(HERE/'current').write_text(str(OUT))
@@ -90,17 +91,25 @@ def focus_guard(phase):
  except Exception as error:
   focus_controller.revoke(error)
   raise
+def destinations_guard():
+ try:
+  focus_guard('before-destination-validation');membership=native();owned=own_rows()
+  inventories={w:cli('list-windows','--workspace',w,'--format','%{window-id}\t%{workspace}\t%{app-pid}\t%{window-title}') for w in (A,B)}
+  focus_restore.require_owned_destinations(inventories,owned,membership,pid,prefix,set(baseline))
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 def driver(op,*args,personal=False):
  if not personal:isolated()
  target=personal if personal else pid
- extra=[]
+ snapshot=None
  if op in ('create','add','select','activate'):
   if personal:raise RuntimeError('No personal-process mutations')
+  destinations_guard()
   snapshot=focus_guard('before-script-'+op)
-  extra=['--foreground',json.dumps(dict(pid=snapshot.pid,title=snapshot.title,hasWindow=snapshot.window is not None))]
- try:v=json.loads(N.run([HERE/'script-driver',target,op,*args,*extra],timeout=14))
+ try:v=script_driver.run(target,op,*args,source=snapshot,confirm_source=focus_controller.confirm_native if snapshot is not None else None)
  except Exception as error:
-  if extra:focus_controller.revoke(error)
+  if snapshot is not None:focus_controller.revoke(error)
   raise
  event('script',pid=target,operation=op,result=v);return v
 
@@ -136,6 +145,7 @@ def settle(groups,note):
 def focus_test_workspace(workspace):
  if workspace not in (A,B):raise RuntimeError('Creation requires a dedicated test workspace')
  isolated()
+ destinations_guard()
  source=focus_guard('before-test-workspace')
  try:
   cli('workspace',workspace)
@@ -172,6 +182,7 @@ def select(label):
  native();c=created[label];driver('select',c['tab'],c['terminal']);time.sleep(.2);preserved()
  rr=[r for r in own_rows() if r[3]==prefix+label]
  if len(rr)!=1:raise RuntimeError('Selected test window not uniquely identified')
+ destinations_guard()
  focus_guard('before-selected-window-focus')
  try:cli('focus','--window-id',rr[0][0]);preserved()
  except Exception as error:
@@ -181,6 +192,7 @@ def move(label,workspace):
  isolated();native();rr=own_rows();matches=[r for r in rr if r[3]==prefix+label]
  if len(matches)!=1:raise RuntimeError('No unique selected disposable window')
  if workspace not in (A,B):raise RuntimeError('Moves require a dedicated test workspace')
+ destinations_guard()
  focus_guard('before-test-window-move')
  try:cli('move-node-to-workspace','--window-id',matches[0][0],'--focus-follows-window',workspace);preserved()
  except Exception as error:
@@ -189,7 +201,7 @@ def move(label,workspace):
 def menu(op,label):
  select(label);v=native();c=created[label]
  if not any(g['selected']==c['tab'] for g in v['groups']):raise RuntimeError('Requested menu selection not active')
- isolated();focus_guard('before-native-menu')
+ isolated();destinations_guard();focus_guard('before-native-menu')
  try:result=N.run([sys.executable,SOURCE/'native_menu.py',op,pid,protected[0],prefix,prefix+label],timeout=15)
  except Exception as error:
   focus_controller.revoke(error)
@@ -202,8 +214,7 @@ def record_cleanup_focus(phase):
   try:focus_controller.observe(phase)
   except Exception as error:event('focus-observation-error',phase=phase,error=repr(error))
 
-if N.run([HERE/'script-driver','--capabilities'],timeout=5)!='ghostty-topology-foreground-v2':
- raise RuntimeError('Rebuild the foreground-guarded diagnostic helper before running live')
+script_driver=ScriptDriver(HERE/'script-driver.dylib')
 manager,status=ownership();session=N.capture_session(manager,CLI);baseline={r[0]:r for r in session['windows']}
 save('baseline-app-identities.json',cli('list-windows','--all','--format','%{window-id}\t%{workspace}\t%{app-name}\t%{app-pid}').splitlines())
 originals=json.loads(N.run([HERE/'launch-ghostty','list'],timeout=5));protected=[int(r['pid']) for r in originals]
@@ -276,9 +287,9 @@ finally:
      peers=N.managers()
      if len(peers)!=1 or peers[0].identity!=manager.identity:raise RuntimeError('No cleanup mutation with uncertain manager ownership')
      record_cleanup_focus('before-close-'+c['tab'])
-     event('cleanup',result=N.run([HERE/'script-driver',pid,'close',c['tab'],c['terminal']],timeout=12))
+     event('cleanup',result=script_driver.run(pid,'close',c['tab'],c['terminal']))
      record_cleanup_focus('after-close-'+c['tab'])
-    remaining=json.loads(N.run([HERE/'script-driver',pid,'status'],timeout=10))
+    remaining=script_driver.run(pid,'status')
     if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
     if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before termination')
     record_cleanup_focus('before-terminate')
