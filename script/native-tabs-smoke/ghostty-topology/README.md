@@ -123,3 +123,45 @@ AquaSpace. All disposable windows/processes were removed. Final desktop focus
 differed from the initial snapshot, so full focus restoration is not claimed.
 See the [complete live record](../../../dev-docs/aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15)
 for evidence and the final read-only focus check.
+
+
+## Desktop focus cleanup (offline repair after 6e4ab9b2)
+
+The earlier lifecycle restored only if a test workspace remained focused **after**
+closing/quitting Ghostty, and did not verify actual desktop focus. That could
+silently skip a normal app-close handoff or report success on an ignored/overwritten
+focus request. The old saved trace cannot establish which focus event actually
+occurred; it has no focus samples across teardown.
+
+The current runner first requires a stable manager/native baseline: workspace,
+window ID, foreground PID and native window title must agree unambiguously. It
+retains the native application/window references and rejects an incoherent or
+ambiguous baseline before launching the disposable process. During teardown it
+restores the original focus **while the test still owns foreground focus**, then
+closes its tabs and quits in the background. Ownership is checked again just
+before requesting focus. Detected user focus changes are preserved and fail the
+run; a workspace name alone never authorizes taking focus back.
+
+Restoration and post-cleanup verification each require matching manager and
+native focus for at least three samples and half a second. Post-cleanup checks
+never retry focus writes. Original window disappearance, manager changes, unreadable
+native focus, ignored commands and late focus drift cannot become passing runs.
+An originally empty workspace is supported only with a confirmed empty native
+window baseline and a confirmed empty workspace; newly appeared windows in
+that workspace or application prevent restoration.
+
+`events.jsonl` now records native/model focus around every close/quit and focus
+request metadata. `results.json` contains `focus_restoration`, whose `verified`
+field is mandatory for success. A failed initial capture writes
+`focus-capture-failure.json`. No new manager lifecycle or installation path exists.
+
+Run the offline focus regressions with:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s script/tests -p 'test_aquaspace_ghostty_focus_restore.py'
+```
+
+These focus changes have offline validation only; their native focus capture and
+restoration order need a separately authorized live run. See the [diagnosis and
+validation record](../../../dev-docs/aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).

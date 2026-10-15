@@ -358,3 +358,71 @@ metadata, installed-hash confirmation and cleanup checks. Preflight is saved in
 These live validation notes are included in a local documentation checkpoint
 after `4508f0e8`. No further live tests were run while preparing the checkpoint,
 and nothing was pushed.
+
+
+## Offline Ghostty focus-restoration repair after 6e4ab9b2
+
+The saved run started from manager workspace 1/window 11344 and its later
+read-only check found workspace 2/window 11584. The trace contains **no focus
+events**, and the final focus check was about 60 seconds after its last event
+(about 60 seconds after `results.json` was saved). It does not establish whether
+focus changed during cleanup, during asynchronous restoration, or afterward.
+It also lacks an initial native foreground snapshot, so the initial model focus
+cannot independently be confirmed as the actual foreground window.
+
+Two harness defects are confirmed independently of that historical ambiguity:
+
+1. The runner closed its tabs and quit the disposable app **before** deciding
+   whether to restore. It restored only if the subsequently focused workspace
+   was still a test workspace. A normal foreground-app close/quit handoff onto
+   another original workspace could therefore skip restoration entirely.
+2. Neither the saved model workspace/window nor actual native foreground focus
+   was checked after restoration. A skipped, ignored or later overwritten focus
+   request could still produce `success: true`.
+
+Four offline reproductions execute the runner's actual teardown block with fake
+process/CLI/native boundaries. Before the repair they reproduced foreground-close
+handoff, a silent success after external focus, late cleanup drift, and a focus
+command that returned success without restoring focus. All four are now green.
+
+The repaired lifecycle captures a stable, coherent **model and native** baseline
+before launching the disposable app. The original application/window AX elements
+are retained. Inconsistent or ambiguous model/native snapshots are rejected;
+a failed capture records `focus-capture-failure.json` and starts no application.
+The runner restores **before the first tab close**, while the actual foreground
+PID/title and managed window ID still identify an owned test window. It rechecks
+that ownership after validating the original target. Detected external focus is
+left untouched and marks the run unsuccessful, rather than silently passing.
+
+For a normal window, one explicit focus command restores the original window and
+its workspace; there is no intermediate MRU workspace hop. An originally empty
+workspace uses the saved workspace and retained original application, refusing
+activation if that application has gained a window. Manager/peer identity and
+original-window preservation guards still apply. No manager launch/restart or
+fallback activation by application name/process index was added.
+
+Both model workspace/window and the exact retained native application/window
+must agree for at least three snapshots and half a second before background
+cleanup. Focus is recorded immediately before and after each tab close and app
+termination, with restoration request metadata. After cleanup another bounded
+stability check is required. It makes no corrective focus writes: an unexpected
+handoff or new user focus fails the run without taking focus back. `results.json`
+includes the focus report, and success/exit status require final verification.
+These records distinguish focus during teardown from later changes after the
+harness ends; they do not assert indefinite control over subsequent user focus.
+
+The repair adds **30 offline tests** covering actual teardown ordering/verdicts,
+manager/native disagreement, delayed or ignored focus, late drift, detected user
+input (including during target validation), stale targets, manager uncertainty,
+empty workspaces (including new windows from another application), ambiguous
+baselines and the real AX adapter's read boundary.
+All **110 Python AquaSpace offline tests** pass. Native libraries, subprocesses,
+signals and fixture writes are blocked in the new tests; source extraction runs
+only the relevant runner code against fakes.
+
+No application was launched, no real process/window APIs were invoked, no live
+test or installation was performed, and nothing was pushed during this repair.
+The revised focus lifecycle is **not yet live-validated**; the earlier 31-assertion
+run must not be presented as a run of this new lifecycle. The repair, offline
+regression tests, and diagnosis are included in a local checkpoint after
+`6e4ab9b2`.

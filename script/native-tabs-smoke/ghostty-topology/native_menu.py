@@ -122,6 +122,7 @@ class NativeAX:
         pointer = ctypes.c_void_p
         index = ctypes.c_long
         self._signature(self.ax, 'AXUIElementCreateApplication', [ctypes.c_int], pointer)
+        self._signature(self.ax, 'AXUIElementCreateSystemWide', [], pointer)
         self._signature(self.ax, 'AXUIElementGetPid', [pointer, ctypes.POINTER(ctypes.c_int)], ctypes.c_int)
         self._signature(self.ax, 'AXUIElementGetTypeID', [], ctypes.c_ulong)
         self._signature(self.ax, 'AXUIElementCopyAttributeValue', [pointer, pointer, ctypes.POINTER(pointer)], ctypes.c_int)
@@ -171,9 +172,11 @@ class NativeAX:
             raise MenuError('Unexpected native accessibility attribute type')
         return reference
 
-    def _attribute(self, element, attribute, *, optional=False):
+    def _attribute(self, element, attribute, *, optional=False, allow_no_value=False):
         result = ctypes.c_void_p()
         error = self.ax.AXUIElementCopyAttributeValue(element, self._string(attribute), ctypes.byref(result))
+        if allow_no_value and error == -25212:
+            return None
         if optional and error in self.ABSENT:
             return None
         self._check(error)
@@ -184,6 +187,11 @@ class NativeAX:
         self._check(self.ax.AXUIElementSetMessagingTimeout(app, 2.0))
         return app
 
+    def focused_application(self):
+        system = self._own(self.ax.AXUIElementCreateSystemWide())
+        self._check(self.ax.AXUIElementSetMessagingTimeout(system, 2.0))
+        return self.element(system, 'AXFocusedApplication')
+
     def pid(self, element):
         result = ctypes.c_int()
         self._check(self.ax.AXUIElementGetPid(element, ctypes.byref(result)))
@@ -191,6 +199,12 @@ class NativeAX:
 
     def element(self, parent, attribute):
         return self._type(self._attribute(parent, attribute), self.ax.AXUIElementGetTypeID())
+
+    def optional_element(self, parent, attribute):
+        # Only an explicit AX no-value means no focused window. Unsupported or
+        # unreadable attributes remain errors, never a fabricated empty desktop.
+        value = self._attribute(parent, attribute, allow_no_value=True)
+        return None if value is None else self._type(value, self.ax.AXUIElementGetTypeID())
 
     def elements(self, parent, attribute):
         array = self._type(self._attribute(parent, attribute), self.cf.CFArrayGetTypeID())

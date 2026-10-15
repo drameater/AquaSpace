@@ -124,3 +124,13 @@ were preserved. The same sole AquaSpace was observed in 913 process inventories,
 and all disposable tabs/processes were cleaned up. Final desktop focus differed
 from the initial snapshot and was left unchanged during read-only verification;
 complete focus restoration is not claimed. See the [full live validation](aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15).
+
+
+An ensuing offline investigation confirmed that focus restoration could be
+silently skipped after foreground app teardown and was not a success invariant.
+The harness now captures coherent native/model focus before launch, restores it
+while the disposable app still owns the foreground, performs background cleanup,
+and requires stable native/model agreement afterward. It preserves detected new
+user focus and reports failure rather than taking focus back. The added 30
+regressions pass; the revised lifecycle has not been run live. See the [focus
+repair diagnosis](aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).

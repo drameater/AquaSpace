@@ -21,6 +21,8 @@ import json, subprocess, threading, time, uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'script'))
 import aquaspace_update as u
+import focus_restore
+from native_menu import NativeAX
 SOURCE=Path(__file__).resolve().parent
 HERE=ROOT/'.debug/aquaspace/ghostty-topology'
 for helper in ('script-driver', 'launch-ghostty'):
@@ -31,6 +33,7 @@ N=u.NativeSystem();CLI=Path('/Applications/AquaSpace.app/Contents/MacOS/aquaspac
 A='native-tab-test-ghostty-topology-a';B='native-tab-test-ghostty-topology-b'
 prefix='AeroSpace-NativeTabs-'+uuid.uuid4().hex[:12]+'-'
 stop=threading.Event();errors=[];checks=[];created={};pid=None;birth=None;manager=None;baseline={};samples=[];wsamples=[]
+focus_controller=None;focus_ax=None
 def save(name,v):u.atomic_json(OUT/name,v)
 def event(kind,**v):
  with (OUT/'events.jsonl').open('a') as f:f.write(json.dumps(dict(at=time.time_ns(),kind=kind,**v))+'\n')
@@ -137,6 +140,10 @@ def menu(op,label):
  event('native-menu',operation=op,label=label,result=result);preserved()
 def G(labels,ws):return (frozenset(labels),ws)
 def personal_identity(v):return sorted((g['selected'],tuple(sorted((m['tab'],m['terminal']) for m in g['members']))) for g in v['groups'])
+def record_cleanup_focus(phase):
+ if focus_controller is not None:
+  try:focus_controller.observe(phase)
+  except Exception as error:event('focus-observation-error',phase=phase,error=repr(error))
 
 manager,status=ownership();session=N.capture_session(manager,CLI);baseline={r[0]:r for r in session['windows']}
 save('baseline-app-identities.json',cli('list-windows','--all','--format','%{window-id}\t%{workspace}\t%{app-name}\t%{app-pid}').splitlines())
@@ -147,7 +154,16 @@ personal=driver('status',personal=protected[0]);personal_before=personal_identit
 for window,workspace in expectations:
  check(baseline.get(window,[None,None])[1]==workspace,'expected existing window is on its original workspace',window=window,workspace=workspace)
 check(not cli('list-windows','--all','--format','%{workspace}').splitlines().count(A) and not cli('list-windows','--all','--format','%{workspace}').splitlines().count(B),'dedicated test workspaces are empty')
-save('baseline.json',dict(manager=manager.record(),status=status,session=session,personal=personal,ghostty_processes=originals,prefix=prefix))
+focus_ax=NativeAX()
+focus_controller=focus_restore.FocusRestoration(
+ ax=focus_ax,read_model=lambda:focus_restore.read_model(cli),cli=cli,guard=preserved,
+ log=lambda phase,data:event('desktop-focus',**data))
+try:focus_controller.capture_initial(session)
+except BaseException as error:
+ try:save('focus-capture-failure.json',dict(error=repr(error),session=session,focus_restoration=focus_controller.report()))
+ finally:focus_ax.close()
+ raise
+save('baseline.json',dict(manager=manager.record(),status=status,session=session,personal=personal,ghostty_processes=originals,prefix=prefix,desktop_focus=focus_controller.report()))
 threads=[threading.Thread(target=monitor_process,daemon=True),threading.Thread(target=monitor_windows,daemon=True)]
 for t in threads:t.start()
 success=False
@@ -184,6 +200,13 @@ try:
 except BaseException as e:
  save('failure.json',dict(error=repr(e),errors=errors,checks=checks));print('STOPPED: '+repr(e),flush=True);raise
 finally:
+ # Restore while our last window still owns actual foreground focus. Closing a
+ # foreground app first can hand focus to an unrelated window/workspace.
+ try:
+  focus_controller.restore_before_cleanup(pid,{r[0] for r in own_rows()},{A,B},prefix)
+ except Exception as error:
+  errors.append('Focus restoration: '+repr(error));success=False
+  event('focus-restoration-error',error=repr(error))
  if pid is not None and birth is not None:
   try:
    if ghost_birth(pid)==birth and pid not in protected:
@@ -191,29 +214,33 @@ finally:
     for c in reversed(list(created.values())):
      peers=N.managers()
      if len(peers)!=1 or peers[0].identity!=manager.identity:raise RuntimeError('No cleanup mutation with uncertain manager ownership')
+     record_cleanup_focus('before-close-'+c['tab'])
      event('cleanup',result=N.run([HERE/'script-driver',pid,'close',c['tab'],c['terminal']],timeout=12))
+     record_cleanup_focus('after-close-'+c['tab'])
     remaining=json.loads(N.run([HERE/'script-driver',pid,'status'],timeout=10))
     if remaining['groups']:raise RuntimeError('Unowned remaining tabs; leaving process alone')
     if ghost_birth(pid)!=birth:raise RuntimeError('Process changed before termination')
+    record_cleanup_focus('before-terminate')
     event('cleanup-terminate',result=N.run([HERE/'launch-ghostty','terminate',pid],timeout=5))
     end=time.monotonic()+5
     while time.monotonic()<end:
      if N.processes._info(pid) is None:break
      time.sleep(.1)
     check(N.processes._info(pid) is None,'only disposable Ghostty process exited')
+    record_cleanup_focus('after-terminate')
   except BaseException as e:errors.append('Cleanup: '+repr(e));success=False
  try:
   preserved();check(not own_rows(),'no disposable managed windows remain')
   check(personal_identity(driver('status',personal=protected[0]))==personal_before,'existing Ghostty native identities preserved after cleanup')
   check(not diff(rows()),'every original window workspace and fullscreen state preserved')
-  current=cli('list-workspaces','--focused')
-  if current in (A,B):
-   cli('workspace',session['workspace'])
-   if session['focusedWindow'] in baseline:cli('focus','--window-id',session['focusedWindow'])
+  check(focus_controller.verify_after_cleanup(),'original workspace, model window and native foreground focus stably restored')
   preserved()
  except BaseException as e:errors.append('Final verification: '+repr(e));success=False
  stop.set()
  for t in threads:t.join(timeout=6)
- save('results.json',dict(success=success and not errors,errors=errors,checks=checks,manager=manager.record(),manager_samples=len(samples),peak_managers=max((len(s['managers']) for s in samples),default=0),window_samples=len(wsamples),final_windows=rows()))
+ focus_result=focus_controller.report()
+ focus_ax.close()
+ success=success and focus_result['verified']
+ save('results.json',dict(success=success and not errors,errors=errors,checks=checks,manager=manager.record(),manager_samples=len(samples),peak_managers=max((len(s['managers']) for s in samples),default=0),window_samples=len(wsamples),final_windows=rows(),focus_restoration=focus_result))
  print('RESULT: '+json.dumps(dict(success=success and not errors,assertions=len(checks),manager_samples=len(samples),window_samples=len(wsamples),errors=errors,output=str(OUT))),flush=True)
- if errors:sys.exit(2)
+ if errors or not success:sys.exit(2)
