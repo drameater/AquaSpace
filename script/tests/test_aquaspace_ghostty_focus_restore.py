@@ -433,6 +433,35 @@ with offline():
 
 
 class NativeFocusAdapterTests(unittest.TestCase):
+    def frontmost_backend(self, values):
+        b = native_menu.NativeAX.__new__(native_menu.NativeAX)
+        readings = iter(values)
+        b.frontmost_pid = lambda: next(readings)
+        b.application = lambda pid: ('retained-app', pid)
+        b.pid = lambda app: app[1]
+        return b
+
+    def test_appkit_frontmost_pid_binds_and_rechecks_retained_ax_application(self):
+        with offline():
+            b = self.frontmost_backend([52214, 52214])
+            self.assertEqual(b.focused_application(), ('retained-app', 52214))
+
+    def test_appkit_foreground_churn_or_invalid_pid_cannot_fall_back_to_model(self):
+        for values in ([52214, 60264], [0], [-1], [True], ['52214']):
+            with self.subTest(values=values), offline():
+                with self.assertRaises(native_menu.MenuError):
+                    self.frontmost_backend(values).focused_application()
+
+    def test_appkit_read_failure_and_ax_pid_mismatch_remain_errors(self):
+        with offline():
+            b = self.frontmost_backend([52214, 52214])
+            b.pid = lambda app: 60264
+            with self.assertRaises(native_menu.MenuError): b.focused_application()
+            b = self.frontmost_backend([])
+            b.frontmost_pid = lambda: (_ for _ in ()).throw(RuntimeError('AppKit unavailable'))
+            with self.assertRaisesRegex(RuntimeError, 'AppKit unavailable'):
+                b.focused_application()
+
     def test_systemwide_focus_read_retains_the_actual_application_element(self):
         with offline():
             b = native_menu.NativeAX.__new__(native_menu.NativeAX)

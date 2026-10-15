@@ -132,5 +132,15 @@ The harness now captures coherent native/model focus before launch, restores it
 while the disposable app still owns the foreground, performs background cleanup,
 and requires stable native/model agreement afterward. It preserves detected new
 user focus and reports failure rather than taking focus back. The added 30
-regressions pass; the revised lifecycle has not been run live. See the [focus
+regressions passed; at that checkpoint the revised lifecycle had not been run live. See the [focus
 repair diagnosis](aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
+
+The separately authorized 2026-10-15 run after `721214c1` passed **32 live
+assertions**, including stable original native/model focus before and after
+background cleanup. A failing system-wide AX foreground query required a
+diagnostic-only AppKit reader repair and three additional offline tests; all
+113 AquaSpace Python tests passed. All 11 original windows were preserved;
+Ghostty window 21423 remained floating on workspace 2 with unchanged native
+identities. The same sole AquaSpace appeared in 875 inventories. See the
+[focus-restoration live record](aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
+for the preflight failure, reader repair, subsequent read-only checks and evidence.

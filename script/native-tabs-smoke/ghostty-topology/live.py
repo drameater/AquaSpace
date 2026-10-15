@@ -154,7 +154,7 @@ personal=driver('status',personal=protected[0]);personal_before=personal_identit
 for window,workspace in expectations:
  check(baseline.get(window,[None,None])[1]==workspace,'expected existing window is on its original workspace',window=window,workspace=workspace)
 check(not cli('list-windows','--all','--format','%{workspace}').splitlines().count(A) and not cli('list-windows','--all','--format','%{workspace}').splitlines().count(B),'dedicated test workspaces are empty')
-focus_ax=NativeAX()
+focus_ax=NativeAX(frontmost_pid=lambda:int(N.run([HERE/'launch-ghostty','frontmost-pid'],timeout=5)))
 focus_controller=focus_restore.FocusRestoration(
  ax=focus_ax,read_model=lambda:focus_restore.read_model(cli),cli=cli,guard=preserved,
  log=lambda phase,data:event('desktop-focus',**data))

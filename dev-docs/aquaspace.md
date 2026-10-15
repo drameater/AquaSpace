@@ -426,3 +426,65 @@ The revised focus lifecycle is **not yet live-validated**; the earlier 31-assert
 run must not be presented as a run of this new lifecycle. The repair, offline
 regression tests, and diagnosis are included in a local checkpoint after
 `6e4ab9b2`.
+
+## Ghostty desktop-focus live validation after 721214c1 — 2026-10-15
+
+The user authorized the fixed harness on the dedicated test workspaces, with
+original Ghostty window **21423 on workspace 2** protected and only one manager.
+The first attempt (`run-20261015-011011`) stopped during initial focus capture,
+before launching any disposable app or changing focus. The system-wide AX
+`AXFocusedApplication` attribute returned `-25204`. Three read-only Python
+queries reproduced it with Accessibility trust true. A separate native AppKit/C
+probe reproduced the same system-wide failure while `NSWorkspace` identified
+foreground PID 52214 and direct application AX reads successfully returned its
+`ChatGPT` window. This was a native-reader limitation, not a restoration failure
+or lack of permission. The underlying macOS failure was not otherwise attributed.
+
+The harness now supplies a read-only AppKit `frontmost-pid` query from its existing
+diagnostic helper, following the route used by AquaSpace's production native
+focus reader. `NativeAX` validates the positive integer PID, binds and retains the
+application AX element, verifies its PID, and independently rereads AppKit's
+foreground PID before returning it. Errors and foreground churn stop capture;
+there is no fallback to manager focus. Focused native window reads, retained
+window comparisons, initial ambiguity checks, foreground ownership checks and
+stable pre/post-cleanup verification are unchanged. Only the diagnostic helper
+was rebuilt. Three new offline adapter tests passed, bringing the AquaSpace
+Python suite to **113 passing tests** before the second live attempt.
+
+The second attempt (`run-20261015-011154`) completed with **32 passing live
+assertions**, no errors, and `focus_restoration.verified: true`. All six native
+menu operations ran in disposable Ghostty PID **17112**: three merges and three
+detachments, with tab selections, independent moves and repeated remerges on
+`native-tab-test-ghostty-topology-a` and `native-tab-test-ghostty-topology-b`.
+Original Ghostty PID **60264**, tab IDs and terminal identities were unchanged.
+Window **21423 remained floating on workspace 2**. Every original window's
+workspace and fullscreen flags survived **564 background window snapshots**;
+all 11 original rows, including layout fields, matched at completion.
+
+Initial focus was **workspace 2, window 11584, native PID 52214 (`ChatGPT`)**.
+The runner issued exactly one restoration request, focusing window 11584 while
+the owned test window was still foreground. Native and manager focus matched
+the retained initial references for three stable samples before cleanup, around
+every tab close and isolated-process termination, and for three stable samples
+after cleanup. No cleanup-triggered focus handoff or corrective retry occurred.
+All disposable windows were removed and only the isolated Ghostty process exited.
+
+All **875 process inventories** observed the same sole AquaSpace PID **68598**,
+birth `[1792033211, 996731]`, with no monitor errors. The manager was reused
+without launch, pause, termination, rebuild or installation. Nothing was pushed.
+
+A later read-only verification initially saw an additional transient Zen window
+24999 after the suite had completed; an exact-window-set assertion stopped that
+extra check. No action was taken on the window or desktop focus. Subsequent
+read-only checks found only the original windows and the original model/native
+focus, unchanged Ghostty identities, and the same sole manager. The transient
+window's cause was not established and is not counted as a harness test window.
+
+Evidence is local under
+`.debug/aquaspace/ghostty-topology/run-20261015-011154/`: `baseline.json`,
+`results.json`, `events.jsonl`, process/window samples and
+`final-verification.json` (including source/helper/installed hashes). The failed
+preflight has `focus-capture-failure.json` in `run-20261015-011011/`. The live
+reader repair, its regressions and these notes are included in a local checkpoint
+after `721214c1`; the run must not be described as an unchanged run of that earlier
+checkpoint. No additional live tests were performed when creating this checkpoint.

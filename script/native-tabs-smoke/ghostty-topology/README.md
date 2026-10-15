@@ -162,6 +162,20 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s script/tests -p 'test_aquaspace_ghostty_focus_restore.py'
 ```
 
-These focus changes have offline validation only; their native focus capture and
-restoration order need a separately authorized live run. See the [diagnosis and
-validation record](../../../dev-docs/aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
+The separately authorized live run on **2026-10-15** passed **32 assertions**,
+including stable native/model focus restoration before and after cleanup. The
+first attempt stopped before launching a disposable process because macOS's
+system-wide `AXFocusedApplication` query returned `-25204`, despite Accessibility
+trust and successful direct application reads. The runner now supplies the
+diagnostic helper's read-only AppKit `frontmost-pid` command to `NativeAX`.
+It binds that actual foreground PID to a retained AX application and rechecks
+the foreground PID during capture. Native focused-window/reference validation
+and all ownership/ambiguity checks remain in force; manager focus is never a
+substitute for native foreground identity.
+
+Rebuild `launch-ghostty` with the command above before using this reader.
+Three additional offline adapter tests cover binding, foreground churn, invalid
+PIDs, read failures and mismatched AX ownership. All **113** AquaSpace Python
+offline tests pass. The live run preserved all 11 original windows and observed
+the same sole manager in 875 inventories. See the [live validation record](../../../dev-docs/aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
+and [earlier diagnosis](../../../dev-docs/aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).

@@ -115,7 +115,8 @@ class NativeAX:
     UTF8 = 0x08000100
     ABSENT = (-25205, -25212)  # unsupported attribute / no value
 
-    def __init__(self):
+    def __init__(self, *, frontmost_pid=None):
+        self.frontmost_pid = frontmost_pid
         self.ax = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
         self.cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
         self.refs = []
@@ -188,6 +189,17 @@ class NativeAX:
         return app
 
     def focused_application(self):
+        # AppKit's actual foreground process is independent of the manager model.
+        # Some macOS versions fail the system-wide AX attribute even though
+        # direct application AX reads work. Do not infer focus from model state.
+        if getattr(self, 'frontmost_pid', None) is not None:
+            pid = self.frontmost_pid()
+            if type(pid) is not int or pid <= 0:
+                raise MenuError('AppKit returned an invalid foreground PID')
+            app = self.application(pid)
+            if self.pid(app) != pid or self.frontmost_pid() != pid:
+                raise MenuError('Native foreground application changed during capture')
+            return app
         system = self._own(self.ax.AXUIElementCreateSystemWide())
         self._check(self.ax.AXUIElementSetMessagingTimeout(system, 2.0))
         return self.element(system, 'AXFocusedApplication')

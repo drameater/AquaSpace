@@ -1,7 +1,11 @@
 import AppKit
 import Foundation
 let args = Array(CommandLine.arguments.dropFirst())
-if args.first == "list" {
+if args == ["frontmost-pid"] {
+ guard let app = NSWorkspace.shared.frontmostApplication,
+       app.processIdentifier > 0, app.isActive else { exit(2) }
+ print(app.processIdentifier)
+} else if args.first == "list" {
  let rows = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.mitchellh.ghostty" }.map { ["pid": String($0.processIdentifier), "path": $0.executableURL?.path ?? ""] }
  let data = try JSONSerialization.data(withJSONObject: rows)
  print(String(decoding: data, as: UTF8.self))
