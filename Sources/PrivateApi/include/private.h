@@ -2,6 +2,9 @@
 #define private_header_h
 
 #import <ApplicationServices/ApplicationServices.h>
+// Public process APIs used for controller exclusion.
+#include <libproc.h>
+#include <sys/proc_info.h>
 
 // Potential alternative 1?
 // func allWindowsOnCurrentMacOsSpace() {

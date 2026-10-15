@@ -18,6 +18,24 @@ The revised source uses separate IPC endpoints, an atomic write gate, and a drai
 
 The distinct application identity can require a separate ordinary Accessibility / Device Control and Data Access grant. No root, SIP change, injection, or screen-recording permission is added.
 
+## Offline ownership hardening after checkpoint 140122de
+
+The working source now uses one persistent per-user controller lock for every writable AquaSpace build, including debug and unbundled builds. Debug startup refuses active peers instead of disabling and later re-enabling another manager. Only release startup can perform the existing ordered stock-release takeover, and it verifies kernel process birth identities after saving the session. Every build rechecks peers immediately before enabling window writes and freezes on peer arrival or an uncertain inventory.
+
+Runtime detection now uses the same public libproc identity approach as the installer. It recognizes release/debug AquaSpace and AeroSpace bundle identities and known unbundled manager executable names, independent of location or startup arguments. Embedded CLIs are excluded. Launch notifications freeze known bundled peers immediately; polling also covers unbundled processes. Explicit switching still freezes and drains writes before launching stock AeroSpace. An independently launched, unmodified stock process cannot participate in AquaSpace's lock; the documented notification/polling interval still applies to that external launch.
+
+The historical `handoff-qa.py` and `ghostty-live.py` lifecycle runners are retired and return an error without process actions. The former paused a manager and resumed it from watchdog/cleanup paths; the latter depended on debug disable/re-enable. The scope preparer's old `--handoff-qa` option now fails before file creation or compilation, so it cannot produce a candidate that bypasses admission. Fixture and Ghostty driver sources remain for future live tests with explicit ownership transitions.
+
+Offline checks (no application launch or live process inspection):
+
+```sh
+python3 script/test-ownership-offline.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s script/tests -p 'test_aquaspace*.py'
+```
+
+The isolated Swift package compiles the production admission and process-reader sources without the app entrypoint or SwiftUI. Native process functions are replaced with aborting stubs; behavioral tests inject inventories and use temporary lock files. They cover both build configurations, late peers, unreadable inventories, debug/unbundled classification, CLI exclusion, irreversible yielding, lock contention, and symlink refusal. Python regressions verify that retired runners cannot start processes, signal managers, or write files, and that runtime paths have no debug escape hatch. Validation passed 10 Swift ownership regressions, all 50 Python offline tests, and compilation of the AppBundle library target. Neither application was launched or stopped. These source changes have not been installed or live-tested.
+
 ## Build locally
 
 ```sh

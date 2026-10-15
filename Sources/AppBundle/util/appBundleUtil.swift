@@ -39,16 +39,6 @@ private struct AppServerTerminationHandler: TerminationHandler {
             )
             window.macApp.setAxFrameForTermination(window.windowId, point, windowSize)
         }
-        if isDebug {
-            let semaphore = DispatchSemaphore(value: 0)
-            // Use Task.detached to avoid inheriting @MainActor.
-            // If @MainActor was inherited, it would cause a deadlock
-            Task.detached {
-                await toggleReleaseServerIfDebug(.on)
-                semaphore.signal()
-            }
-            semaphore.wait()
-        }
     }
 }
 

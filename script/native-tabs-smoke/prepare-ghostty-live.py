@@ -30,10 +30,12 @@ def main():
     parser.add_argument("--scratch-path", type=Path, default=root / ".debug/ghostty-live-build")
     parser.add_argument("--output", type=Path, default=root / ".debug/native-tabs/ghostty-isolated")
     parser.add_argument("--source-path", type=Path, help="Reuse an isolated source copy for incremental QA builds")
-    parser.add_argument("--handoff-qa", action="store_true", help="Build a release candidate isolated to background fixtures and a simulated peer")
+    parser.add_argument("--handoff-qa", action="store_true", help="Retired; this option fails before building or modifying files")
     parser.add_argument("--peer-socket", type=Path)
     parser.add_argument("--jobs", type=int, default=2)
     args = parser.parse_args()
+    if args.handoff_qa:
+        parser.error("The pause/resume handoff harness is retired; ownership checks cannot be bypassed.")
     source = args.source_path or Path(tempfile.mkdtemp(prefix="aerospace-ghostty-source-", dir="/private/tmp"))
     source.mkdir(parents=True, exist_ok=True)
     for name in ("Package.swift", "Package.resolved"):
@@ -70,43 +72,14 @@ func nativeTabLiveTestAllows(_ id: UInt32, _ window: AXUIElement) -> Bool {
 ''')
     replace_once(bundle / "initAppBundle.swift", "        initServerArgs()",
                  "        initServerArgs()\n        _ = nativeTabLiveTestPrefix\n        _ = nativeTabLiveTestExcludedWindowIds")
-    if args.handoff_qa:
-        if args.peer_socket is None or not str(args.peer_socket).startswith("/private/tmp/aquaspace-qa-"):
-            raise RuntimeError("QA peer socket must be uniquely named under /private/tmp/aquaspace-qa-")
-        metadata = source / "Sources/Common/appMetadata.swift"
-        metadata.write_text(metadata.read_text().replace("public let commandSocketAppId: String = aeroSpaceAppId", 'public let commandSocketAppId: String = "local.aquaspace.qa"'))
-        handoff = bundle / "WindowManagerHandoff.swift"
-        body = handoff.read_text()
-        start = body.index("    static func prepareForStartup() async {")
-        end = body.index("    static func finishStartup() async {", start)
-        # The external harness freezes the real manager before launch. This copy
-        # cannot stop, start, or adopt the real user's manager during the test.
-        body = body[:start] + "    static func prepareForStartup() async {}\n\n" + body[end:]
-        handoff.write_text(body)
-        replace_once(handoff, 'private static let originalSocketPath = "/tmp/\\(originalAeroSpaceAppId)-\\(unixUserName).sock"',
-                     "private static let originalSocketPath = " + json.dumps(str(args.peer_socket)))
-        replace_once(handoff, '''            if launch {
-                guard NSWorkspace.shared.open(URL(filePath: "/Applications/AeroSpace.app")) else {
-                    throw HandoffError.message("Could not open /Applications/AeroSpace.app")
-                }
-            }''', '''            if launch { _ = try await remoteCommand(["qa-target-start"]) }''')
-        text = app.read_text()
-        start = text.index("    @MainActor func nativeFocus(_ windowId: UInt32) {")
-        end = text.index("    @MainActor func setAxFrame(", start)
-        app.write_text(text[:start] + "    @MainActor func nativeFocus(_ windowId: UInt32) {}\n\n" + text[end:])
-        replace_once(app, '''            try disableAnimations(app: axApp.threadGuarded, job) {
-                try setFrame(window, topLeft, size, job)''', '''            try disableAnimations(app: axApp.threadGuarded, job) {
-                try setFrame(window, topLeft.map { CGPoint(x: $0.x + 20000, y: $0.y) }, size, job)''')
     flags = ["--package-path", str(source), "--scratch-path", str(args.scratch_path), "--jobs", str(args.jobs), "--disable-sandbox", "--skip-update"]
-    if args.handoff_qa:
-        flags += ["-c", "release"]
     if args.sdk:
         flags += ["--sdk", str(args.sdk)]
     args.scratch_path.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.setdefault("CLANG_MODULE_CACHE_PATH", str(args.scratch_path / "clang-cache"))
     env.setdefault("SWIFTPM_MODULECACHE_OVERRIDE", str(args.scratch_path / "swift-cache"))
-    subprocess.run(["swift", "build", *flags, *([] if args.handoff_qa else ["--product", "AeroSpaceApp"])], check=True, env=env)
+    subprocess.run(["swift", "build", *flags, "--product", "AeroSpaceApp"], check=True, env=env)
     binary_dir = Path(subprocess.check_output(["swift", "build", *flags, "--show-bin-path"], text=True, env=env).strip())
     target = args.output / "AeroSpace Native Tabs.app"
     executable = target / "Contents/MacOS/AeroSpaceApp"
@@ -114,11 +87,9 @@ func nativeTabLiveTestAllows(_ id: UInt32, _ window: AXUIElement) -> Bool {
     resources = target / "Contents/Resources"
     resources.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary_dir / "AeroSpaceApp", executable)
-    if args.handoff_qa:
-        shutil.copy2(binary_dir / "aquaspace", target / "Contents/MacOS/aquaspace-cli")
     shutil.copy2(root / "docs/config-examples/default-config.toml", resources / "default-config.toml")
     with (target / "Contents/Info.plist").open("wb") as file:
-        plistlib.dump({"CFBundleIdentifier": "local.aquaspace" if args.handoff_qa else "local.aquaspace.debug", "CFBundleExecutable": "AeroSpaceApp",
+        plistlib.dump({"CFBundleIdentifier": "local.aquaspace.debug", "CFBundleExecutable": "AeroSpaceApp",
                       "CFBundleName": "AeroSpace Native Tabs", "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
                       "LSUIElement": True, "LSMinimumSystemVersion": "13.0", "NSHighResolutionCapable": True}, file)
     subprocess.run(["codesign", "--force", "--sign", "-", str(target)], check=True)

@@ -10,13 +10,14 @@ enum GlobalObserver {
         }
         let notifName = notification.name.rawValue
         let appId = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-        let originalWasOpened = appId == originalAeroSpaceAppId &&
+        let peerWasOpened = (appId.map(WindowManagerProcess.bundleIds.contains) == true) &&
+            (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier != myPid &&
             (notification.name == NSWorkspace.willLaunchApplicationNotification ||
              notification.name == NSWorkspace.didLaunchApplicationNotification || notification.name == NSWorkspace.didActivateApplicationNotification)
-        if originalWasOpened && !isDebug { WindowManagerHandoff.freezeAXWrites() }
+        if peerWasOpened { WindowManagerHandoff.freezeAXWrites() }
         Task.startUnstructured { @MainActor in
-            if originalWasOpened {
-                await WindowManagerHandoff.switchToOriginal(launch: false)
+            if peerWasOpened {
+                await WindowManagerHandoff.observedPeerLaunch()
                 return
             }
             if !TrayMenuModel.shared.isEnabled { return }

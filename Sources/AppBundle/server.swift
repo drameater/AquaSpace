@@ -21,23 +21,6 @@ import Network
     socketListener = listener
 }
 
-func toggleReleaseServerIfDebug(_ state: EnableCmdArgs.State) async {
-    if serverArgs.isReadOnly { return }
-    if !isDebug { return }
-    let targetId = NSRunningApplication.runningApplications(withBundleIdentifier: stableAeroSpaceAppId).isEmpty
-        ? originalAeroSpaceAppId : stableAeroSpaceAppId
-    let socketFile = "/tmp/\(targetId)-\(unixUserName).sock"
-    let connection = NWConnection(to: NWEndpoint.unix(path: socketFile), using: .tcp)
-    defer { connection.cancel() }
-    if await connection.initConnection().error != nil { // Can't connect, AeroSpace.app is not running
-        return
-    }
-
-    let req = ClientRequest(args: ["enable", state.rawValue], stdin: "", windowId: nil, workspace: nil)
-    _ = await connection.writeAtomic(req)
-    _ = await connection.readNonAtomic()
-}
-
 private let serverVersionAndHash = "\(aeroSpaceAppVersion) \(gitHash)"
 
 private func newConnection(_ connection: NWConnection) async { // todo add exit codes

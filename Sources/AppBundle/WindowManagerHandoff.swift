@@ -2,18 +2,7 @@ import AppKit
 import Common
 import Network
 import os
-
-enum WindowManagerOwnership: String, Sendable {
-    case preparing, controlling, yielding
-
-    mutating func claim(originalIsRunning: Bool) -> Bool {
-        guard self == .preparing, !originalIsRunning else { return false }
-        self = .controlling
-        return true
-    }
-
-    mutating func yield() { self = .yielding }
-}
+import Darwin
 
 /// Only session metadata crosses between managers; terminal/window contents are never read.
 struct WindowManagerSession: Codable, Equatable, Sendable {
@@ -45,82 +34,111 @@ struct WindowManagerSession: Codable, Equatable, Sendable {
 
 @MainActor
 enum WindowManagerHandoff {
-    private static var ownership = WindowManagerOwnership.preparing
+    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers)
     private static var startupSession: WindowManagerSession?
     private static var applicationWatch: Task<(), Never>?
     nonisolated private static let writePermission = OSAllocatedUnfairLock(initialState: false)
     nonisolated static var permitsAXWrites: Bool { writePermission.withLock { $0 } }
     nonisolated static func freezeAXWrites() { writePermission.withLock { $0 = false } }
-    static var isYielding: Bool { ownership == .yielding }
+    static var isYielding: Bool { admission.ownership == .yielding }
     static var canControlWindows: Bool {
         !serverArgs.isReadOnly && (isUnitTest || permitsAXWrites)
     }
-    static var canHandoff: Bool { !isDebug && !serverArgs.isReadOnly && !isYielding }
+    static var canHandoff: Bool { !serverArgs.isReadOnly && !isYielding }
     static var status: String {
-        let peers = NSRunningApplication.runningApplications(withBundleIdentifier: originalAeroSpaceAppId).map(\.processIdentifier)
-        let data = try? JSONSerialization.data(withJSONObject: ["pid": myPid, "phase": ownership.rawValue,
-            "controlsWindows": canControlWindows, "readOnly": serverArgs.isReadOnly, "originalPids": peers])
+        let inventory = try? WindowManagerProcesses.peers()
+        let peers = inventory?.map(\.pid) ?? []
+        let data = try? JSONSerialization.data(withJSONObject: ["pid": myPid, "phase": admission.ownership.rawValue,
+            "controlsWindows": canControlWindows && inventory != nil, "readOnly": serverArgs.isReadOnly, "originalPids": peers,
+            "inventoryVerified": inventory != nil])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
     private static let originalSocketPath = "/tmp/\(originalAeroSpaceAppId)-\(unixUserName).sock"
 
     static func watchForOriginal() {
-        guard !isDebug, !serverArgs.isReadOnly, applicationWatch == nil else { return }
-        // Menu-bar-only agents do not consistently produce an activation/launch
-        // notification. Check public process metadata as well as those events.
+        guard !serverArgs.isReadOnly, applicationWatch == nil else { return }
         applicationWatch = Task.startUnstructured { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
-                if !NSRunningApplication.runningApplications(withBundleIdentifier: originalAeroSpaceAppId).isEmpty {
-                    await switchToOriginal(launch: false)
-                    return // One-way handoff; never retry/re-enable a competing manager.
+                do {
+                    let peers = try admission.observedPeers(freeze: freezeAXWrites)
+                    if !peers.isEmpty {
+                        await yieldToPeers(peers)
+                        return
+                    }
+                } catch {
+                    await stopForUncertainOwnership(error)
+                    return
                 }
             }
         }
     }
 
+    /// Notifications freeze synchronously; polling also catches unbundled peers.
+    static func observedPeerLaunch() async {
+        do { await yieldToPeers(try admission.observedPeers(freeze: freezeAXWrites)) }
+        catch { await stopForUncertainOwnership(error) }
+    }
+
+    private static func yieldToPeers(_ peers: [WindowManagerProcess]) async {
+        if peers.count == 1 && peers[0].isStockRelease {
+            await switchToOriginal(launch: false)
+        } else {
+            await stopForUncertainOwnership(WindowManagerAdmissionError.competingManager)
+        }
+    }
+
+    private static func stopForUncertainOwnership(_ error: any Error) async {
+        guard !serverArgs.isReadOnly else { return }
+        admission.yield()
+        freezeAXWrites()
+        pauseWindowManagementForHandoff()
+        await activateMode_nonCancellable(nil)
+        for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
+        showFailure(error)
+        exit(EXIT_FAILURE)
+    }
+
     static func prepareForStartup() async {
-        guard !isDebug, !serverArgs.isReadOnly else { return }
-        let duplicates = NSRunningApplication.runningApplications(withBundleIdentifier: stableAeroSpaceAppId).filter { $0.processIdentifier != myPid }
-        guard duplicates.isEmpty else {
-            showFailure(HandoffError.message("AquaSpace is already running. Refusing to start another controller."))
-            exit(EXIT_FAILURE)
-        }
-        let originals = NSRunningApplication.runningApplications(withBundleIdentifier: originalAeroSpaceAppId)
-        if originals.isEmpty {
-            if let path = serverArgs.restoreSessionPath {
-                do { startupSession = try JSONDecoder().decode(WindowManagerSession.self, from: Data(contentsOf: URL(filePath: path))) }
-                catch { showFailure(error); exit(EXIT_FAILURE) }
-            }
-            return
-        }
+        guard !serverArgs.isReadOnly else { return }
         do {
+            let originals = try admission.prepare(build: isDebug ? .debug : .release, readOnly: false)
+            if originals.isEmpty {
+                if let path = serverArgs.restoreSessionPath {
+                    startupSession = try JSONDecoder().decode(WindowManagerSession.self, from: Data(contentsOf: URL(filePath: path)))
+                }
+                return
+            }
             startupSession = try await capture(remoteCommand)
-            // Stock `enable off` unhides windows. Stop it without its quit-time
-            // geometry restoration, while our frame/focus gate is still closed.
-            for app in originals { app.forceTerminate() }
+            // Revalidate kernel birth identity after the asynchronous session capture.
+            guard Set(try WindowManagerProcesses.peers()) == Set(originals) else {
+                throw WindowManagerAdmissionError.uncertainInventory
+            }
+            for original in originals {
+                guard kill(original.pid, SIGKILL) == 0 || errno == ESRCH else {
+                    throw WindowManagerAdmissionError.uncertainInventory
+                }
+            }
             for _ in 0 ..< 40 {
-                if originals.allSatisfy(\.isTerminated) { return }
+                if try WindowManagerProcesses.peers().isEmpty { return }
                 try await Task.sleep(for: .milliseconds(50))
             }
             throw HandoffError.message("AeroSpace did not stop. AquaSpace will not start a second window manager.")
         } catch {
             showFailure(error)
-            // Do not unlink the original manager's socket or start observers on failure.
             exit(EXIT_FAILURE)
         }
     }
 
     static func finishStartup() async {
         guard !serverArgs.isReadOnly else { return }
-        if isDebug { writePermission.withLock { $0 = true }; return }
-        let originalIsRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: originalAeroSpaceAppId).isEmpty
-        guard ownership.claim(originalIsRunning: originalIsRunning) else {
-            await switchToOriginal(launch: false)
-            return
+        do {
+            try admission.claim()
+            writePermission.withLock { $0 = true }
+            watchForOriginal()
+        } catch {
+            await stopForUncertainOwnership(error)
         }
-        writePermission.withLock { $0 = true }
-        watchForOriginal()
     }
 
     static func restoreStartupSession() async {
@@ -133,8 +151,8 @@ enum WindowManagerHandoff {
     }
 
     static func switchToOriginal(launch: Bool) async {
-        guard !isDebug, !serverArgs.isReadOnly, !isYielding else { return }
-        ownership.yield()
+        guard !serverArgs.isReadOnly, !isYielding else { return }
+        admission.yield()
         freezeAXWrites()
         // Freeze synchronously, before any AX/network await. Disabled AeroSpace's
         // normal layout path unhides every window, which must not run in a handoff.

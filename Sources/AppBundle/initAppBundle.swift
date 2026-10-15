@@ -10,7 +10,6 @@ import Foundation
         await waitForAccessibilityPermission_nonCancellable()
         await WindowManagerHandoff.prepareForStartup()
         if isDebug {
-            await toggleReleaseServerIfDebug(.off)
             interceptTermination(SIGINT)
             interceptTermination(SIGKILL)
         }
