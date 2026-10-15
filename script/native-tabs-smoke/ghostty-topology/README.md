@@ -7,6 +7,10 @@ stayed on workspace 3, disposable tabs/processes were removed, and 1,720 manager
 inventories observed the same sole AquaSpace. See the
 [completed fresh-reader run](../../../dev-docs/aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).
 
+Current admission requires **`ghostty-topology-retained-source-v4`**. The saved
+live result used the preceding v3 build. The v4 admission repair is validated
+offline only; rebuild the diagnostic library before a future authorized live run.
+
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
 Run it only when foreground interaction on dedicated test workspaces is authorized.
@@ -278,7 +282,9 @@ Existing target tab/terminal, process birth, manager, prefix, ambiguity and
 original-window protections remain in force. Status and exact-ID cleanup use
 the same library without introducing foreground activation or recovery retries.
 
-The required library capability is **`ghostty-topology-retained-source-v3`**.
+At that checkpoint the library capability was **`ghostty-topology-retained-source-v3`**.
+The stale-library admission repair below now requires v4, including when an old
+v3 library happens to contain the fresh reader.
 Before a future authorized live run, build `script-driver.dylib` with the updated
 command above. Old executables or mismatched libraries are refused; no executable
 fallback exists. The library is loaded into the diagnostic runner, not either
@@ -353,3 +359,21 @@ run did not establish restoration success; see the
 [extended attempt](../../../dev-docs/aquaspace.md#extended-native-mergedetach-attempt-after-renewed-idle-confirmation).
 Switching back to this chat during the test also ends foreground authorization;
 leave the desktop untouched until completion is reported.
+
+## Offline stale-library admission repair after 734ebf62
+
+The fresh native reader initially retained the older library's v3 capability.
+That allowed an unrecompiled library containing the stale AppKit reader to pass
+admission. Both the native export and Python adapter now require
+**`ghostty-topology-retained-source-v4`**. A v3 library is refused during adapter
+initialization, before session capture, disposable launch or any driver operation.
+There is no compatibility fallback, retry or automatic rebuild.
+
+Two new offline regressions reject an injected old-v3 library without invoking
+its run/free functions and require the source's exported capability to match the
+adapter's v4 requirement. Existing pointer, exact-root, ownership and focus tests
+now use a v4 fake library. All **175 Python tests pass**. Native loading,
+subprocesses and signals are blocked in the adapter tests. No diagnostic library
+was rebuilt or loaded, no app/helper was launched, and no live test or installation
+was performed for this repair. The earlier 32-assertion result remains a record
+of its exact v3 binary; it is not a new v4 live-validation result.

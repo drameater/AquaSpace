@@ -195,3 +195,12 @@ were preserved in 895 samples, and 1,720 process inventories saw the same sole
 AquaSpace PID 42527. All disposable tabs/processes were removed. Earlier failed
 attempts remain failed; the separate hidden-Zen handoff limitation is unchanged.
 See the [completed fresh-reader validation](aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).
+
+The offline review of `734ebf62` found that an unrecompiled diagnostic library
+could still advertise the old v3 capability and bypass the fresh-reader repair.
+Native and Python admission now require v4; an explicit legacy-v3 rejection and
+producer/consumer agreement regression bring the Python suite to 175 passing
+tests. Ownership checks are unchanged. No diagnostic binary was rebuilt/loaded,
+app/helper launched, live test run, installation performed or changes pushed.
+The preceding 32-check live result remains historical evidence for its v3 build.
+See the [offline admission repair](aquaspace.md#offline-stale-library-admission-repair-after-734ebf62).

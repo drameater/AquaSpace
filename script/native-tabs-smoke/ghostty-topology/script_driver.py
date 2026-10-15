@@ -8,7 +8,8 @@ class DriverError(RuntimeError):
 
 
 class ScriptDriver:
-    CAPABILITY = b'ghostty-topology-retained-source-v3'
+    # Earlier v3 libraries can still contain the cached AppKit foreground reader.
+    CAPABILITY = b'ghostty-topology-retained-source-v4'
     MUTATIONS = frozenset(('create', 'add', 'select', 'activate'))
 
     def __init__(self, path, *, load_library=None):

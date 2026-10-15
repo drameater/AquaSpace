@@ -2,6 +2,7 @@
 import ctypes
 import importlib.util
 import json
+import re
 import sys
 from types import SimpleNamespace
 import unittest
@@ -16,7 +17,7 @@ with offline():
 
 
 class RetainedDriverTests(unittest.TestCase):
-    def fixture(self, *, capability=b'ghostty-topology-retained-source-v3', native_error=False):
+    def fixture(self, *, capability=b'ghostty-topology-retained-source-v4', native_error=False):
         calls, frees, buffers = [], [], []
         source = SimpleNamespace(app=0x100000001, window=0x200000002, pid=100, title='~')
         state = dict(foreground_window=source.window, mutated=False)
@@ -85,6 +86,33 @@ class RetainedDriverTests(unittest.TestCase):
                     self.fixture(capability=version)
             with self.assertRaises(driver.DriverError):
                 driver.ScriptDriver('/missing',load_library=lambda _:SimpleNamespace())
+
+    def test_legacy_v3_library_is_refused_before_any_native_operation(self):
+        with offline():
+            calls = []
+            def legacy_capability():
+                return b'ghostty-topology-retained-source-v3'
+            def native_operation(*args):
+                calls.append(args)
+                raise AssertionError('Legacy native operations must never run')
+            library = SimpleNamespace(AquaSpaceGhosttyDriverCapabilities=legacy_capability,
+                                      AquaSpaceGhosttyDriverRun=native_operation,
+                                      AquaSpaceGhosttyDriverFree=native_operation)
+            loads = []
+            def load(path):
+                loads.append(path)
+                return library
+            with self.assertRaisesRegex(driver.DriverError, 'Unsupported diagnostic library'):
+                driver.ScriptDriver('/fake/legacy-v3.dylib', load_library=load)
+            self.assertEqual(loads, ['/fake/legacy-v3.dylib'])
+            self.assertEqual(calls, [])
+
+    def test_native_export_and_adapter_require_the_fresh_reader_capability(self):
+        source = (SOURCE/'ScriptDriver.m').read_text()
+        exported = re.search(r'const char \*AquaSpaceGhosttyDriverCapabilities\(void\)\s*\{\s*(?://[^\n]*\n\s*)*return "([^"]+)";\s*\}', source)
+        self.assertIsNotNone(exported)
+        self.assertEqual(exported.group(1), 'ghostty-topology-retained-source-v4')
+        self.assertEqual(exported.group(1).encode('ascii'), driver.ScriptDriver.CAPABILITY)
 
     def test_native_source_is_retained_and_not_recaptured_from_current_focus(self):
         source = (SOURCE/'ScriptDriver.m').read_text()

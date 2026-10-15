@@ -1057,3 +1057,35 @@ no further manager/helper was launched, and nothing was pushed. The inventory an
 reader repairs, offline regressions and updated notes are included in a local
 checkpoint after `c2a304e1`. No additional tests, installations, or app/helper
 launches were performed when creating this checkpoint.
+
+## Offline stale-library admission repair after 734ebf62
+
+Review found that the repaired fresh foreground reader still exported the same
+`ghostty-topology-retained-source-v3` capability as the previous cached-reader
+library. The Python adapter accepted that token, so an unrecompiled diagnostic
+library could silently omit the native reader repair. The successful live run
+used the correct fresh-reader binary; its saved hashes/results remain unchanged.
+
+The native export and Python adapter now require
+`ghostty-topology-retained-source-v4`. Old v3 libraries fail admission before
+session capture, disposable launch or driver operations. No fallback, automatic
+rebuild or action retry was added. No manager, window/root identity, foreground,
+destination ownership, process-birth or ambiguity check changed.
+
+Two added offline regressions first failed against the checkpoint: the real
+adapter accepted an injected legacy-v3 library, and the native/consumer source
+capabilities still declared v3. They now pass. The rejection test records one
+fake load and zero run/free calls; native library loading, subprocesses and
+signals are forbidden. A source check also requires the native export and Python
+requirement to agree on v4. Existing retained-source tests use v4 fake libraries,
+preserving current-version admission and all original refusal cases.
+
+All **175 AquaSpace Python offline tests pass**. No compiler/native guard test,
+installed CLI, process inventory, app, diagnostic helper or real native library
+was run or loaded. No build, installation, live test or push occurred. The existing
+on-disk v3 diagnostic binary was deliberately left untouched and will now be
+rejected until separately authorized rebuilding. Earlier live evidence remains
+historical; v4 admission has only this offline validation. The admission fix,
+regressions and notes are included in a local checkpoint after `734ebf62`.
+No additional tests, builds, installations or app/helper launches were performed
+when creating this checkpoint, and nothing was pushed.

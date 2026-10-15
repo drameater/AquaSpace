@@ -189,7 +189,8 @@ static NSDictionary *performOperation(NSDictionary *request, AXUIElementRef sour
 
 // There is deliberately no executable entrypoint or metadata-only fallback.
 const char *AquaSpaceGhosttyDriverCapabilities(void) {
-    return "ghostty-topology-retained-source-v3";
+    // v4 requires retained roots plus fresh system/AX foreground observations.
+    return "ghostty-topology-retained-source-v4";
 }
 void AquaSpaceGhosttyDriverFree(void *result) { free(result); }
 char *AquaSpaceGhosttyDriverRun(const char *json, AXUIElementRef sourceApp, AXUIElementRef sourceWindow) {
