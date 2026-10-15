@@ -33,7 +33,7 @@ N=u.NativeSystem();CLI=Path('/Applications/AquaSpace.app/Contents/MacOS/aquaspac
 A='native-tab-test-ghostty-topology-a';B='native-tab-test-ghostty-topology-b'
 prefix='AeroSpace-NativeTabs-'+uuid.uuid4().hex[:12]+'-'
 stop=threading.Event();errors=[];checks=[];created={};pid=None;birth=None;manager=None;baseline={};samples=[];wsamples=[]
-focus_controller=None;focus_ax=None
+focus_controller=None;focus_ax=None;activity=None
 def save(name,v):u.atomic_json(OUT/name,v)
 def event(kind,**v):
  with (OUT/'events.jsonl').open('a') as f:f.write(json.dumps(dict(at=time.time_ns(),kind=kind,**v))+'\n')
@@ -78,10 +78,26 @@ def ghost_birth(target):
 def isolated():
  preserved()
  if pid in protected or ghost_birth(pid)!=birth:raise RuntimeError('Disposable process identity changed')
+def focus_guard(phase):
+ try:
+  isolated()
+  return activity.check(phase)
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 def driver(op,*args,personal=False):
  if not personal:isolated()
  target=personal if personal else pid
- v=json.loads(N.run([HERE/'script-driver',target,op,*args],timeout=14));event('script',pid=target,operation=op,result=v);return v
+ extra=[]
+ if op in ('create','add','select'):
+  if personal:raise RuntimeError('No personal-process mutations')
+  snapshot=focus_guard('before-script-'+op)
+  extra=['--foreground',json.dumps(dict(pid=snapshot.pid,title=snapshot.title,hasWindow=snapshot.window is not None))]
+ try:v=json.loads(N.run([HERE/'script-driver',target,op,*args,*extra],timeout=14))
+ except Exception as error:
+  if extra:focus_controller.revoke(error)
+  raise
+ event('script',pid=target,operation=op,result=v);return v
 
 def own_rows():
  text=cli('list-windows','--monitor','all','--app-bundle-id','com.mitchellh.ghostty','--format','%{window-id}\t%{workspace}\t%{app-pid}\t%{window-title}')
@@ -100,7 +116,7 @@ def settle(groups,note):
  # Expected partition maps label sets to workspace. Native group selection is read independently.
  end=time.monotonic()+8;stable=0
  while time.monotonic()<end:
-  preserved();v=native();actual={};partition={};reverse={c['tab']:label for label,c in created.items()}
+  preserved();v=native();focus_guard('topology-poll');actual={};partition={};reverse={c['tab']:label for label,c in created.items()}
   for g in v['groups']:
    labels=frozenset(reverse[m['tab']] for m in g['members']);partition[labels]=g
   rr=own_rows();actual={r[3][len(prefix):]:r[1] for r in rr}
@@ -115,9 +131,16 @@ def settle(groups,note):
 def focus_test_workspace(workspace):
  if workspace not in (A,B):raise RuntimeError('Creation requires a dedicated test workspace')
  isolated()
- cli('workspace',workspace)
- if cli('list-workspaces','--focused')!=workspace:raise RuntimeError('Test workspace did not become focused; refusing creation')
- preserved()
+ source=focus_guard('before-test-workspace')
+ try:
+  cli('workspace',workspace)
+  if cli('list-workspaces','--focused')!=workspace:raise RuntimeError('Test workspace did not become focused; refusing creation')
+  activity.workspace_selected(workspace,source)
+  preserved()
+  focus_guard('after-test-workspace')
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 def fresh(label,anchor=None,workspace=A):
  focus_test_workspace(workspace)
  if anchor:v=driver('add',prefix+label,created[anchor]['tab'],created[anchor]['terminal'])
@@ -128,15 +151,28 @@ def select(label):
  native();c=created[label];driver('select',c['tab'],c['terminal']);time.sleep(.2);preserved()
  rr=[r for r in own_rows() if r[3]==prefix+label]
  if len(rr)!=1:raise RuntimeError('Selected test window not uniquely identified')
- cli('focus','--window-id',rr[0][0]);preserved()
+ focus_guard('before-selected-window-focus')
+ try:cli('focus','--window-id',rr[0][0]);preserved()
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 def move(label,workspace):
  isolated();native();rr=own_rows();matches=[r for r in rr if r[3]==prefix+label]
  if len(matches)!=1:raise RuntimeError('No unique selected disposable window')
- cli('move-node-to-workspace','--window-id',matches[0][0],'--focus-follows-window',workspace);preserved()
+ if workspace not in (A,B):raise RuntimeError('Moves require a dedicated test workspace')
+ focus_guard('before-test-window-move')
+ try:cli('move-node-to-workspace','--window-id',matches[0][0],'--focus-follows-window',workspace);preserved()
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
 def menu(op,label):
  select(label);v=native();c=created[label]
  if not any(g['selected']==c['tab'] for g in v['groups']):raise RuntimeError('Requested menu selection not active')
- isolated();result=N.run([sys.executable,SOURCE/'native_menu.py',op,pid,protected[0],prefix,prefix+label],timeout=15)
+ isolated();focus_guard('before-native-menu')
+ try:result=N.run([sys.executable,SOURCE/'native_menu.py',op,pid,protected[0],prefix,prefix+label],timeout=15)
+ except Exception as error:
+  focus_controller.revoke(error)
+  raise
  event('native-menu',operation=op,label=label,result=result);preserved()
 def G(labels,ws):return (frozenset(labels),ws)
 def personal_identity(v):return sorted((g['selected'],tuple(sorted((m['tab'],m['terminal']) for m in g['members']))) for g in v['groups'])
@@ -145,6 +181,8 @@ def record_cleanup_focus(phase):
   try:focus_controller.observe(phase)
   except Exception as error:event('focus-observation-error',phase=phase,error=repr(error))
 
+if N.run([HERE/'script-driver','--capabilities'],timeout=5)!='ghostty-topology-foreground-v1':
+ raise RuntimeError('Rebuild the foreground-guarded diagnostic helper before running live')
 manager,status=ownership();session=N.capture_session(manager,CLI);baseline={r[0]:r for r in session['windows']}
 save('baseline-app-identities.json',cli('list-windows','--all','--format','%{window-id}\t%{workspace}\t%{app-name}\t%{app-pid}').splitlines())
 originals=json.loads(N.run([HERE/'launch-ghostty','list'],timeout=5));protected=[int(r['pid']) for r in originals]
@@ -163,13 +201,14 @@ except BaseException as error:
  try:save('focus-capture-failure.json',dict(error=repr(error),session=session,focus_restoration=focus_controller.report()))
  finally:focus_ax.close()
  raise
+activity=focus_restore.ExecutionFocus(focus_controller,test_pid=lambda:pid,owned_rows=own_rows,workspaces={A,B},prefix=prefix)
 save('baseline.json',dict(manager=manager.record(),status=status,session=session,personal=personal,ghostty_processes=originals,prefix=prefix,desktop_focus=focus_controller.report()))
 threads=[threading.Thread(target=monitor_process,daemon=True),threading.Thread(target=monitor_windows,daemon=True)]
 for t in threads:t.start()
 success=False
 try:
  config=OUT/'config';config.write_text('initial-window = false\nwindow-save-state = never\nquit-after-last-window-closed = false\ncommand = /bin/cat\nconfirm-close-surface = false\nmacos-applescript = true\ntitle = '+prefix+'initial\n')
- isolated_before=set(protected);preserved()
+ isolated_before=set(protected);preserved();activity.check('before-disposable-launch')
  pid=int(N.run([HERE/'launch-ghostty','launch',config],timeout=20));birth=ghost_birth(pid)
  save('isolated-process.json',dict(pid=pid,birth=birth,protected=protected))
  check(pid not in isolated_before,'separate disposable installed Ghostty instance launched')
@@ -177,7 +216,7 @@ try:
  fresh('a')
  end=time.monotonic()+6
  while not own_rows():
-  preserved()
+  preserved();focus_guard('initial-window-poll')
   if time.monotonic()>end:raise RuntimeError('New test window not observed')
   time.sleep(.1)
  move('a',A);settle(dict([G('a',A)]),'standalone anchored on test workspace A')

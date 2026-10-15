@@ -56,6 +56,7 @@ From the repository root (these commands do not build or install a manager):
 ```sh
 mkdir -p .debug/aquaspace/ghostty-topology
 clang -fobjc-arc -framework Foundation -framework AppKit -framework ScriptingBridge \
+  -framework ApplicationServices \
   script/native-tabs-smoke/ghostty-topology/ScriptDriver.m \
   -o .debug/aquaspace/ghostty-topology/script-driver
 swiftc -module-cache-path .debug/aquaspace/ghostty-topology/module-cache \
@@ -179,3 +180,37 @@ PIDs, read failures and mismatched AX ownership. All **113** AquaSpace Python
 offline tests pass. The live run preserved all 11 original windows and observed
 the same sole manager in 875 inventories. See the [live validation record](../../../dev-docs/aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
 and [earlier diagnosis](../../../dev-docs/aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
+
+## Offline focus-safety repair after 4492ad71
+
+The subsequent review reproduced two remaining focus-stealing gaps. Native focus
+snapshots are now revalidated after window/title reads and observation logging;
+restoration intent is logged before the final foreground check. The empty
+workspace path checks foreground again after its last application/workspace
+validation reads and before activation.
+
+An execution-wide, read-only foreground gate now guards creation, selection,
+workspace switching, focus-following moves and topology polling. It permits the
+captured baseline for the initial transition, then only owned test focus. A
+deliberate switch to an empty test workspace may carry the unchanged preceding
+native foreground source until the next owned window is available. This exception
+is tied to that requested workspace and cannot authorize a personal model window.
+Any detected departure or uncertain action reply permanently revokes foreground
+permission for the run, including cleanup restoration. Returning to a test window
+does not clear that failure. Exact-ID background cleanup remains available.
+
+The script driver now requires a native foreground grant for create/add/select,
+retains its source AX application/window across tab enumeration, and rechecks
+that source immediately before mutation. Redundant app/window activation was
+removed from selection. The native-menu driver also never activates an app:
+it requires the target to remain foreground immediately before each menu press.
+All existing process-birth, manager, original-window, native tab/terminal identity,
+prefix and ambiguity checks remain in place.
+
+**Rebuild `script-driver` before a future authorized live run.** The runner now
+requires its read-only `ghostty-topology-foreground-v1` capability response and
+refuses old helpers before capturing a session or launching disposable Ghostty.
+Neither helper nor either window manager was rebuilt or launched during this
+offline repair; the Objective-C helper received a syntax-only compiler check.
+These changes are not yet live-validated. The earlier 32-assertion run predates
+this repair. See the [offline repair record](../../../dev-docs/aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).

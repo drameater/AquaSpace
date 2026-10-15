@@ -242,6 +242,76 @@ class FocusEnvironment:
 
 
 class FocusPolicyTests(unittest.TestCase):
+    def test_focus_switch_during_window_or_title_read_never_authorizes_restore(self):
+        for boundary in ('window', 'title'):
+            with self.subTest(boundary=boundary), offline():
+                f = FocusEnvironment(); f.capture(); f.test_focus()
+                adapter = native_menu.NativeAX.__new__(native_menu.NativeAX)
+                adapter.frontmost_pid = lambda: f.front.pid
+                adapter.application = lambda pid: {100: f.original, 200: f.test, 300: f.external}[pid]
+                adapter.pid = f.pid
+                f.focused_application = adapter.focused_application
+                original = f.optional_element if boundary == 'window' else f.title
+                reads = []
+                def switch(ref, *args):
+                    result = original(ref, *args)
+                    if ref is (f.test if boundary == 'window' else f.test_window):
+                        reads.append(ref)
+                        if len(reads) == 2: f.external_focus()
+                    return result
+                if boundary == 'window': f.optional_element = switch
+                else: f.title = switch
+                with self.assertRaises(policy.FocusError): f.restore()
+                self.assertEqual(f.commands, [])
+                self.assertIs(f.front, f.external)
+
+    def test_empty_restore_checks_foreground_after_late_validation_reads(self):
+        for boundary in ('app-window', 'workspace-windows', 'request-log'):
+            with self.subTest(boundary=boundary), offline():
+                f = FocusEnvironment(empty=True); f.capture(); f.test_focus()
+                original_element, original_cli = f.optional_element, f.cli
+                def element(app, attribute):
+                    result = original_element(app, attribute)
+                    if boundary == 'app-window' and app is f.original and f.commands:
+                        f.external_focus()
+                    return result
+                def cli(*args):
+                    result = original_cli(*args)
+                    if boundary == 'workspace-windows' and args[0] == 'list-windows' and f.commands:
+                        f.external_focus()
+                    return result
+                def log(phase, data):
+                    if boundary == 'request-log' and data.get('request', {}).get('kind') == 'activate-empty-application':
+                        f.external_focus()
+                f.optional_element, f.controller.cli, f.controller.log = element, cli, log
+                with self.assertRaises(policy.FocusError): f.restore()
+                self.assertEqual(f.activations, [])
+                self.assertIs(f.front, f.external)
+
+    def test_focus_request_logging_cannot_hide_a_new_user_focus_change(self):
+        with offline():
+            f = FocusEnvironment(); f.capture(); f.test_focus()
+            f.controller.log = lambda phase, data: f.external_focus() if phase == 'restore-request' else None
+            with self.assertRaises(policy.FocusError): f.restore()
+            self.assertEqual(f.commands, [])
+            self.assertIs(f.front, f.external)
+
+    def test_same_application_window_switch_during_snapshot_is_rejected(self):
+        with offline():
+            f = FocusEnvironment(); f.capture(); f.test_focus()
+            other = Ref(200, 'personal-work')
+            original_title = f.title
+            reads = []
+            def changed(window):
+                result = original_title(window)
+                if window is f.test_window:
+                    reads.append(window)
+                    if len(reads) == 4: f.windows[200] = other
+                return result
+            f.title = changed
+            with self.assertRaises(policy.FocusError): f.restore()
+            self.assertEqual(f.commands, [])
+
     def test_restore_and_post_cleanup_validation_require_same_native_window_and_model(self):
         with offline():
             f = FocusEnvironment(); f.capture(); f.test_focus(); f.restore()

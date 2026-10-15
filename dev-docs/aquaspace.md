@@ -488,3 +488,78 @@ preflight has `focus-capture-failure.json` in `run-20261015-011011/`. The live
 reader repair, its regressions and these notes are included in a local checkpoint
 after `721214c1`; the run must not be described as an unchanged run of that earlier
 checkpoint. No additional live tests were performed when creating this checkpoint.
+
+## Offline execution-focus safety repair after 4492ad71
+
+The user authorized repairing both focus-stealing gaps found in the offline
+review, with regression tests and unchanged ownership protections. No live test,
+app launch, installation or push was authorized or performed.
+
+**Restoration snapshot gap.** The AppKit foreground PID check preceded later AX
+window/title reads, so a new user foreground app during those reads could leave
+a stale test-app snapshot authorizing restoration. The offline reproductions
+used the real `NativeAX.focused_application` implementation and real restoration
+policy, substituting only process/AX boundaries. They changed foreground during
+the window or title read and observed an unwanted restoration request against
+`4492ad71`. Additional failing cases covered user focus during restoration-intent
+logging, late empty-workspace application/workspace validation, and a different
+window in the same native app during final title validation.
+
+Snapshots now recheck the retained window title, the application's current
+focused-window reference/owner, and finally actual foreground app identity after
+the initial native reads and observation logging. Title validation precedes the
+final window read so a title callback cannot hide a same-app window switch.
+Restoration intent is recorded before the last foreground validation. The empty
+workspace activation path performs another complete snapshot after all its late
+validation reads and logging, and refuses changed model/native focus. Existing
+retained roots, ambiguity rejection and stable cleanup verification remain.
+
+**Execution-wide gap.** Previously only baseline capture and teardown examined
+native foreground ownership. The actual selection, creation and move functions
+overrode simulated user focus in the offline runner-function reproductions.
+`ExecutionFocus` now checks coherent model/native ownership before foreground
+actions and during topology polling. It permits the verified original baseline
+only for the initial transition; subsequent focus must belong to a uniquely
+identified disposable test window on a dedicated test workspace. A deliberate
+switch to an empty test workspace can carry only the unchanged preceding native
+source (or that same app with its window hidden) and only on the explicitly
+requested workspace. Personal model windows and different native apps/windows
+do not qualify. Initial ambiguity or model/native identity changes also refuse
+the first action.
+
+Detected departures, unreadable ownership or uncertain action replies revoke
+foreground permission permanently for that run. Returning to a test window
+cannot reauthorize more actions or cleanup restoration. Background cleanup still
+uses only recorded tab/terminal pairs and the pinned disposable process, with
+the existing manager/process checks. Existing windows are not moved or activated
+to recover from a failure.
+
+The script driver requires the caller's native foreground grant for every
+create/add/select, retains source application/window AX references across target
+enumeration and rechecks them before mutation. Redundant window/application
+activation was removed from selection; the parent performs its separately guarded
+focus command. Native menu automation now refuses a background target, never
+activates it, and checks foreground immediately before both menu presses. All
+PID, executable/birth, prefix, original-window, manager and native tab/terminal
+ownership checks remain. The runner requires the new helper's read-only
+`ghostty-topology-foreground-v1` capability before capturing a session or launching
+Ghostty, so a stale helper cannot bypass the new guard. The helper build command
+now explicitly links ApplicationServices for these AX reads.
+
+Offline validation added **26 test methods** (with additional boundary subcases)
+and passed all **139 AquaSpace Python tests**. The new cases exercise actual
+runner functions, the real focus policy/adapter with fakes, native-menu policy,
+initial/empty workspace transitions, late read/logging changes, revocation,
+successful owned operations, guarded exact targets and stale-helper admission.
+Native loading, subprocesses and signals are blocked in these safety tests.
+The Objective-C helper passed `clang -fobjc-arc -fsyntax-only`; this parses and
+type-checks its source without building or executing a helper binary. No
+window-manager or diagnostic helper was rebuilt, installed or launched.
+
+These changes are included in a local checkpoint after `4492ad71`. No additional
+tests were run when creating this checkpoint. They have **offline validation
+only**; the earlier 32-assertion live run predates this repair and
+must not be relabeled as its validation. A future explicitly authorized live
+run must first rebuild the diagnostic script driver. The foreground checks are
+bounded observations around mutations; they do not constitute an atomic macOS
+lock against an input event arriving after the final check.

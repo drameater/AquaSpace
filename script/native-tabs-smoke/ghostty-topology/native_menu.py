@@ -70,14 +70,15 @@ def run_menu(request, backend):
             raise MenuError('Native menu item is missing or ambiguous: ' + title)
         return matches[0]
 
+    def require_foreground():
+        # Parent selection already made this process foreground. Never activate
+        # it here: a user may have switched away during subprocess setup/AX reads.
+        if not backend.flag(owned(app), 'AXFrontmost'):
+            raise MenuError('Disposable Ghostty lost foreground ownership')
+        owned(app)
+
     checked_windows()
-    backend.set_frontmost(owned(app))
-    for _ in range(20):
-        if backend.flag(owned(app), 'AXFrontmost'):
-            break
-        backend.pause()
-    else:
-        raise MenuError('Disposable Ghostty could not become foreground')
+    require_foreground()
     checked_windows()
     menu_bar = owned(backend.element(app, 'AXMenuBar'))
     window_menu = named_child(menu_bar, 'AXMenuBarItem', 'Window')
@@ -86,8 +87,10 @@ def run_menu(request, backend):
     menu = None
     try:
         # Mark intent first: AXPress may succeed even if the reply fails.
+        target = owned(window_menu)
+        require_foreground()
         opened = True
-        backend.press(owned(window_menu))
+        backend.press(target)
         menus = [owned(c) for c in backend.elements(window_menu, 'AXChildren')
                  if backend.role(owned(c)) == 'AXMenu']
         if len(menus) != 1:
@@ -99,7 +102,9 @@ def run_menu(request, backend):
         if not backend.flag(owned(action), 'AXEnabled'):
             raise MenuError('Native tab operation is disabled')
         checked_windows()
-        backend.press(owned(action))
+        target = owned(action)
+        require_foreground()
+        backend.press(target)
     finally:
         # Cancel only this process's retained menu, never send Escape globally.
         if opened:

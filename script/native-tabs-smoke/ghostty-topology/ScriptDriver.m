@@ -1,6 +1,77 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <ScriptingBridge/ScriptingBridge.h>
+#import <ApplicationServices/ApplicationServices.h>
+
+// Pin the caller's native foreground source across tab enumeration and recheck
+// immediately before a creation/selection. Neither failure nor cleanup activates
+// another app. The Python runner separately verifies model/process ownership.
+@interface ForegroundGuard : NSObject {
+    AXUIElementRef _app;
+    AXUIElementRef _window;
+    pid_t _pid;
+    NSString *_title;
+}
+- (instancetype)initWithSnapshot:(NSDictionary *)snapshot;
+- (void)check;
+@end
+@implementation ForegroundGuard
+- (instancetype)initWithSnapshot:(NSDictionary *)snapshot {
+    self = [super init];
+    if (!self) return nil;
+    if (![snapshot isKindOfClass:NSDictionary.class] ||
+        ![snapshot[@"pid"] isKindOfClass:NSNumber.class] ||
+        ![snapshot[@"hasWindow"] isKindOfClass:NSNumber.class])
+        [NSException raise:@"Foreground" format:@"Missing native foreground grant"];
+    _pid = [snapshot[@"pid"] intValue];
+    if (_pid <= 0) [NSException raise:@"Foreground" format:@"Invalid foreground PID"];
+    _title = [snapshot[@"title"] isKindOfClass:NSString.class] ? snapshot[@"title"] : nil;
+    _app = AXUIElementCreateApplication(_pid);
+    if (!_app || AXUIElementSetMessagingTimeout(_app, 2.0) != kAXErrorSuccess)
+        [NSException raise:@"Foreground" format:@"Cannot bind foreground app"];
+    CFTypeRef value = NULL;
+    AXError error = AXUIElementCopyAttributeValue(_app, kAXFocusedWindowAttribute, &value);
+    if ([snapshot[@"hasWindow"] boolValue]) {
+        if (error != kAXErrorSuccess || !value || CFGetTypeID(value) != AXUIElementGetTypeID()) {
+            if (value) CFRelease(value);
+            [NSException raise:@"Foreground" format:@"Cannot read granted foreground window"];
+        }
+        _window = (AXUIElementRef)value;
+    } else {
+        if (value) CFRelease(value);
+        if (error != kAXErrorNoValue)
+            [NSException raise:@"Foreground" format:@"Windowless foreground grant changed"];
+    }
+    [self check];
+    return self;
+}
+- (void)check {
+    CFTypeRef window = NULL, title = NULL;
+    BOOL titleMatches = YES;
+    AXError error;
+    if (_window) {
+        error = AXUIElementCopyAttributeValue(_window, kAXTitleAttribute, &title);
+        titleMatches = error == kAXErrorSuccess && title && CFGetTypeID(title) == CFStringGetTypeID() &&
+                       _title && [(__bridge NSString *)title isEqualToString:_title];
+    }
+    error = AXUIElementCopyAttributeValue(_app, kAXFocusedWindowAttribute, &window);
+    BOOL matches = _window ? error == kAXErrorSuccess && window && CFEqual(window, _window) && titleMatches
+                            : error == kAXErrorNoValue && !window;
+    if (matches && window) {
+        pid_t windowPid = 0;
+        matches = AXUIElementGetPid((AXUIElementRef)window, &windowPid) == kAXErrorSuccess && windowPid == _pid;
+    }
+    if (title) CFRelease(title);
+    if (window) CFRelease(window);
+    NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (!matches || front.processIdentifier != _pid || !front.isActive)
+        [NSException raise:@"Foreground" format:@"Desktop focus changed; refusing tab mutation"];
+}
+- (void)dealloc {
+    if (_window) CFRelease(_window);
+    if (_app) CFRelease(_app);
+}
+@end
 
 // Selectors follow the installed Ghostty.sdef; every event targets a specific PID.
 @interface GhosttyApplication : SBApplication
@@ -40,8 +111,20 @@ static NSDictionary *describe(GhosttyApplication *app) {
     return @{@"groups":groups};
 }
 int main(int argc, const char *argv[]) { @autoreleasepool { @try {
+    if (argc == 2 && strcmp(argv[1], "--capabilities") == 0) {
+        puts("ghostty-topology-foreground-v1"); return 0;
+    }
     if (argc < 3) [NSException raise:@"Arguments" format:@"Expected PID and operation"];
     pid_t pid = (pid_t)atoi(argv[1]); NSString *op = @(argv[2]);
+    ForegroundGuard *foreground = nil;
+    if ([op isEqual:@"create"] || [op isEqual:@"add"] || [op isEqual:@"select"]) {
+        if (argc < 5 || strcmp(argv[argc-2], "--foreground") != 0)
+            [NSException raise:@"Foreground" format:@"Foreground grant required"];
+        NSData *data = [@(argv[argc-1]) dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *snapshot = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        foreground = [[ForegroundGuard alloc] initWithSnapshot:snapshot];
+        argc -= 2;
+    }
     NSRunningApplication *native = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (![native.bundleIdentifier isEqual:@"com.mitchellh.ghostty"]) [NSException raise:@"Identity" format:@"Not the expected Ghostty PID"];
     GhosttyApplication *app = (GhosttyApplication *)[SBApplication applicationWithProcessIdentifier:pid];
@@ -61,6 +144,7 @@ int main(int argc, const char *argv[]) { @autoreleasepool { @try {
             }
             if (!targetWindow) [NSException raise:@"Identity" format:@"Anchor tab absent"];
         }
+        [foreground check];
         id tab = [op isEqual:@"create"] ? value([(GhosttyObject *)[app newWindowWithConfiguration:nil] selectedTab]) : [app newTabIn:targetWindow withConfiguration:nil];
         tab = value(tab); id terminal = value([(GhosttyObject *)tab focusedTerminal]);
         if (![app performAction:[@"set_tab_title:" stringByAppendingString:title] on:terminal]) [NSException raise:@"Title" format:@"Could not assign test title"];
@@ -76,8 +160,8 @@ int main(int argc, const char *argv[]) { @autoreleasepool { @try {
             if ([op isEqual:@"close"]) result=@{@"closed":@YES,@"alreadyAbsent":@YES};
             else [NSException raise:@"Identity" format:@"Test tab absent"];
         } else if ([op isEqual:@"select"]) {
-            [(GhosttyObject *)targetTab selectTab]; [(GhosttyObject *)targetWindow activateWindow];
-            [native activateWithOptions:NSApplicationActivateIgnoringOtherApps]; result=describe(app);
+            [foreground check];
+            [(GhosttyObject *)targetTab selectTab]; result=describe(app);
         } else if ([op isEqual:@"close"]) { [(GhosttyObject *)targetTab closeTab]; result=@{@"closed":@YES}; }
         else [NSException raise:@"Operation" format:@"Unknown operation"];
     }

@@ -144,3 +144,13 @@ Ghostty window 21423 remained floating on workspace 2 with unchanged native
 identities. The same sole AquaSpace appeared in 875 inventories. See the
 [focus-restoration live record](aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
 for the preflight failure, reader repair, subsequent read-only checks and evidence.
+
+The offline review of `4492ad71` then reproduced foreground loss during late
+native reads and unconditional focus reclamation during the main test sequence.
+Both are repaired with complete snapshot revalidation, an execution-wide
+foreground gate, permanently revoked permission after detected user focus changes,
+and guarded helper mutation boundaries. Ownership and ambiguity checks remain;
+no manager lifecycle path was added. All 139 AquaSpace Python offline tests pass,
+including 26 added methods. The new helper source received a syntax-only check;
+neither apps nor helper binaries were launched, rebuilt or installed. These
+changes have not been live-validated. See the [offline focus-safety repair](aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).

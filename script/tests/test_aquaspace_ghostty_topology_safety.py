@@ -45,6 +45,9 @@ class WorkspaceCreationTests(unittest.TestCase):
                  and n.name in ('fresh', 'focus_test_workspace')]
         scope = dict(A='test-a', B='test-b', cli=cli, driver=driver,
                      isolated=lambda: None, preserved=lambda: None,
+                     focus_guard=lambda phase: None,
+                     activity=SimpleNamespace(workspace_selected=lambda *args: None),
+                     focus_controller=SimpleNamespace(revoke=lambda *args: None),
                      save=lambda *args: None, prefix='test-',
                      created={'a': {'tab': 'anchor', 'terminal': 'anchor-terminal'}})
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE / 'live.py'), 'exec'), scope)
@@ -135,7 +138,7 @@ class FakeAX:
         self.window_menu = Element(self.target, 'Window', 'AXMenuBarItem', AXChildren=[self.menu])
         self.bar = Element(self.target, role='AXMenuBar', AXChildren=[self.window_menu])
         self.app = Element(self.target, role='AXApplication', AXWindows=[self.window],
-                           AXFocusedWindow=self.window, AXMenuBar=self.bar, AXFrontmost=False)
+                           AXFocusedWindow=self.window, AXMenuBar=self.bar, AXFrontmost=True)
         self.personal_app = Element(self.personal, role='AXApplication')
         self.process_order = [Element(50), self.app, self.personal_app]
         self.bindings = []
@@ -172,6 +175,7 @@ class FakeAX:
 
     def flag(self, element, attribute):
         self.pid(element)
+        self.hook(attribute, element)
         return element.attributes[attribute]
 
     def same(self, left, right):
@@ -208,10 +212,30 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 self.run_policy(b, operation)
                 action = b.merge if operation == 'merge' else b.detach
                 self.assertEqual(b.bindings, [b.target])
-                self.assertEqual(b.actions, [('activate', b.app), ('press', b.window_menu),
+                self.assertEqual(b.actions, [('press', b.window_menu),
                                              ('press', action), ('cancel', b.menu)])
 
-    def test_process_exit_at_activation_and_menu_click_never_retargets_personal_app(self):
+    def test_background_target_is_never_activated_to_reclaim_user_focus(self):
+        b = FakeAX(); b.app.attributes['AXFrontmost'] = False
+        with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
+        self.assertEqual(b.actions, [])
+
+    def test_user_switch_during_window_validation_refuses_first_menu_press(self):
+        b = FakeAX()
+        b.hook = lambda stage, element: b.app.attributes.__setitem__('AXFrontmost', False) if stage == 'title' else None
+        with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
+        self.assertEqual(b.actions, [])
+
+    def test_user_switch_after_menu_open_refuses_action_and_only_cancels_owned_menu(self):
+        b = FakeAX()
+        def switch(stage, element):
+            if stage == 'press' and element is b.window_menu:
+                b.app.attributes['AXFrontmost'] = False
+        b.hook = switch
+        with self.assertRaises(menu_policy.MenuError): self.run_policy(b)
+        self.assertEqual(b.actions, [('press', b.window_menu), ('cancel', b.menu)])
+
+    def test_process_churn_at_menu_clicks_never_retargets_personal_app(self):
         b = FakeAX()
         stages = []
 
@@ -223,15 +247,15 @@ class NativeMenuPolicyTests(unittest.TestCase):
                 stages.append(stage)
         b.hook = churn
         self.run_policy(b)
-        self.assertEqual(stages, ['activate', 'press', 'press'])
+        self.assertEqual(stages, ['press', 'press'])
         self.assertTrue(all(e.pid == b.target for _, e in b.actions))
         self.assertNotIn(b.personal_app, [e for _, e in b.actions])
 
-    def test_target_exit_at_activation_does_not_activate_replacement(self):
+    def test_target_exit_during_foreground_validation_does_not_activate_replacement(self):
         b = FakeAX()
 
         def exit_target(stage, element):
-            if stage == 'activate':
+            if stage == 'AXFrontmost':
                 b.app.alive = False
                 b.process_order = [b.personal_app]
         b.hook = exit_target
@@ -262,14 +286,14 @@ class NativeMenuPolicyTests(unittest.TestCase):
             self.assertEqual(code, 2)
             factory.assert_not_called()
 
-    def test_unowned_window_refuses_before_activation(self):
+    def test_unowned_window_refuses_before_any_menu_mutation(self):
         b = FakeAX()
         b.app.attributes['AXWindows'].append(Element(b.target, 'personal-work', 'AXWindow'))
         with self.assertRaises(menu_policy.MenuError):
             self.run_policy(b)
         self.assertEqual(b.actions, [])
 
-    def test_foreign_pid_element_refuses_before_activation(self):
+    def test_foreign_pid_element_refuses_before_any_menu_mutation(self):
         b = FakeAX()
         b.window.pid = b.personal
         with self.assertRaises(menu_policy.MenuError):
@@ -280,12 +304,12 @@ class NativeMenuPolicyTests(unittest.TestCase):
         b = FakeAX()
 
         def change_selection(stage, element):
-            if stage == 'activate':
+            if stage == 'AXFrontmost':
                 b.window.title = b.prefix + 'another-tab'
         b.hook = change_selection
         with self.assertRaises(menu_policy.MenuError):
             self.run_policy(b)
-        self.assertEqual(b.actions, [('activate', b.app)])
+        self.assertEqual(b.actions, [])
 
     def test_window_arriving_after_menu_open_refuses_merge(self):
         b = FakeAX()

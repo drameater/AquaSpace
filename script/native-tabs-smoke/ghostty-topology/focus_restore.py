@@ -54,6 +54,28 @@ class FocusRestoration:
         self.status, self.error, self.verified = 'not-captured', None, False
         self.observations = []
         self.requests = []
+        self.revoked = None
+
+    def revoke(self, reason):
+        # Once desktop ownership is lost, returning to a test window cannot
+        # silently authorize more focus writes, including during cleanup.
+        if self.revoked is None:
+            self.revoked = str(reason)
+
+    def confirm_native(self, snapshot):
+        # Bracket the potentially blocking window/title reads with a final
+        # foreground read. A background app can still report its focused window.
+        title_matches = (snapshot.window is None
+                         or self.ax.title(snapshot.window) == snapshot.title)
+        window = self.ax.optional_element(snapshot.app, 'AXFocusedWindow')
+        if snapshot.window is None:
+            same_window = window is None
+        else:
+            same_window = (window is not None and self.ax.pid(window) == snapshot.pid
+                           and self.ax.same(window, snapshot.window) and title_matches)
+        app = self.ax.focused_application()
+        if not same_window or self.ax.pid(app) != snapshot.pid or not self.ax.same(app, snapshot.app):
+            raise FocusError('Native foreground changed during window validation')
 
     def _request(self, kind, **target):
         data = dict(kind=kind, at_monotonic=self.clock(), **target)
@@ -87,6 +109,7 @@ class FocusRestoration:
                     matches_initial=self._matches(current, self.initial) if self.initial else None)
         self.observations.append(data)
         self.log(phase, data)
+        self.confirm_native(current)
         return current
 
     def _settle(self, phase, predicate):
@@ -127,6 +150,8 @@ class FocusRestoration:
             return self._matches(current, candidate)
 
         try:
+            if self.revoked is not None:
+                raise FocusError('Execution foreground ownership revoked: ' + self.revoked)
             self.guard()
             if not session['focusedWindow'] and self.cli(
                     'list-windows', '--workspace', session['workspace'], '--format', '%{window-id}'):
@@ -140,6 +165,8 @@ class FocusRestoration:
     def restore_before_cleanup(self, test_pid, owned_windows, test_workspaces, prefix):
         self.verified = False
         try:
+            if self.revoked is not None:
+                raise FocusError('Execution foreground ownership revoked: ' + self.revoked)
             self.guard()
             if self.initial is None:
                 raise FocusError('No verified original desktop focus')
@@ -175,9 +202,9 @@ class FocusRestoration:
                     self.ax.title(self.initial.window)
                     # This command also selects the target workspace. One focus
                     # write avoids an intermediate MRU window/workspace hop.
+                    self._request('focus-window', window=self.initial.model['window'],
+                                  workspace=self.initial.model['workspace'], native_pid=self.initial.pid)
                     if may_write():
-                        self._request('focus-window', window=self.initial.model['window'],
-                                      workspace=self.initial.model['workspace'], native_pid=self.initial.pid)
                         self.cli('focus', '--window-id', self.initial.model['window'])
                 else:
                     if self.ax.optional_element(self.initial.app, 'AXFocusedWindow') is not None:
@@ -185,8 +212,8 @@ class FocusRestoration:
                     if self.cli('list-windows', '--workspace', self.initial.model['workspace'],
                                 '--format', '%{window-id}'):
                         raise FocusError('Originally empty workspace gained a window; refusing restoration')
+                    self._request('focus-empty-workspace', workspace=self.initial.model['workspace'])
                     if may_write():
-                        self._request('focus-empty-workspace', workspace=self.initial.model['workspace'])
                         self.cli('workspace', self.initial.model['workspace'])
                         transition = self.observe('empty-workspace-selected')
                         native_is_test = (transition.pid == test_pid and transition.title is not None
@@ -200,6 +227,12 @@ class FocusRestoration:
                                     '--format', '%{window-id}'):
                             raise FocusError('Empty workspace gained a window during restoration')
                         self._request('activate-empty-application', native_pid=self.initial.pid)
+                        self.guard()
+                        latest = self.observe('before-empty-activation')
+                        if (latest.model['workspace'] != self.initial.model['workspace']
+                                or latest.model['window']
+                                or not self._native_matches(latest, transition)):
+                            raise FocusError('Foreground changed during empty-workspace validation')
                         self.ax.set_frontmost(self.initial.app)
             self._settle('restore-before-cleanup', lambda value: self._matches(value, self.initial))
             self.status = 'restored-before-cleanup'
@@ -222,4 +255,61 @@ class FocusRestoration:
 
     def report(self):
         return dict(status=self.status, verified=self.verified, error=self.error,
-                    observations=list(self.observations), requests=list(self.requests))
+                    revoked=self.revoked, observations=list(self.observations), requests=list(self.requests))
+
+
+class ExecutionFocus:
+    """Read-only, fail-closed permission for the runner's foreground actions."""
+    def __init__(self, controller, *, test_pid, owned_rows, workspaces, prefix):
+        self.controller, self.test_pid, self.owned_rows = controller, test_pid, owned_rows
+        self.workspaces, self.prefix = set(workspaces), prefix
+        self.initial_allowed = True
+        self.carry, self.carry_workspace = None, None
+
+    def workspace_selected(self, workspace, source):
+        if workspace not in self.workspaces:
+            raise FocusError('Foreground transition requires a test workspace')
+        # A deliberate switch to an empty workspace can leave the preceding
+        # native application foreground until the first disposable window exists.
+        self.initial_allowed = False
+        self.carry, self.carry_workspace = source, workspace
+
+    def check(self, phase):
+        c = self.controller
+        try:
+            if c.revoked is not None:
+                raise FocusError('Execution foreground ownership revoked: ' + c.revoked)
+            c.guard()
+            rows = self.owned_rows()
+            current = c.observe(phase)
+            if c.initial is None:
+                raise FocusError('No captured desktop baseline')
+            m, pid = current.model, self.test_pid()
+            coherent_initial = (not m['window'] or (m['unique'] and m['pid'] == current.pid
+                                                   and m['title'] == current.title))
+            if self.initial_allowed and coherent_initial and c._matches(current, c.initial):
+                return current
+            matches = [r for r in rows if r[0] == m['window']]
+            owned_model = (len(matches) == 1 and m['unique'] and m['pid'] == pid
+                           and matches[0][1:] == [m['workspace'], str(pid), m['title']]
+                           and m['title'] is not None and m['title'].startswith(self.prefix))
+            owned_native = (owned_model and current.pid == pid and current.window is not None
+                            and current.title == m['title'])
+            if m['workspace'] in self.workspaces and owned_native:
+                self.initial_allowed = False
+                self.carry, self.carry_workspace = None, None
+                return current
+            # This exception belongs only to the explicitly requested workspace
+            # transition, never a personal model window or a different native app.
+            if (self.carry is not None and m['workspace'] == self.carry_workspace
+                    and (not m['window'] or owned_model)):
+                unchanged = c._native_matches(current, self.carry)
+                window_hidden = (not m['window'] and current.window is None
+                                 and current.pid == self.carry.pid
+                                 and c.ax.same(current.app, self.carry.app))
+                if unchanged or window_hidden:
+                    return current
+            raise FocusError('Foreground left the authorized test: ' + phase)
+        except Exception as error:
+            c.revoke(error)
+            raise
