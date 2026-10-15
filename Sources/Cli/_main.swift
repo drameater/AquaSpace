@@ -8,7 +8,7 @@ let usage =
     USAGE: \(CommandLine.arguments.first ?? "aerospace") [-h|--help] [-v|--version] <subcommand> [<args>...]
 
     SUBCOMMANDS:
-    \(subcommandDescriptions.sortedBy { $0[0] }.toPaddingTable(columnSeparator: "   ").joined(separator: "\n"))
+    \((subcommandDescriptions + [["  management-status", "Show AquaSpace's window-control ownership"], ["  switch-to-aerospace", "Freeze AquaSpace and hand control to AeroSpace"]]).sortedBy { $0[0] }.toPaddingTable(columnSeparator: "   ").joined(separator: "\n"))
     """
 
 @main
@@ -38,20 +38,30 @@ struct Main {
             }
             print(
                 """
-                aerospace CLI client version: \(cliClientVersionAndHash)
-                AeroSpace.app server version: \(serverVersionAndHash ?? "Unknown. The server is not responding")
+                aquaspace CLI client version: \(cliClientVersionAndHash)
+                Active window manager server version: \(serverVersionAndHash ?? "Unknown. The server is not responding")
                 """,
             )
             if serverVersionAndHash != nil && cliClientVersionAndHash != serverVersionAndHash {
                 eprint(
                     """
-                    Warning: AeroSpace client/server versions don't match. Possible fixes:
-                      - Restart AeroSpace.app (server restart is required after each update)
-                      - Reinstall and restart AeroSpace (corrupted installation)
+                    Warning: CLI and active window manager versions don't match. AeroSpace and AquaSpace can have different versions.
+                    If AquaSpace is active, restart it after updating.
                     """,
                 )
             }
             exit(EXIT_CODE_ZERO)
+        }
+
+        if args.toArray() == ["management-status"] || args.toArray() == ["switch-to-aerospace"] {
+            let connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
+            guard await connection.initConnection().error == nil else {
+                exit(EXIT_CODE_TWO, err: "AquaSpace is not responding")
+            }
+            let answer = await run(connection, args, stdin: "", windowId: nil, workspace: nil, failExitCode: EXIT_CODE_TWO)
+            if !answer.stdout.isEmpty { print(answer.stdout) }
+            if !answer.stderr.isEmpty { eprint(answer.stderr) }
+            exit(answer.exitCode)
         }
 
         let parsedArgs: any CmdArgs
@@ -74,7 +84,7 @@ struct Main {
             case .customError(let msg):
                 exit(failExitCode, err: msg)
             case .nwError(let e):
-                exit(failExitCode, err: "Can't connect to AeroSpace server. Is AeroSpace.app running?\n\(e.localizedDescription)")
+                exit(failExitCode, err: "Can't connect to the window manager. Is AquaSpace.app or AeroSpace.app running?\n\(e.localizedDescription)")
         }
 
         var stdin = ""
@@ -121,9 +131,9 @@ struct Main {
         if ans.exitCode != EXIT_CODE_ZERO && ans.serverVersionAndHash != cliClientVersionAndHash {
             eprint(
                 """
-                Warning: AeroSpace client/server versions don't match
-                  - aerospace CLI client version: \(cliClientVersionAndHash)
-                  - AeroSpace.app server version: \(ans.serverVersionAndHash)
+                Warning: CLI and active window manager versions don't match
+                  - aquaspace CLI client version: \(cliClientVersionAndHash)
+                  - Active window manager server version: \(ans.serverVersionAndHash)
                   Possible fixes:
                   - Restart AeroSpace.app (server restart is required after each update)
                   - Reinstall and restart AeroSpace (corrupted installation)

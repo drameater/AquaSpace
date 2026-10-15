@@ -1,6 +1,20 @@
 import CoreGraphics
 import Foundation
 
+/// IDs only; no titles, images, or screen-recording permission are needed. Include inactive
+/// native Spaces and background tabs so becoming AX-visible is not mistaken for creation.
+func getWindowServerWindowIdsByPid() -> [Int32: Set<UInt32>]? {
+    guard let rows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    var result: [Int32: Set<UInt32>] = [:]
+    for row in rows {
+        guard let pid = row[kCGWindowOwnerPID as String] as? Int32,
+              let windowId = row[kCGWindowNumber as String] as? UInt32
+        else { continue }
+        result[pid, default: []].insert(windowId)
+    }
+    return result
+}
+
 @MainActor
 private var cache: [UInt32: MacOsWindowLevel] = [:]
 

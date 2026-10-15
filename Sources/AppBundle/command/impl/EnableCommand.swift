@@ -6,6 +6,9 @@ struct EnableCommand: Command {
     /*conforms*/ let shouldResetClosedWindowsCache = false
 
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
+        if WindowManagerHandoff.isYielding {
+            return .fail(io.err("AquaSpace is handing control to AeroSpace and cannot be re-enabled."))
+        }
         let prevState = TrayMenuModel.shared.isEnabled
         let newState: Bool = switch args.targetState.val {
             case .on: true

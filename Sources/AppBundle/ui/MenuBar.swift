@@ -60,8 +60,16 @@ public func menuBar(viewModel: TrayMenuModel) -> some Scene { // todo should it 
             getExperimentalUISettingsMenu(viewModel: viewModel)
             openConfigButton()
             reloadConfigButton(warningsAsErrors: false)
+            if !isDebug {
+                Divider()
+                Button("Switch to AeroSpace") {
+                    Task.startUnstructured { @MainActor in
+                        await WindowManagerHandoff.switchToOriginal(launch: true)
+                    }
+                }
+            }
         } else {
-            Button("AeroSpace requires accessibility permission to move windows") {
+            Button("\(aeroSpaceAppName) requires accessibility permission to move windows") {
                 viewModel.axPermissionStatus = .waitingWithPrompt
             }
         }

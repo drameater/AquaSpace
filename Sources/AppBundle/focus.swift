@@ -116,9 +116,26 @@ extension Workspace {
 @MainActor private var _prevFocus: FrozenFocus? = nil
 @MainActor var prevFocus: LiveFocus? { _prevFocus?.live.takeIf { $0 != focus } }
 
+@MainActor private var nativeTabFocusReplacements: [UInt32: UInt32] = [:]
+
+/// Keep focus-back-and-forth attached to the logical window as its native tab ID changes.
+@MainActor
+func replaceNativeTabFocusId(_ oldId: UInt32, _ newId: UInt32) {
+    func replacing(_ frozen: FrozenFocus) -> FrozenFocus {
+        frozen.windowId == oldId
+            ? FrozenFocus(windowId: newId, workspaceName: frozen.workspaceName, monitorId_oneBased: frozen.monitorId_oneBased)
+            : frozen
+    }
+    _focus = replacing(_focus)
+    _prevFocus = _prevFocus.map(replacing)
+    nativeTabFocusReplacements[oldId] = newId
+}
+
 @MainActor private var onFocusChangedRecursionGuard = false
 // Should be called in refreshSession
 @MainActor func checkOnFocusChangedCallbacks_nonCancellable() async {
+    let replacements = nativeTabFocusReplacements
+    nativeTabFocusReplacements = [:]
     if refreshSessionEvent?.isStartup == true {
         return
     }
@@ -128,7 +145,13 @@ extension Workspace {
     var hasFocusedWorkspaceChanged = false
     var hasFocusedMonitorChanged = false
     if frozenFocus != _lastKnownFocus {
-        _prevFocus = _lastKnownFocus
+        var previousId = _lastKnownFocus.windowId
+        var seen: Set<UInt32> = []
+        while let id = previousId, seen.insert(id).inserted, let next = replacements[id] { previousId = next }
+        let isSameNativeTabGroup = _lastKnownFocus.windowId.map { replacements[$0] != nil } == true &&
+            previousId == frozenFocus.windowId && _lastKnownFocus.workspaceName == frozenFocus.workspaceName
+        if !isSameNativeTabGroup { _prevFocus = _lastKnownFocus }
+        // Still broadcast the current native ID/title to focus-change subscribers.
         hasFocusChanged = true
     }
     if frozenFocus.workspaceName != _lastKnownFocus.workspaceName {
@@ -179,7 +202,7 @@ extension Workspace {
         let process = Process()
         process.executableURL = URL(filePath: exec)
         process.arguments = Array(config.execOnWorkspaceChange.dropFirst())
-        var environment = config.execConfig.envVariables
+        var environment = config.execConfig.launchEnvironment
         environment[AEROSPACE_FOCUSED_WORKSPACE] = newWorkspace
         environment[AEROSPACE_PREV_WORKSPACE] = oldWorkspace
         switch focus.asLeaf {

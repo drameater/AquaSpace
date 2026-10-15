@@ -5,10 +5,19 @@ import Common
 private var activeRefreshTask: Task<(), any Error>? = nil
 
 @MainActor
+func pauseWindowManagementForHandoff() {
+    TrayMenuModel.shared.isEnabled = false
+    activeRefreshTask?.cancel()
+    activeRefreshTask = nil
+    for app in MacApp.allAppsMap.values { app.cancelPendingFrames() }
+}
+
+@MainActor
 func scheduleCancellableCompleteRefreshSession(
     _ event: RefreshSessionEvent,
     optimisticallyPreLayoutWorkspaces: Bool = false,
 ) {
+    if WindowManagerHandoff.isYielding { return }
     activeRefreshTask?.cancel()
     activeRefreshTask = Task.startUnstructured { @MainActor in
         try checkCancellation()
@@ -123,15 +132,21 @@ func refreshModel_nonCancellable() async {
 private func refresh() async throws {
     // Garbage collect terminated apps and windows before working with all windows
     let mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-    let aliveWindowIds = mapping.values.flatMap(id).toSet()
+    let aliveWindowIds = mapping.values.flatMap(\.aliveWindowIds).toSet()
+
+    // Transfer the slot before collecting the old ID. Collection would otherwise change
+    // focus and normalize away the parent needed by the replacement.
+    for (app, update) in mapping {
+        try await app.applyNativeTabUpdate(update.nativeTabUpdate)
+    }
 
     for window in MacWindow.allWindows {
         if !aliveWindowIds.contains(window.windowId) {
             window.garbageCollect(skipClosedWindowsCache: false)
         }
     }
-    for (app, windowIds) in mapping {
-        for windowId in windowIds {
+    for (app, update) in mapping {
+        for windowId in update.aliveWindowIds {
             try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
         }
     }
@@ -154,6 +169,7 @@ enum OptimalHideCorner {
 
 @MainActor
 private func layoutWorkspaces() async throws {
+    if !WindowManagerHandoff.canControlWindows { return }
     if !TrayMenuModel.shared.isEnabled {
         for workspace in Workspace.all {
             workspace.allLeafWindowsRecursive.forEach { ($0 as! MacWindow).unhideFromCorner() } // todo as!

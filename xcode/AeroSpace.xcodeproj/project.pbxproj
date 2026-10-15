@@ -247,8 +247,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = bobko.aerospace.debug;
-				PRODUCT_NAME = "AeroSpace-Debug";
+				PRODUCT_BUNDLE_IDENTIFIER = local.aquaspace.debug;
+				PRODUCT_NAME = "AquaSpace-Debug";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -325,8 +325,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = bobko.aerospace;
-				PRODUCT_NAME = AeroSpace;
+				PRODUCT_BUNDLE_IDENTIFIER = local.aquaspace;
+				PRODUCT_NAME = AquaSpace;
 				SDKROOT = macosx;
 				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
 			};

@@ -15,6 +15,19 @@ let defaultOverriddenEnvVars = ["PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:\(
 
 struct ExecConfig: Equatable {
     var envVariables: [String: String] = env + defaultOverriddenEnvVars
+
+    /// Legacy config callbacks resolve `aerospace` to this fork's CLI, without
+    /// changing the user's PATH or the original Homebrew executable.
+    var launchEnvironment: [String: String] {
+        var result = envVariables
+        if !isUnitTest, let path = result["PATH"],
+           let helpers = Bundle.main.resourceURL?.deletingLastPathComponent().appending(path: "Helpers"),
+           FileManager.default.fileExists(atPath: helpers.appending(path: "aerospace").path)
+        {
+            result["PATH"] = helpers.path + ":" + path
+        }
+        return result
+    }
 }
 
 struct RawExecConfig: ConvenienceMutable, Equatable {

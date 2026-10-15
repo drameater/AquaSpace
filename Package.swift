@@ -16,6 +16,7 @@ let package = Package(
     // Products define the executables and libraries a package produces, making them visible to other packages.
     products: [
         .executable(name: "aerospace", targets: ["Cli"]),
+        .executable(name: "aquaspace", targets: ["Cli"]),
         // Don't use this build for release, use xcode instead
         .executable(name: "AeroSpaceApp", targets: ["AeroSpaceApp"]),
         // We only need to expose this as a product for xcode

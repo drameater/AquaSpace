@@ -2,7 +2,10 @@ import AppKit
 import Common
 import Network
 
-func startUnixSocketServer() {
+@MainActor private var socketListener: NWListener?
+
+@MainActor func startUnixSocketServer() {
+    socketListener?.cancel()
     try? FileManager.default.removeItem(atPath: socketPath)
     let params = NWParameters.tcp
     params.requiredLocalEndpoint = .unix(path: socketPath)
@@ -15,12 +18,15 @@ func startUnixSocketServer() {
         }
     }
     listener.start(queue: .global())
+    socketListener = listener
 }
 
 func toggleReleaseServerIfDebug(_ state: EnableCmdArgs.State) async {
     if serverArgs.isReadOnly { return }
     if !isDebug { return }
-    let socketFile = "/tmp/\(stableAeroSpaceAppId)-\(unixUserName).sock"
+    let targetId = NSRunningApplication.runningApplications(withBundleIdentifier: stableAeroSpaceAppId).isEmpty
+        ? originalAeroSpaceAppId : stableAeroSpaceAppId
+    let socketFile = "/tmp/\(targetId)-\(unixUserName).sock"
     let connection = NWConnection(to: NWEndpoint.unix(path: socketFile), using: .tcp)
     defer { connection.cancel() }
     if await connection.initConnection().error != nil { // Can't connect, AeroSpace.app is not running
@@ -59,6 +65,19 @@ private func newConnection(_ connection: NWConnection) async { // todo add exit 
                 """
             return await answerToClient(exitCode: EXIT_CODE_TWO, stderr: msg)
         }) else { continue }
+        if request.args == ["management-status"] {
+            await answerToClient(exitCode: EXIT_CODE_ZERO, stdout: WindowManagerHandoff.status)
+            continue
+        }
+        if request.args == ["switch-to-aerospace"] {
+            guard await WindowManagerHandoff.canHandoff else {
+                await answerToClient(exitCode: EXIT_CODE_TWO, stderr: "This instance cannot start a handoff.")
+                continue
+            }
+            await answerToClient(exitCode: EXIT_CODE_ZERO, stdout: "Switching to AeroSpace")
+            await WindowManagerHandoff.switchToOriginal(launch: true)
+            return
+        }
         // Handle subscribe before parseCommand (subscribe doesn't have a Command impl)
         if request.args.first == "subscribe" {
             switch parseSubscribeCmdArgs(request.args.slice(1...).orDie()) {

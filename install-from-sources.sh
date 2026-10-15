@@ -1,30 +1,23 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")"
-source ./script/setup.sh
+# AquaSpace local updater. Original AeroSpace and Homebrew are left in place.
+# macOS Bash 3.2 treats an empty argument array as unset under `set -u`.
+set -eo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 rebuild=1
-while test $# -gt 0; do
-    case $1 in
+build_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --dont-rebuild) rebuild=0; shift ;;
-        *) echo "Unknown option $1"; exit 1 ;;
+        *) build_args+=("$1"); shift ;;
     esac
 done
 
-if test $rebuild == 1; then
-    ./build-release.sh
+if [[ "$rebuild" == 1 ]]; then
+    exec python3 script/build-aquaspace.py --install-and-restart "${build_args[@]}"
 fi
-
-PATH="$PATH:$(brew --prefix)/bin"
-export PATH
-
-brew list aerospace-dev-user/aerospace-dev-tap/aerospace-dev > /dev/null 2>&1 && brew uninstall aerospace-dev-user/aerospace-dev-tap/aerospace-dev # Compatibility. Drop after a while
-brew list nikitabobko/local-tap/aerospace-dev > /dev/null 2>&1 && brew uninstall nikitabobko/local-tap/aerospace-dev
-brew list aerospace > /dev/null 2>&1 && brew uninstall aerospace
-which brew-install-path > /dev/null 2>&1 || brew install nikitabobko/tap/brew-install-path
-
-# Override HOMEBREW_CACHE. Otherwise, homebrew refuses to "redownload" the snapshot file
-# Maybe there is a better way, I don't know
-rm -rf /tmp/aerospace-from-sources-brew-cache
-HOMEBREW_CACHE=/tmp/aerospace-from-sources-brew-cache brew install-path ./.release/aerospace-dev.rb
-
-rm -rf "$(brew --prefix)/Library/Taps/aerospace-dev-user" # Compatibility. Drop after a while
+if [[ ${#build_args[@]} != 0 ]]; then
+    echo 'Build options cannot be combined with --dont-rebuild.' >&2
+    exit 2
+fi
+exec python3 script/install-aquaspace.py --restart

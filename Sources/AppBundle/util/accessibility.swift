@@ -4,6 +4,9 @@ import PrivateApi
 
 @MainActor
 func waitForAccessibilityPermission_nonCancellable() async {
+    if serverArgs.isReadOnly && !AXIsProcessTrusted() {
+        exit(EXIT_CODE_TWO, err: "Read-only probe has no Accessibility permission; leaving existing grants unchanged.")
+    }
     let options = [axTrustedCheckOptionPrompt: true]
     while true {
         let status = TrayMenuModel.shared.axPermissionStatus == .waitingWithPrompt
@@ -13,16 +16,9 @@ func waitForAccessibilityPermission_nonCancellable() async {
             TrayMenuModel.shared.axPermissionStatus = .granted
             break
         }
-        if TrayMenuModel.shared.axPermissionStatus == .waitingWithPrompt {
-            resetAccessibility() // Because macOS doesn't reset it for us when the app signature changes...
-        }
         TrayMenuModel.shared.axPermissionStatus = .waiting
         try? await Task.sleep(for: .seconds(1))
     }
-}
-
-private func resetAccessibility() {
-    _ = try? Process.run(URL(filePath: "/usr/bin/tccutil"), arguments: ["reset", "Accessibility", aeroSpaceAppId])
 }
 
 protocol ReadableAttr: Sendable {
@@ -186,6 +182,14 @@ enum Ax {
         var setter: @Sendable (T) -> CFTypeRef?
     }
 
+    static let childrenAttr = ReadableAttrImpl<[AXUIElement]>(
+        key: kAXChildrenAttribute,
+        getter: { $0 as? [AXUIElement] },
+    )
+    static let tabsAttr = ReadableAttrImpl<[AXUIElement]>(
+        key: kAXTabsAttribute,
+        getter: { $0 as? [AXUIElement] },
+    )
     static let parentWindowRecursive = ReadableAttrImpl<AXUIElement>(
         key: kAXWindowAttribute,
         getter: { ($0 as! AXUIElement) },

@@ -15,13 +15,15 @@ extension NWConnection {
     }
 
     public func initConnection() async -> ((), error: InitConnectionError?) {
+        if case .cancelled = state { return ((), .nwError(.posix(.ECANCELED))) }
         let error1 = await withCheckedContinuation { cont in
             let isDone = IsDone()
             stateUpdateHandler = { state in
                 Task.startUnstructured {
                     let error: NWError?
                     switch state {
-                        case .cancelled, .preparing, .setup: return
+                        case .preparing, .setup: return
+                        case .cancelled: error = .posix(.ECANCELED)
                         case .ready: error = nil
                         case .failed(let e), .waiting(let e): error = e
                         @unknown default: die("Unknown NWConnection.State: \(state)")
@@ -68,7 +70,15 @@ extension NWConnection {
             let remaining = size - data.count
             let chunk: Result<Data, NWError> = await withCheckedContinuation { cont in
                 receive(minimumIncompleteLength: remaining, maximumLength: remaining) { data, context, isComplete, error in
-                    cont.resume(returning: error.map(Result.failure) ?? Result.success(data ?? Data()))
+                    if let error {
+                        cont.resume(returning: .failure(error))
+                    } else if let data, !data.isEmpty {
+                        cont.resume(returning: .success(data))
+                    } else {
+                        // EOF cannot satisfy a length-prefixed read. Retrying an empty
+                        // completed stream spins forever and defeats handoff timeouts.
+                        cont.resume(returning: .failure(.posix(.ECONNRESET)))
+                    }
                 }
             }
             switch chunk {

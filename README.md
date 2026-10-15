@@ -1,3 +1,11 @@
+# AquaSpace
+
+A local fork of AeroSpace with native macOS tab groups kept together across workspaces. AquaSpace retains the original icon, config paths, keybindings, and command compatibility. See [local build and switching instructions](dev-docs/aquaspace.md).
+
+For future local updates, use `./install-from-sources.sh` with the [SDK options documented here](dev-docs/aquaspace.md#updating-aquaspace). The updater confirms the old AquaSpace has exited before starting its replacement; recovery restores files without launching another copy.
+
+The upstream AeroSpace documentation and attribution follow below. This fork is maintained locally; no remote has been created or changed.
+
 # AeroSpace Beta [![Build](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml)
 
 <img src="./resources/Assets.xcassets/AppIcon.appiconset/icon.png" width="40%" align="right">

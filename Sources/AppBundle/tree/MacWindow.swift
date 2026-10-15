@@ -16,7 +16,25 @@ final class MacWindow: Window {
 
     @MainActor
     @discardableResult
-    static func getOrRegister(windowId: UInt32, macApp: MacApp) async throws -> MacWindow {
+    static func getOrRegister(windowId: UInt32, macApp: MacApp, replacingNativeTabWindowId: UInt32? = nil, nativeTabWorkspace: Workspace? = nil) async throws -> MacWindow {
+        if let replacedId = replacingNativeTabWindowId,
+           let previous = allWindowsMap[replacedId], previous.macApp === macApp, let parent = previous.parent
+        {
+            let wasFocused = allWindowsMap[windowId].map { focus.windowOrNil === $0 } == true
+            // This is a continuation of the same physical window. Do not fire new-window
+            // rules or restore a closed-window snapshot on each tab selection.
+            let current = allWindowsMap[windowId] ?? MacWindow(
+                windowId, macApp, lastFloatingSize: previous.lastFloatingSize,
+                parent: parent, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST,
+            )
+            transferNativeTabState(from: previous, to: current)
+            current.prevUnhiddenProportionalPositionInsideWorkspaceRect = previous.prevUnhiddenProportionalPositionInsideWorkspaceRect
+            allWindowsMap.removeValue(forKey: replacedId)
+            allWindowsMap[windowId] = current
+            if wasFocused { _ = current.focusWindow() }
+            try await debugWindowsIfRecording(current, .cancellable)
+            return current
+        }
         if let existing = allWindowsMap[windowId] { return existing }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
         let data = try await unbindAndGetBindingDataForNewWindow(
@@ -24,7 +42,7 @@ final class MacWindow: Window {
             macApp,
             isStartup
                 ? (rect?.center.monitorApproximation ?? mainMonitorInfo).activeWorkspace
-                : focus.workspace,
+                : nativeTabWorkspace ?? focus.workspace,
             window: nil,
             .cancellable,
         )
@@ -39,6 +57,14 @@ final class MacWindow: Window {
             await runOnWindowDetected(ifConventional: window)
         }
         return window
+    }
+
+    @MainActor
+    static func absorbNativeTabWindow(_ oldId: UInt32, into newId: UInt32, macApp: MacApp) {
+        guard oldId != newId, let old = allWindowsMap[oldId], let current = allWindowsMap[newId],
+              old.macApp === macApp, current.macApp === macApp else { return }
+        absorbNativeTabState(from: old, into: current)
+        allWindowsMap.removeValue(forKey: oldId)
     }
 
     // var description: String {
@@ -190,7 +216,7 @@ final class MacWindow: Window {
         try await macApp.getAxSize(windowId, cm)
     }
 
-    override func setAxFrame(_ topLeft: CGPoint?, _ size: CGSize?) {
+    @MainActor override func setAxFrame(_ topLeft: CGPoint?, _ size: CGSize?) {
         macApp.setAxFrame(windowId, topLeft, size)
     }
 

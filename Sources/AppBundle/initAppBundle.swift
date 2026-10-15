@@ -8,6 +8,7 @@ import Foundation
         unsafe _isCli = false
         initServerArgs()
         await waitForAccessibilityPermission_nonCancellable()
+        await WindowManagerHandoff.prepareForStartup()
         if isDebug {
             await toggleReleaseServerIfDebug(.off)
             interceptTermination(SIGINT)
@@ -31,6 +32,8 @@ import Foundation
         try await runLightSession(.startup, .forceRun) {
             smartLayoutAtStartup()
             _ = await config.afterStartupCommand.run(.defaultEnv, .emptyStdin)
+            await WindowManagerHandoff.restoreStartupSession()
+            await WindowManagerHandoff.finishStartup()
         }
     }
 }
@@ -61,6 +64,7 @@ var isStartup: Bool { refreshSessionEvent?.isStartup == true }
 struct ServerArgs: Sendable {
     var configLocation: String? = nil
     var isReadOnly: Bool = false
+    var restoreSessionPath: String? = nil
 }
 
 private let serverHelp = """
@@ -73,6 +77,7 @@ private let serverHelp = """
                               and ${XDG_CONFIG_HOME}/aerospace/aerospace.toml
       --read-only             Disable window management.
                               Useful if you want to use only debug-windows or other query commands.
+      --restore-session <path> Restore saved workspace metadata after a controlled restart.
     """
 
 nonisolated(unsafe) private var _serverArgs = ServerArgs()
@@ -97,6 +102,10 @@ private func initServerArgs() {
                 index += 1
             case "--read-only": // todo rename to '--disabled' and unite with disabled feature
                 unsafe _serverArgs.isReadOnly = true
+            case "--restore-session":
+                guard let path = args.getOrNil(atIndex: index) else { exit(EXIT_CODE_TWO, err: "Missing session path") }
+                unsafe _serverArgs.restoreSessionPath = path
+                index += 1
             case "-NSDocumentRevisionsDebugMode" where isDebug:
                 // Skip Xcode CLI args.
                 // Usually it's '-NSDocumentRevisionsDebugMode NO'/'-NSDocumentRevisionsDebugMode YES'
