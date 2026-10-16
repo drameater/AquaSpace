@@ -142,3 +142,71 @@ passed while existing window 21423 stayed on workspace 2. No production changes
 were needed. The [validation record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
 distinguishes the completed suite from earlier harness setup/lookup failures and
 records independent native membership and single-manager monitoring.
+
+## Hidden Zen window omitted during stock-to-fork startup — 2026-10-15
+
+The saved handoff at
+`.debug/aquaspace/inventory-switch/run-20261015-122020/` captured Zen window
+**28122** on workspace **1**, with layout `macos_native_window_of_hidden_app`.
+After takeover, the managed-window listing omitted it while a separate saved
+read-only native observation still found window **28122** in Zen PID **15654**.
+The earlier all-window preservation check remains failed; it was not a native
+window closure or a passing handoff.
+
+The investigation identified a deterministic classification failure in
+`windowLevelCache.swift`. `getWindowLevel` queried WindowServer with
+`.optionOnScreenOnly`, so a cold cache had no layer for a hidden application
+window. Zen belongs to the Firefox family, whose strict classifier rejects a
+window unless its layer is positively known to be `.normalWindow`. Thus the
+hidden window could be registered as a popup instead of a workspace window.
+Popups have no visual workspace, so `toLiveFocusOrNil` cannot resolve them for
+the session's `move-node-to-workspace` command. Startup restoration ignores that
+command error, leaving the window outside `list-windows --all`. Repeated
+on-screen-only refreshes cannot repair it while the app remains hidden. Visible
+windows already cached before hiding do not exhibit this cold-start problem.
+
+Three alternatives were considered: hidden-window filtering, late AX discovery
+after one-shot session restoration, and native-tab suppression. The isolated
+replay supplies an ordinary hidden Zen AX window immediately, without any tab
+state or asynchronous discovery, and still reproduces the popup result using
+the actual cache and classifier. This establishes a source-level causal path
+consistent with the saved omission. The old live evidence did not capture Zen's
+full AX/classification trace, so it cannot exclude another contributing native
+API failure in that historical run.
+
+The fix changes the layer query to `.optionAll` while retaining
+`.excludeDesktopElements`, just as the existing WindowServer ID reader already
+includes off-screen windows. Hidden/minimized windows and windows on inactive
+native Spaces now retain their actual layer metadata. No unknown layer is
+assumed normal, and no hidden app is unhidden or activated. The strict browser
+classifier, popup/tooltip exclusions, native-tab attribution, ownership admission,
+session command planning and focus behavior are unchanged.
+
+`script/test-hidden-handoff-offline.py` compiles the production layer cache,
+classifier, bundle-ID rules and session command planner in an isolated package.
+WindowServer and AX types/functions are replaced by memory-only fixtures;
+AppKit/application entrypoints and live CG/AX/process calls are absent. Its
+seven tests cover hidden Zen, the AXDialog hidden-window variant, a cache first
+populated by a visible window, actual non-normal layer rejection, unreadable or
+absent metadata, buttonless tooltip rejection, and visibility-independent
+classification across Zen/Firefox variants/Chrome. Session assertions retain
+the saved workspace command and original focused window rather than focusing
+Zen. Four test methods initially failed with the old on-screen-only query;
+all seven pass with the fix.
+
+Validation completed offline:
+
+- New hidden-handoff replay: **7 tests passed**.
+- Existing native-tab reconciliation replay: **49 tests passed**.
+- AquaSpace Python regressions: **223 tests passed**.
+- Whitespace checks passed.
+
+Only isolated test packages/binaries were built and run. Neither manager, any
+diagnostic helper, installed CLI, or live reader was launched; no live process,
+window or focus query was made. No application bundle was rebuilt, nothing was
+installed, no live handoff/test occurred, and nothing was pushed. The source fix,
+offline regressions and these notes form the local hidden-Zen repair checkpoint.
+Creating the checkpoint involved no additional tests, builds, installations,
+app/helper launches or live checks. The installed AquaSpace still has the old
+layer query until a separately authorized rebuild/install; live verification of
+hidden-window handoff remains pending.

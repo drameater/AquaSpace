@@ -1811,3 +1811,33 @@ installed or pushed. These live validation notes form the local documentation
 checkpoint after `f6c7d2fd`. Creating this checkpoint involved no additional
 tests, builds, installations, app/helper launches or live checks. Nothing was
 pushed.
+
+## Offline hidden Zen handoff repair after 7a81171c — 2026-10-15
+
+The user authorized investigating the historical hidden-Zen omission and fixing
+it with offline regressions, with app/helper launches, live tests, installation
+and pushing prohibited. The saved failed handoff still shows Zen **28122** on
+workspace **1** before startup and present natively but absent from the managed
+inventory afterward; its full preservation result remains failed.
+
+The actual layer cache and browser classifier reproduce a direct cause: the
+on-screen-only WindowServer query omits hidden windows, and a cold-start Zen
+window consequently receives no known layer and is classified as a popup. That
+leaves it outside any workspace and prevents the saved workspace move from
+resolving. The source now obtains actual layers from `.optionAll` with desktop
+elements excluded. No classifier/ownership checks were relaxed, no unknown
+metadata is treated as a normal window, and no unhide, activation, focus write
+or manager lifecycle path was added. This read-only metadata correction also
+covers off-screen windows on inactive native Spaces.
+
+Seven new isolated Swift regressions pass after four test methods reproduced
+the old behavior; the existing 49 native-tab replay tests and 223 Python tests
+also pass. The new replay runs actual cache/classification/session-planning
+source against fake WindowServer/AX objects, with no app executable or native
+desktop API. Only isolated test binaries were built/run; no app, diagnostic
+helper/library, installed CLI or live reader was invoked. Nothing was installed
+or pushed. The repair and offline validation form this local checkpoint and are
+not in the installed application; a separately authorized rebuild/install and
+live handoff remain pending. Creating the checkpoint involved no additional
+tests, builds, installations, app/helper launches or live checks.
+See the [full diagnosis and reproduction](native-tabs-diagnosis.md#hidden-zen-window-omitted-during-stock-to-fork-startup--2026-10-15).

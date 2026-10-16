@@ -23,7 +23,10 @@ func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
     if let existing = cache[windowId] { return existing }
 
     var result: [UInt32: MacOsWindowLevel] = [:]
-    let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionOnScreenOnly)
+    // Hidden apps and windows on inactive native Spaces still need their real
+    // layer at startup. An on-screen-only scan gives them nil, which makes the
+    // strict browser classifier mistake ordinary windows for unbound popups.
+    let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionAll)
     guard let cfArray = CGWindowListCopyWindowInfo(options, CGWindowID(0)) as? [CFDictionary] else { return nil }
     for elem in cfArray {
         let dict = elem as NSDictionary

@@ -327,3 +327,12 @@ workspace **1** with its native identities intact. **2,240 manager samples** saw
 the same sole AquaSpace PID **42527**, peak one. Only disposable PID **81303**
 exited; no disposable windows remained. No rebuild, manager lifecycle action,
 installation or push occurred. See the [focus-fixed v7 live record](aquaspace.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
+
+The hidden-Zen stock-to-fork omission now has an offline source repair: the
+window-level cache includes off-screen WindowServer metadata instead of
+classifying an initially hidden browser window from a missing layer. Strict
+popup/unknown-metadata checks and ownership/focus policies remain unchanged.
+All 7 new handoff replay tests, 49 native-tab replay tests and 223 Python tests
+pass. No app/helper or live reader was launched; nothing was installed or pushed.
+The fix is not installed or live-validated yet. See the
+[hidden-Zen diagnosis](native-tabs-diagnosis.md#hidden-zen-window-omitted-during-stock-to-fork-startup--2026-10-15).
