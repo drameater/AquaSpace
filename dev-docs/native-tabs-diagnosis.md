@@ -207,6 +207,17 @@ window or focus query was made. No application bundle was rebuilt, nothing was
 installed, no live handoff/test occurred, and nothing was pushed. The source fix,
 offline regressions and these notes form the local hidden-Zen repair checkpoint.
 Creating the checkpoint involved no additional tests, builds, installations,
-app/helper launches or live checks. The installed AquaSpace still has the old
-layer query until a separately authorized rebuild/install; live verification of
-hidden-window handoff remains pending.
+app/helper launches or live checks. At that offline checkpoint the installed
+AquaSpace still had the old layer query, pending a separately authorized
+rebuild/install and live verification.
+
+The subsequent authorized build/install and handoff run installed release
+`0.21.3-aquaspace.20261015.2` from `fafd604a`. Exact Zen window **28122** remained
+hidden on its captured stock workspace **2**, with the same native process
+identity. All **264 manager inventories** in the resumed run observed at most
+one manager, with confirmed stock exit and an empty spawn boundary before the
+sole AquaSpace launch. The requested Zen/ownership checks passed, but the
+broader all-window comparison failed for seven other stock IDs that remain in
+WindowServer metadata and are absent from the apps' current AX window lists.
+That separate discrepancy remains unresolved and the full result remains
+failed. See the [scoped live validation and limitations](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).

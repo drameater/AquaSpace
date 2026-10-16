@@ -334,5 +334,13 @@ classifying an initially hidden browser window from a missing layer. Strict
 popup/unknown-metadata checks and ownership/focus policies remain unchanged.
 All 7 new handoff replay tests, 49 native-tab replay tests and 223 Python tests
 pass. No app/helper or live reader was launched; nothing was installed or pushed.
-The fix is not installed or live-validated yet. See the
+At the offline checkpoint the fix was not installed or live-validated. See the
 [hidden-Zen diagnosis](native-tabs-diagnosis.md#hidden-zen-window-omitted-during-stock-to-fork-startup--2026-10-15).
+
+The later authorized release `0.21.3-aquaspace.20261015.2` is installed and
+running. The stock-to-fork run confirmed exact Zen window **28122** remained
+hidden on workspace **2**, original native/model focus was preserved, and
+**264 manager inventories** observed a peak of one manager. The broader
+all-window check remains failed for seven other IDs whose native AX/WindowServer
+inventories disagree; the scoped Zen success does not relabel that result.
+See the [live validation record and unresolved discrepancy](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).

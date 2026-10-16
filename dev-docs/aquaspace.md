@@ -1841,3 +1841,90 @@ not in the installed application; a separately authorized rebuild/install and
 live handoff remain pending. Creating the checkpoint involved no additional
 tests, builds, installations, app/helper launches or live checks.
 See the [full diagnosis and reproduction](native-tabs-diagnosis.md#hidden-zen-window-omitted-during-stock-to-fork-startup--2026-10-15).
+
+## Hidden Zen rebuild and ordered handoff validation after fafd604a — 2026-10-15
+
+The user authorized rebuilding/installing the hidden-Zen repair and testing the
+stock-to-fork handoff, with no push. Release
+`0.21.3-aquaspace.20261015.2` was built from
+`fafd604ae0dbf319d650052493321c9da2d0ccde` using the macOS 26.5 SDK and two
+workers. The build log is `.debug/aquaspace/hidden-zen-build.log`; the staged
+manifest is `.debug/aquaspace/release/build.json`. The signed application was
+installed at `/Applications/AquaSpace.app` in file-only mode, with no managers
+running at every installation checkpoint. Transaction:
+`/Applications/.aquaspace-update-4d863314b4374681bb0bf70b80d04e3d`.
+
+Installed release hashes:
+
+- App: `e3a444817cb26b68ac20a50a26f2f289b467e9c23dd1c285e7c3834cbae7b171`.
+- CLI: `d5293d058e8c0358a5d6b3bfd2a5ecca2e071596e284d7c601f81be3090e4524`.
+
+Initially neither manager was running. Read-only AX observation found original
+Zen PID **15654**, window **28122**, unhidden with standard-window subrole. The
+test therefore required hiding that background application before capturing the
+stock session; it did not move Zen to a different workspace or activate it.
+
+The first attempt, `.debug/aquaspace/hidden-zen-handoff/run-20261015-204839/`,
+installed the release and started stock AeroSpace alone, PID **37676**, birth
+`(1792111721, 605889)`. It stopped during strict native/model baseline capture
+when foreground changed between existing ChatGPT, Zen and Helium windows.
+No Zen hide, stock termination, AquaSpace launch or restoration write occurred.
+All **89 independent inventories** observed a peak of one manager, including
+**10 empty inventories**. The failed result remains recorded and is not a
+handoff pass. Stock remained the sole manager until the user confirmed that the
+desktop was idle for a retry. A resume-runner argument-parser import error was
+corrected before any native or process action; it did not launch another copy.
+
+The resumed run is
+`.debug/aquaspace/hidden-zen-handoff/run-20261015-205646/`. It revalidated and
+reused the exact recorded stock process and installed release without another
+installation or stock launch. It hid only background Zen after a coherent
+native/model focus capture. Stock then reported original Zen **28122** on
+workspace **2** with layout `macos_native_window_of_hidden_app`. The runner
+saved that session, confirmed stock PID **37676** exited, recorded an empty
+inventory at the spawn boundary, and launched installed AquaSpace exactly once
+with the saved session. There was no recovery launch, pause/resume watchdog,
+test workspace reassignment, window selection or harness focus write.
+
+The requested hidden-Zen and exclusive-manager checks passed:
+
+- Zen PID **15654** and its kernel birth identity are unchanged. Native AX
+  continues to expose exact window **28122**, now with hidden `AXDialog`
+  subrole. AquaSpace reports it on the same workspace **2** with the same hidden
+  layout/fullscreen fields. Five additional read-only observations confirmed
+  that exact native/model state. Zen was left hidden as stated before testing.
+- All **264 independent manager inventories** in the resumed run observed a
+  peak of one manager, including **two empty inventories** around the switch.
+  The only final manager is installed AquaSpace PID **45262**, kernel birth
+  `(1792112215, 825354)`. Its status reports `controlling`, `controlsWindows=true`,
+  `inventoryVerified=true`, `readOnly=false`, and no original peers.
+- All **31 post-handoff native/model focus observations**, spanning **14.54
+  seconds**, matched retained original ChatGPT window **28146**, PID **15689**,
+  workspace **1**. The runner issued no focus request.
+- Installed app/CLI hashes match the staged build. Original stock executable,
+  Homebrew CLI and user configuration hashes remain unchanged.
+
+The broader all-window preservation check did **not** pass. Seven other stock
+IDs were absent from AquaSpace's workspace inventory: **30583**, **29724**,
+**30197**, **29754**, **29598**, **30290** and **30682**. Read-only follow-up
+found every ID still in WindowServer metadata, but not in the owning apps'
+current AX window lists. Finder PID **684** exposes only its current window
+**30881** plus its desktop element; System Settings PID **738**, Obsidian PID
+**22595**, Vesktop PID **15177** and VSCodium PID **93525** expose no AX windows.
+The pre-handoff run did not record those apps' complete native AX memberships,
+so the cause and timing of that discrepancy remain unresolved. It is not
+classified as a verified tab collapse, window closure or preserved assignment.
+
+The original `failure.json` is retained. `targeted-verification.json` explicitly
+records `targeted_checks_passed=true` and
+`full_handoff_preservation_passed=false`; it does not replace or weaken the
+all-window check. `post-handoff-read-only.json` and
+`other-baseline-native-read-only.json` retain the follow-up observations. Thus
+this run validates the hidden-Zen fix and sole-controller handoff, while leaving
+broader window-inventory reconciliation for a separate investigation. No
+additional manager cycle, window mutation or live test followed those read-only
+checks. AquaSpace was left running. These notes form the local live-validation
+checkpoint after `fafd604a`, including the seven unresolved IDs and the failed
+broader comparison. Creating this documentation checkpoint involved no additional
+tests, builds, installations, app/helper launches or live checks. Nothing was
+pushed.
