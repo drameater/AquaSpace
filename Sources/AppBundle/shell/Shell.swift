@@ -99,7 +99,7 @@ extension Shell where T == any Command {
     @MainActor func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode {
         switch self {
             case .cmd(let command):
-                let exitCode = await WindowRestorationMutation.$isUserCommand.withValue(true) {
+                let exitCode = await WindowRestorationMutation.$isUserCommand.withValue(!WindowRestorationMutation.isAutomaticDiscovery) {
                     Int32ExitCode(rawValue: await command.run(env, io).rawValue)
                 }
                 if command.shouldResetClosedWindowsCache { resetClosedWindowsCache() }

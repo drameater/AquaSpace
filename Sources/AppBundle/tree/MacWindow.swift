@@ -278,24 +278,29 @@ private func unbindAndGetBindingDataForNewTilingWindow(_ workspace: Workspace, w
 
 @MainActor
 func runOnWindowDetected(ifConventional window: Window) async {
-    switch window.windowParentCases {
-        case .tilingContainer, .floatingWindowsContainer, .macosMinimizedWindowsContainer,
-             .macosFullscreenWindowsContainer, .macosHiddenAppsWindowsContainer:
-            let layout = global_layoutForNextDetectedWindow
-            global_layoutForNextDetectedWindow = nil
-            defer {
+    // Reapplying saved discovery rules is automatic initialization. A separate
+    // input task (or an explicit run-callback command) still supersedes pending
+    // restoration; it must not inherit this registration-only scope.
+    await WindowRestorationMutation.$isAutomaticDiscovery.withValue(true) {
+        switch window.windowParentCases {
+            case .tilingContainer, .floatingWindowsContainer, .macosMinimizedWindowsContainer,
+                 .macosFullscreenWindowsContainer, .macosHiddenAppsWindowsContainer:
+                let layout = global_layoutForNextDetectedWindow
+                global_layoutForNextDetectedWindow = nil
+                defer {
+                    if let layout {
+                        await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
+                            .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
+                    }
+                }
                 if let layout {
                     await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
                         .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
                 }
-            }
-            if let layout {
-                await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
-                    .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
-            }
-            _ = await onWindowDetected(.defaultEnv, CmdIoImpl.emptyStdinIgnoringOut, window)
-        case .macosPopupWindowsContainer, .unbound:
-            break
+                _ = await onWindowDetected(.defaultEnv, CmdIoImpl.emptyStdinIgnoringOut, window)
+            case .macosPopupWindowsContainer, .unbound:
+                break
+        }
     }
 }
 

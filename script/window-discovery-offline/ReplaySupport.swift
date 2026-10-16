@@ -86,6 +86,7 @@ extension AXUIElement {
     static var stops = 0
     static var mutations: [UInt32] = []
     static var foreground: Int32? = 99
+    static var detectedRule: ((MacWindow) async -> Void)?
 }
 @MainActor func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? { Simulation.owners }
 @MainActor func getWindowLevel(for id: UInt32) -> MacOsWindowLevel? { .normalWindow }
@@ -134,7 +135,10 @@ struct WorkspaceName {
     struct Parsed { let value: String?; func getIgnoringErrorsOrNil() -> String? { value } }
     static func parse(_ value: String) -> Parsed { Parsed(value: value.isEmpty ? nil : value) }
 }
-enum ReplayParentCase { case tilingContainer, floatingWindowsContainer, native, popup }
+enum ReplayParentCase {
+    case tilingContainer, floatingWindowsContainer, macosMinimizedWindowsContainer,
+         macosFullscreenWindowsContainer, macosHiddenAppsWindowsContainer, macosPopupWindowsContainer, unbound
+}
 @MainActor final class MacWindow {
     static var allWindowsMap: [UInt32: MacWindow] = [:]
     static var allWindows: [MacWindow] { Array(allWindowsMap.values) }
@@ -164,8 +168,12 @@ enum ReplayParentCase { case tilingContainer, floatingWindowsContainer, native, 
 
 typealias Window = MacWindow
 typealias NonLeafTreeNodeObject = ReplayParent
-struct CmdEnv {}
+struct CmdEnv {
+    static let defaultEnv = Self()
+    func withWindowId(_ id: UInt32) -> Self { self }
+}
 @MainActor final class CmdIo { func err(_ value: String) -> String { value } }
+@MainActor enum CmdIoImpl { static var emptyStdinIgnoringOut: CmdIo { CmdIo() } }
 struct BinaryExitCode: Sendable {
     let rawValue: Int32
     static let succ = Self(rawValue: 0)
@@ -190,6 +198,29 @@ indirect enum Shell<T> {
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
         moveWindowToWorkspace(window, workspace, io, focusFollowsWindow: false, failIfNoop: false)
     }
+}
+@MainActor struct ReplayFloatCommand: Command {
+    let window: MacWindow
+    var shouldResetClosedWindowsCache: Bool { true }
+    func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
+        window.bindAsFloatingWindow(to: window.nodeWorkspace!)
+        return .succ
+    }
+}
+@MainActor func onWindowDetected(_ env: CmdEnv, _ io: CmdIo, _ window: Window) async -> Int32ExitCode {
+    await Simulation.detectedRule?(window)
+    return Int32ExitCode(rawValue: 0)
+}
+struct LayoutCmdArgs {
+    enum LayoutDescription { case floating }
+    let rawArgs: [String]
+    let toggleBetween: [LayoutDescription]
+}
+@MainActor var global_layoutForNextDetectedWindow: LayoutCmdArgs.LayoutDescription?
+enum CmdStdin { case emptyStdin }
+struct LayoutCommand {
+    let args: LayoutCmdArgs
+    @MainActor func run(_ env: CmdEnv, _ stdin: CmdStdin) async { fatalError("Unused next-window layout") }
 }
 @MainActor struct FullscreenCmdArgs {
     enum Toggle { case on, off, toggle }

@@ -3,4 +3,5 @@
 enum WindowRestorationMutation {
     @TaskLocal static var isUserCommand = false
     @TaskLocal static var isSessionRestore = false
+    @TaskLocal static var isAutomaticDiscovery = false
 }

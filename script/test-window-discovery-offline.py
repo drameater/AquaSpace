@@ -128,6 +128,13 @@ BODY
     fullscreen = (production / 'command/impl/FullscreenCommand.swift').read_text()
     (source / 'FullscreenCommand.swift').write_text(fullscreen.replace('import AppKit\n', '').replace('import Common\n', '')
         .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+    mac_window = (production / 'tree/MacWindow.swift').read_text()
+    detected_start = '@MainActor\nfunc runOnWindowDetected('
+    detected_end = '@MainActor\nfunc onWindowDetected('
+    if mac_window.count(detected_start) != 1 or mac_window.count(detected_end) != 1:
+        raise RuntimeError('Automatic detection callback boundaries changed.')
+    (source / 'AutomaticDetection.swift').write_text(mac_window[
+        mac_window.index(detected_start):mac_window.index(detected_end)])
     tree = (production / 'tree/TreeNode.swift').read_text()
     bind_start = 'func bind(to newParent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) -> BindingData? {'
     bind_end = '        let result = unbindIfBound()'

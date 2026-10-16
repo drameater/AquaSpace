@@ -578,3 +578,45 @@ previously installed `0.21.3-aquaspace.20261015.3` does not contain this source-
 repair, and no new live-validation claim is made. Creating this local checkpoint
 involved no additional tests, builds, installations, app/helper launches or live
 checks. Nothing was pushed.
+
+## Automatic discovery callbacks versus new user intent — 2026-10-16
+
+During preflight for the authorized rebuild/install/handoff after `96ef60c5`,
+the user's existing floating-window discovery rules exposed an additional
+interaction. The new command provenance treated a normal registration callback's
+`layout floating` as fresh user intent. If a saved window returned through cold
+discovery, its floating rule could therefore discard pending restoration before
+the coordinator restored its saved workspace. The staged first build was not
+installed or launched before checking this interaction offline.
+
+The replay now extracts the actual `runOnWindowDetected` registration entrypoint
+as well as the real shell and pre-bind policy. An automatic floating rule
+reproduced the failure against the checkpoint: the 55-test run failed in that
+method with three assertions (lost pending assignment, wrong final workspace,
+and missing restoration mutation).
+
+The follow-up adds a task-local automatic-discovery scope only around normal
+registration callbacks. Shell dispatch in that scope does not claim new user
+intent. Independent input tasks still revoke pending assignments; an explicitly
+requested `run-callback` uses the separate direct entrypoint and also retains
+that protection. There is no global suppression flag and no change to native,
+process, root-token, ambiguity or exclusive-controller admission checks.
+
+All 56 discovery/deferred replay methods pass, including the new automatic-rule,
+independent-input and explicit-callback cases. The production app/CLI rebuild
+includes all three committed repairs and this follow-up; its source hashes are
+recorded in the staged build manifest. Build logs are
+`.debug/aquaspace/deferred-safety-build.log` (first, uninstalled build) and
+`.debug/aquaspace/deferred-safety-followup-build.log` (callback-corrected build).
+The failing and passing offline records are
+`.debug/aquaspace/seven-window-diagnosis/automatic-rule-{red,green}.log`.
+All **141 offline Swift methods** pass across discovery/deferred (56), ownership
+(27), native tabs (49) and hidden-window handoff (9); all **232 Python tests**
+also pass. The corrected signed release is installed as
+`0.21.3-aquaspace.20261016.2`. Its guarded native-Space handoff restored all six
+surviving deferred assignments, preserved all 15 original final model rows and
+restored original ChatGPT focus/fullscreen state. The automatic-callback source,
+regressions and these notes are included in this local checkpoint. Creating it
+involved no additional tests, builds, installations, app/helper launches or live
+checks; nothing was pushed.
+See the [installation, setup failures and successful live evidence](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16).

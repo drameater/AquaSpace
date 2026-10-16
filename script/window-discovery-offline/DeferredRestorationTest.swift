@@ -126,6 +126,8 @@ extension OfflineWindowDiscoveryTests {
         Simulation.owners = [42: [9]]; Simulation.processes = [9: owner()]
         Simulation.controls = true; Simulation.peers = []; Simulation.inventoryError = false
         Simulation.yields = 0; Simulation.stops = 0; Simulation.mutations = []; Simulation.foreground = 99
+        Simulation.detectedRule = nil
+        global_layoutForNextDetectedWindow = nil
         TrayMenuModel.shared.isEnabled = true; focus.windowOrNil = nil; Workspace.registry = [:]
         ReplayCoordinator.pendingRestoration = pending()
         ReplayCoordinator.restoringPending = false
@@ -179,7 +181,7 @@ extension OfflineWindowDiscoveryTests {
         let (_, window, root) = setup(); root.attributes["windowType"] = AxUiElementWindowType.popup
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
-        root.attributes["windowType"] = AxUiElementWindowType.window; window.specialParent = .native
+        root.attributes["windowType"] = AxUiElementWindowType.window; window.specialParent = .macosFullscreenWindowsContainer
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
         #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
@@ -331,7 +333,7 @@ extension OfflineWindowDiscoveryTests {
 
     @Test func ordinaryNativeNormalizationDoesNotDiscardAnUnrestoredAssignment() async {
         let (_, window, _) = setup()
-        window.specialParent = .native
+        window.specialParent = .macosFullscreenWindowsContainer
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
         #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
@@ -560,6 +562,51 @@ extension OfflineWindowDiscoveryTests {
         let json = try await ReplayCoordinator.sessionForUpdate()
         let exported = try JSONDecoder().decode(WindowManagerSession.self, from: Data(json.utf8))
         #expect(exported.windows.contains(["42", "saved", "floating", "true"]))
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func automaticDiscoveryFloatingRuleCannotDiscardSavedWorkspace() async {
+        let (_, window, _) = setup()
+        Simulation.detectedRule = { detected in
+            _ = await Shell<any Command>.cmd(ReplayFloatCommand(window: detected)).run(CmdEnv(), CmdIo())
+        }
+        await runOnWindowDetected(ifConventional: window)
+        #expect(window.isFloating)
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func independentUserMoveWhileAutomaticDetectionAwaitsStillWins() async {
+        let (_, window, _) = setup()
+        let input = Task { @MainActor in
+            await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo()).rawValue
+        }
+        Simulation.detectedRule = { _ in _ = await input.value }
+        await runOnWindowDetected(ifConventional: window)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func manuallyRequestedDetectionRuleStillSupersedesSavedIntent() async {
+        let (_, window, _) = setup()
+        Simulation.detectedRule = { detected in
+            _ = await Shell<any Command>.cmd(ReplayFloatCommand(window: detected)).run(CmdEnv(), CmdIo())
+        }
+        // Explicit run-callback invokes this entrypoint directly, outside the
+        // registration-only automatic-discovery scope.
+        _ = await onWindowDetected(CmdEnv(), CmdIo(), window)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "default")
+        #expect(window.isFloating)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
         #expect(Simulation.mutations.isEmpty)
     }
 

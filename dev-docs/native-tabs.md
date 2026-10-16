@@ -382,4 +382,17 @@ mutations now revoke affected intent before changing the model, root history is
 retained across failed reads, and export rechecks established continuity. All
 138 offline Swift and 232 Python tests pass, with full library compilation but
 no app/helper launch. This additional source repair forms a local checkpoint
-after `f60c1e5f` and is not installed or live-validated. See the [safety repair record](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).
+after `f60c1e5f`; at that offline checkpoint it was not installed or
+live-validated. See the [safety repair record](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).
+
+Those three repairs and an automatic-discovery callback follow-up are now
+installed as `0.21.3-aquaspace.20261016.2`. All 141 offline Swift and 232 Python
+tests pass. A fresh stock-to-fork native-Space handoff restored all six surviving
+historical assignments automatically; all 15 original final window rows,
+including existing Ghostty/Zen workspaces and original ChatGPT fullscreen state,
+match the baseline. Native/model focus returned to ChatGPT, the disposable
+fixture exited, and AquaSpace remained the sole verified controller. All 356
+independent inventories across the monitored attempts peaked at one manager.
+Vesktop 30682 remains retired/unavailable, not a seventh restoration pass.
+See the [latest installation and live-validation record](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16),
+including setup failures, geometry limits and the local checkpoint status.

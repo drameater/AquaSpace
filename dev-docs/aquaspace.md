@@ -2119,3 +2119,118 @@ installed CLI, native desktop reader or live harness was launched, nothing was
 installed or pushed, and the installed release is unchanged. The last installed
 `0.21.3-aquaspace.20261015.3` does not yet include this repair. See the
 [diagnosis, implementation and offline evidence](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).
+
+
+## Deferred-restoration safety install and handoff after 96ef60c5 — 2026-10-16
+
+The user authorized rebuilding/installing all three safety repairs and an idle
+stock-to-AquaSpace handoff, without pushing. Installed
+`/Applications/AquaSpace.app` is now **0.21.3-aquaspace.20261016.2**, built from
+checkpoint `96ef60c5dcaecc9952445efe184837b94b1d8392` plus the local automatic
+registration-callback follow-up described below. This is a build of a dirty
+working tree, not an unmodified checkpoint. The manifest records exact
+production-source hashes, which matched the checkout before installation.
+
+- App SHA-256: `77748777fe23e0b447038b28055997416c0de64949a9dc052ec907d98939a251`.
+- CLI SHA-256: `a0e76611d454ee4a57f6c6cebf074ba733abf94c973297cb0a2e6ff6bc47cb74`.
+- Installation transaction: `/Applications/.aquaspace-update-8ada41f676cf48b593cdd7bb38e55714`.
+
+Preflight found that normal `on-window-detected` floating rules would be tagged
+as fresh user commands and discard deferred intent during rediscovery. An
+additional offline reproduction failed against the checkpoint before repair.
+Normal registration now scopes its callbacks as automatic discovery; independent
+user commands and explicitly requested callbacks still supersede pending intent.
+The three new regressions cover each case without relaxing identity, native-root,
+ambiguity or controller admission. All **141 offline Swift methods** and **232
+Python tests** pass. See the [callback diagnosis and evidence](native-tabs-diagnosis.md#automatic-discovery-callbacks-versus-new-user-intent--2026-10-16).
+The first staged release `.20261016.1` was never installed/launched; the corrected
+release `.20261016.2` was rebuilt and signed before installation.
+
+The installer ran with all managers stopped and `restart=False`; every phase
+checkpoint required an empty kernel inventory. Stock AeroSpace PID **43345**,
+birth `(1792128166, 156414)`, was then launched alone. All 15 fresh baseline
+assignments were established and verified before the disposable fixture was
+created. The original stock executable, Homebrew CLI and user configuration
+hashes remained unchanged.
+
+Two setup attempts, `run-20261016-012231` and `run-20261016-012509`, stopped before
+handoff because adding a conventional tiled fixture cleared stock's fullscreen
+flag on original ChatGPT **28146**. The recorded mismatch was only that flag;
+workspace/layout assignments did not differ. Both fixtures exited after their
+drivers stopped; stock remained the sole manager. A subsequent preflight
+`run-20261016-012601` rejected the remaining flag difference before any fixture
+launch or window mutation. The successful continuation restored that one recorded
+flag only after rechecking the exact original foreground/process/window identity
+and every original owner. Its fixture advertises the native dialog subrole, so
+stock initially places it floating and does not disturb the original tiled
+fullscreen window. This changes fixture classification, not ownership checks or
+the production manager. The final exact-state assertions were retained.
+
+Successful evidence is in
+`.debug/aquaspace/deferred-safety-handoff/run-20261016-012615/`. The single-window
+AppKit fixture was **32446** on
+`deferred-safety-test-run-20261016-012615`. Its executable hash, process birth/exec
+generation, random protocol token, exact native AX membership and all-Spaces
+WindowServer owner were checked before its operations. Retained native foreground
+checks reject unrelated focus rather than activating over it.
+
+While the disposable fixture was in native fullscreen, fresh AXWindows omitted
+all six surviving historical target IDs even though stock retained their model
+rows. A fresh stock session was captured with complete native/process identity
+proof; every original row still matched the baseline. Stock then exited, empty
+inventory was verified, and installed AquaSpace **44913**, birth
+`(1792128389, 220998)`, was started once with that session. All six targets were
+absent from its cold model, while guarded export retained all six saved rows and
+matching owners. After exiting only the fixture's fullscreen, all six returned
+through normal discovery and restored automatically:
+
+| Window ID | Application | Saved/restored workspace | Layout |
+| --- | --- | --- | --- |
+| 30583 | Finder | 3 | floating |
+| 29724 | Finder | 1 | floating |
+| 29598 | System Settings | 1 | floating |
+| 30197 | Obsidian | 3 | h_tiles |
+| 29754 | Obsidian | 3 | h_tiles |
+| 30290 | VSCodium | 3 | h_tiles |
+
+No manual move was issued after the stock-to-fork handoff. The initial
+rediscovery observations still contained missing/staging rows; about **1.57
+seconds** after the first observation, all 15 original rows matched. That state
+remained stable for more than two seconds before focus restoration. Historical
+Vesktop **30682**, former PID **15177**, remains unavailable in the fresh native
+inventory and was excluded, not recreated or counted as a live pass.
+
+Final checks, made within that same run, confirmed:
+
+- All **15** original IDs retained their saved workspaces, model layout and
+  fullscreen fields; final identity-backed export matched every original owner.
+  Existing Ghostty **31814** remained on workspace **1**, Zen **28122** on
+  workspace **1**, and Helium **28101** on workspace **2**. Current assignments
+  were used rather than the previous day's saved placements.
+- Native/model focus returned to original ChatGPT **28146**, PID **15689**,
+  workspace **1**, with its retained selected native window and process identity
+  checked before activation. Its model fullscreen flag is again `true`.
+- The fixture exited, no test window remained, and workspace root layouts matched
+  the baseline. This is workspace/model-state preservation, not pixel-identical
+  geometry: handoff rebuilds tiling trees, and saved native metadata shows bounds
+  changes for Code **32232**, VMware **32116**, cmux **31967**, Messages **32139**
+  and Zen **28122**. None changed its workspace. No additional corrective window
+  mutations were made after the successful final verification.
+- All **138** independent kernel manager samples in the successful run peaked at
+  one, with **two empty samples**. Across the three monitored attempts, all
+  **356** samples peaked at one (16 empty). Empty launch-boundary checks also
+  enforced sequential launches; sampling alone is not proof of every instant.
+- Sole final AquaSpace **44913** reports `phase=controlling`,
+  `controlsWindows=true`, `inventoryVerified=true`, `readOnly=false`,
+  `originalPids=[]`, `sessionSchema=2`. Original stock/config hashes and installed
+  app/CLI hashes still match their preflight/staged values.
+
+The three reviewed safety failure paths remain covered by offline fault-injection
+regressions; no destructive owner/root replacement or second-manager race was
+injected on the user's live desktop. The actual deferred lifecycle and automatic
+floating-rule interaction passed against the installed production build. Live
+testing ended after the successful result; AquaSpace was left running. The
+callback fix, its offline regressions and updated notes are included in this
+local checkpoint. Creating the checkpoint involved no additional tests, builds,
+installations, app/helper launches or live checks. No remote was contacted and
+nothing was pushed.
