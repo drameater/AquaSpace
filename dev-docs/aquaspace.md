@@ -1978,3 +1978,104 @@ and these notes form the local checkpoint after `b0928c61`. Creating the checkpo
 involved no additional tests, builds, installations, app/helper launches or live
 checks. Nothing was pushed. See the [full implementation, safety rules and
 validation record](native-tabs-diagnosis.md#identity-safe-deferred-restoration-repair--2026-10-15).
+
+## Deferred-restoration install and native-Space handoff validation after de5541d9 — 2026-10-15
+
+The user authorized rebuilding/installing the deferred-restoration repair and
+testing stock-to-AquaSpace handoff, without pushing. Installed
+`/Applications/AquaSpace.app` is now **0.21.3-aquaspace.20261015.3**, built from
+`de5541d95c3806b558a34b06c51dd7fd0fafd07f`. The staged production-source hashes
+match the checkout; installation verifies the app/CLI signatures and hashes:
+
+- App: `0ec8f4fb4b6c1b00d85c8ff66293fc444eead84a0ef8951cc8a3aff49cdf1e83`.
+- CLI: `e830ab9efbe454858fd267a13118a81e4b9b2425589f81ef1d6dcf590ea0844b`.
+
+The release build completed after retrying debug-symbol generation outside the
+filesystem sandbox. A disposable AppKit fixture was separately compiled with the
+Command Line Tools compiler and an explicit macOS deployment target. It accepts
+commands only for its own single window, using a per-process random token;
+the runner verifies its process generation, protocol identity, exact native AX
+membership and WindowServer owner before mutations. No existing application's
+fullscreen state was changed for the successful test.
+
+The initial update attempt, `run-20261015-221000`, stopped after replacing files
+but before spawning the new manager because foreground focus changed from
+Ghostty **31814** to ChatGPT **28146**. The update journal retained launch intent;
+no replacement or recovery manager was started. A fresh read confirmed an empty
+manager inventory. After the user confirmed the desktop was idle, the runner
+used the installer's recovery operation with all managers stopped, then installed
+the same staged release with `restart=False`. The committed installation record is
+`/Applications/.aquaspace-update-cc1adbee2eb2415990c27cee8c884fe6`; the interrupted
+record `.aquaspace-update-f096a5c543a64678aa610ed79c222732` is recovered.
+
+Stock AeroSpace **8139**, birth `(1792116951, 884665)`, was then launched alone
+and all 12 saved window assignments were restored. The first fixture run,
+`run-20261015-221548`, rejected changed AX membership during its fullscreen
+transition, before a stock-to-fork handoff. The disposable fixture closed after
+its command pipe ended; stock remained the sole manager. A subsequent read-only
+baseline attempt, `run-20261015-221728`, stopped on changing session metadata,
+before launching a fixture or changing any window. The successful runner waits
+for exact fixture membership and fresh identity/session capture to stabilize;
+it does not admit changed membership or use a cached ownership result.
+
+The successful live record is
+`.debug/aquaspace/deferred-handoff/run-20261015-221802/`. It reused that exact
+stock process and installed release. A new disposable fixture entered native
+fullscreen on `deferred-handoff-test-run-20261015-221802`. With stock's AX roots
+already acquired, **all six surviving historical IDs disappeared from fresh
+AXWindows while remaining in stock's model**. The runner captured a fresh
+identity-backed stock session, verified unchanged application birth/exec/native
+ownership, stopped stock and observed empty inventories before starting the
+installed AquaSpace once with that session. No two manager processes overlapped.
+
+The requested deferred restoration is now live-validated for every surviving ID:
+
+| Window ID | Application | Saved and restored workspace | Final layout |
+| --- | --- | --- | --- |
+| 30583 | Finder | 1 | floating |
+| 29724 | Finder | 1 | floating |
+| 29598 | System Settings | 1 | floating |
+| 30197 | Obsidian | 3 | h_tiles |
+| 29754 | Obsidian | 3 | h_tiles |
+| 30290 | VSCodium | 3 | h_tiles |
+
+These are fresh saved assignments, including the user's current workspace 3
+placements; the historical workspace 1 snapshot was not imposed. All six were
+absent from AquaSpace's cold model, but its guarded `handoff-session` export
+retained their exact desired rows and matching owner identities. After the
+fixture exited fullscreen, fresh AX reads exposed all six. The first exposed
+observation still included staging-workspace rows; the next observation, about
+**0.79 seconds later**, showed all six on their saved workspaces. No manual
+move command was used after the stock-to-fork handoff. All 12 original rows,
+including layout and fullscreen fields, then matched the baseline exactly.
+
+The seventh historical ID, Vesktop **30682**, is unavailable: its original PID
+**15177** had exited before this test and the ID is absent from the all-Spaces
+WindowServer inventory. It was not added to the fresh session or resurrected.
+This is **six surviving assignments restored, one retired/unavailable**, not
+seven live restorations. The earlier failed run is preserved as historical
+evidence; this new controlled run demonstrates the repair and the native-Space
+omission mechanism, without claiming to prove the cause of the old recording.
+
+Final checks confirmed:
+
+- Original Ghostty process **7190** / window **31814** regained native/model
+  focus on workspace **1** after its background assignment had restored. Its
+  retained native selection and process identity were checked before activation.
+- The fixture exited; all **12** original window rows remain exactly equal to
+  their baseline, and the final export contains matching identities for all 12.
+- All **122** independent manager samples in the successful run observed at most
+  one process, including **two empty samples** at handoff. Across the monitored
+  installation/fixture attempts, all **256** samples likewise peaked at one.
+- The sole final manager is installed AquaSpace PID **9465**, birth
+  `(1792117092, 152606)`, reporting `controlling`, `controlsWindows=true`,
+  `inventoryVerified=true`, `readOnly=false`, `originalPids=[]`, `sessionSchema=2`.
+- Original stock executable, Homebrew CLI and user configuration hashes are
+  unchanged; installed app/CLI hashes match the staged release. No remote was
+  contacted and nothing was pushed.
+
+AquaSpace was left running. No production source change or additional live test
+followed the successful result. These notes form the local live-validation
+checkpoint after `de5541d9`. Creating this documentation checkpoint involved no
+additional tests, builds, installations, app/helper launches or live checks.
+Nothing was pushed.

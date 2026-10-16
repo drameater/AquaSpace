@@ -435,3 +435,48 @@ after `b0928c61`; creating it involved no additional tests, builds, installation
 app/helper launches or live checks. The installed release and the failed broader
 live handoff result are unchanged. Logs/source hashes are under
 `.debug/aquaspace/seven-window-diagnosis/deferred-*`.
+
+## Deferred-restoration live rediscovery proof after de5541d9 — 2026-10-15
+
+The repair is now installed as `0.21.3-aquaspace.20261015.3` and tested with an
+exclusive, serialized stock-to-fork handoff. A disposable AppKit window entered
+native fullscreen on a dedicated test workspace after stock acquired existing
+AX roots. All six surviving historical IDs then disappeared from fresh owning
+applications' AXWindows while stock continued reporting them. A fresh session
+captured their current workspace/layout/fullscreen rows and bracketed native
+owner/process-generation identities. Stock exited completely before the new
+AquaSpace was launched with that session.
+
+Cold AquaSpace did not discover any of the six. Its guarded session export
+nevertheless retained every saved row and identity. Leaving fullscreen on only
+the disposable fixture made the six ordinary background windows discoverable.
+The saved rediscovery observations show staging-workspace placements followed
+by successful automatic pending restoration: Finder **30583**, **29724**, and
+System Settings **29598** on workspace **1**; Obsidian **30197**, **29754**, and
+VSCodium **30290** on workspace **3**. All six had their correct workspace by
+the observation about 0.79 seconds after the first AX exposure. No external move
+command repaired these rows after handoff. All 12 original baseline rows later
+matched exactly, including layout/fullscreen, and original Ghostty **31814**
+regained native/model focus on workspace **1** before owned fixture cleanup.
+
+Vesktop PID **15177** had already exited and window **30682** was absent from
+the all-Spaces native inventory. It was excluded from fresh metadata and was
+not recreated. Thus the live result covers all six surviving historical windows;
+the seventh cannot be tested as a surviving window. This controlled run proves
+the native-Space AX omission mechanism, not the unrecorded cause of the older
+seven-ID failure.
+
+The successful run recorded **122** independent inventories, peak **one** manager
+and two empty samples at handoff. Across the installation and fixture attempts,
+all **256** monitored inventories peaked at one. AquaSpace **9465**, birth
+`(1792117092, 152606)`, remained the sole controller with verified inventory and
+schema 2. The earlier guarded stops and the interrupted update's explicit
+recovery are retained, rather than relabeled as successes. The final fixture
+exited and no production safety check was relaxed. No source repair was needed
+during this validation; stock/config hashes are unchanged and nothing was pushed.
+
+Evidence is in `.debug/aquaspace/deferred-handoff/run-20261015-221802/`, especially
+`fullscreen-omission.json`, `stock-handoff-session.json`, `cold-discovery.json`,
+`cold-pending-export.json`, `rediscovery-observations.json`, `final-export.json`,
+`manager-samples.jsonl` and `results.json`. See the [installation, guarded stops,
+identities and full validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).

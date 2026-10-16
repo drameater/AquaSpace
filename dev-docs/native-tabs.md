@@ -359,6 +359,18 @@ rediscovery, with process/native-owner/root/controller checks before a backgroun
 model update. It cannot override foreground/user changes, popup classification or
 proven native-tab ownership. Legacy snapshots cannot authorize delayed moves.
 All 124 offline Swift tests and 232 Python tests pass; library/CLI compilation is
-validated without executing either product. The source repair is not installed
-or live-validated, and the historical broader handoff failure remains unchanged.
+validated without executing either product during that offline checkpoint. The
+historical broader handoff failure remains unchanged.
 See the [deferred-restoration repair record](native-tabs-diagnosis.md#identity-safe-deferred-restoration-repair--2026-10-15).
+
+The repair is now installed as `0.21.3-aquaspace.20261015.3` from `de5541d9`.
+A controlled native-fullscreen test on a disposable workspace reproduced fresh
+AX omission of all six surviving historical IDs. Their authenticated assignments
+remained pending through the exclusive stock-to-fork handoff and restored
+automatically on rediscovery: Finder/System Settings on workspace 1 and
+Obsidian/VSCodium on workspace 3. All 12 original rows and original Ghostty focus
+were preserved at completion; the fixture exited and AquaSpace was left as the
+sole verified controller. All 256 monitored samples across the attempts peaked
+at one manager. The seventh historical ID, Vesktop 30682, was already gone and
+was not recreated; it is not counted as a live-restoration pass. See the
+[live installation and validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
