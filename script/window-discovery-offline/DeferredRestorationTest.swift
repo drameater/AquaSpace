@@ -336,10 +336,231 @@ extension OfflineWindowDiscoveryTests {
         #expect(Simulation.mutations.isEmpty)
         #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
         window.specialParent = nil
-        window.parent = Workspace.get(byName: "normalized").rootTilingContainer
+        window.bind(to: Workspace.get(byName: "normalized").rootTilingContainer, adaptiveWeight: 0, index: 0)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        Simulation.mutations = []
         await ReplayCoordinator.restorePendingAssignments()
         #expect(window.nodeWorkspace?.name == "saved")
         #expect(Simulation.mutations == [42])
+    }
+
+    @Test func explicitBackgroundMoveBeforeFirstRestorationAttemptWins() async {
+        let (_, window, _) = setup()
+        let result = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+            workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+        #expect(result.rawValue == 0)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+    }
+
+    @Test func failedSecondProofCannotForgetTheFirstRootBeforeReplacement() async {
+        let (app, window, root) = setup()
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        let replacement = AXUIElement(owner: 42)
+        replacement.attributes["pid"] = Int32(9)
+        replacement.set(Ax.childrenAttr, [AXUIElement]())
+        app.seed([replacement])
+        app.axApp.threadGuarded.set(Ax.windowsAttr, [(windowId: UInt32(42), ax: replacement)])
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "default")
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+    }
+
+    @Test func exportCannotLaunderRememberedRootReplacementThroughRestart() async throws {
+        let (app, _, root) = setup()
+        root.attributes["windowType"] = AxUiElementWindowType.popup
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(ReplayCoordinator.restorationRootTokens[42] != nil)
+        let replacement = AXUIElement(owner: 42)
+        replacement.attributes["pid"] = Int32(9)
+        replacement.set(Ax.childrenAttr, [AXUIElement]())
+        app.seed([replacement])
+        app.axApp.threadGuarded.set(Ax.windowsAttr, [(windowId: UInt32(42), ax: replacement)])
+        let exported = try await ReplayCoordinator.captureCurrentModel()
+        #expect(exported.windows.first?.dropFirst().first == "default")
+        let decoded = try JSONDecoder().decode(WindowManagerSession.self, from: JSONEncoder().encode(exported))
+        ReplayCoordinator.pendingRestoration = PendingWindowRestoration(windows: decoded.windows,
+            owners: decoded.owners ?? [:], workspaces: decoded.workspaces)
+        ReplayCoordinator.restorationRootTokens = [:]
+        ReplayCoordinator.restorationAnchors = [:]
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(MacWindow.allWindowsMap[42]?.nodeWorkspace?.name == "default")
+    }
+
+    @Test func explicitFullscreenBeforeFirstAnchorSupersedesSavedState() async {
+        let (_, window, _) = setup()
+        let result = await Shell<any Command>.cmd(FullscreenCommand(args: FullscreenCmdArgs(
+            window: window, toggle: .on))).run(CmdEnv(), CmdIo())
+        #expect(result.rawValue == 0 && window.isFullscreen)
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "default")
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+    }
+
+    @Test func unrelatedCommandCannotCancelAnotherWindowsPendingAssignment() async {
+        let (app, window, _) = setup()
+        let unrelated = MacWindow(99, app: app)
+        MacWindow.allWindowsMap[99] = unrelated
+        _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: unrelated,
+            workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func internalStartupCommandProvenanceDoesNotLeakToLaterUserCommand() async {
+        let (_, window, _) = setup()
+        _ = await WindowRestorationMutation.$isSessionRestore.withValue(true) {
+            await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "startup"))).run(CmdEnv(), CmdIo())
+        }
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+            workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func failedSecondProofWithUnchangedRootRemainsRetryable() async {
+        let (app, window, root) = setup()
+        let originalToken = app.windows.threadGuarded[42]?.restorationToken
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(ReplayCoordinator.restorationRootTokens[42] == originalToken)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        root.set(Ax.childrenAttr, [AXUIElement]())
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func unreadableEstablishedRootBlocksExportWithoutDroppingRetryableIntent() async throws {
+        let (app, _, root) = setup()
+        root.attributes["windowType"] = AxUiElementWindowType.popup
+        await ReplayCoordinator.restorePendingAssignments()
+        let token = ReplayCoordinator.restorationRootTokens[42]
+        app.axApp.threadGuarded.set(Ax.windowsAttr, [WindowIdAndAxUiElement]())
+        do {
+            _ = try await ReplayCoordinator.sessionForUpdate()
+            Issue.record("Unverifiable root must not be exported")
+        } catch {}
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        #expect(ReplayCoordinator.restorationRootTokens[42] == token)
+        app.axApp.threadGuarded.set(Ax.windowsAttr, [(windowId: UInt32(42), ax: root)])
+        let json = try await ReplayCoordinator.sessionForUpdate()
+        let exported = try JSONDecoder().decode(WindowManagerSession.self, from: Data(json.utf8))
+        #expect(exported.windows.contains(["42", "saved", "floating", "true"]))
+        #expect(exported.owners?["42"] == owner())
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func undiscoveredUntouchedAssignmentStillSurvivesExport() async throws {
+        _ = setup()
+        MacWindow.allWindowsMap = [:]
+        let json = try await ReplayCoordinator.sessionForUpdate()
+        let exported = try JSONDecoder().decode(WindowManagerSession.self, from: Data(json.utf8))
+        #expect(exported.windows == [["42", "saved", "floating", "true"]])
+        #expect(exported.owners?["42"] == owner())
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func rootReplacementDuringExportReadCannotCarryOldIntent() async throws {
+        let (app, _, root) = setup()
+        root.attributes["windowType"] = AxUiElementWindowType.popup
+        await ReplayCoordinator.restorePendingAssignments()
+        app.thread?.afterRead = {
+            let replacement = AXUIElement(owner: 42)
+            replacement.attributes["pid"] = Int32(9)
+            replacement.set(Ax.childrenAttr, [AXUIElement]())
+            app.seed([replacement])
+            app.axApp.threadGuarded.set(Ax.windowsAttr, [(windowId: UInt32(42), ax: replacement)])
+        }
+        let json = try await ReplayCoordinator.sessionForUpdate()
+        let exported = try JSONDecoder().decode(WindowManagerSession.self, from: Data(json.utf8))
+        #expect(exported.windows.first?.dropFirst().first == "default")
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func peerArrivalAndUncertainInventoryDuringExportCannotReturnAUsableSession() async {
+        for unreadable in [false, true] {
+            let (app, _, root) = setup()
+            root.attributes["windowType"] = AxUiElementWindowType.popup
+            await ReplayCoordinator.restorePendingAssignments()
+            app.thread?.afterRead = {
+                if unreadable { Simulation.inventoryError = true }
+                else { Simulation.peers = [123] }
+            }
+            do {
+                _ = try await ReplayCoordinator.sessionForUpdate()
+                Issue.record("Changed controller admission must reject export")
+            } catch {}
+            #expect(!Simulation.controls)
+            #expect(Simulation.mutations.isEmpty)
+        }
+    }
+
+    @Test func independentUserTaskIsNotSuppressedByAnAwaitedStartupRestore() async {
+        let (_, window, _) = setup()
+        // Create input outside the restore scope, like the server listener.
+        let input = Task { @MainActor in
+            #expect(!WindowRestorationMutation.isSessionRestore)
+            return await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo()).rawValue
+        }
+        await WindowRestorationMutation.$isSessionRestore.withValue(true) {
+            #expect(WindowRestorationMutation.isSessionRestore)
+            _ = await input.value
+            #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+        }
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func reusedNumericIDOnAnUnregisteredModelCannotCancelTheRealAssignment() async {
+        let (app, real, _) = setup()
+        let impostor = MacWindow(42, app: app)
+        _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: impostor,
+            workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(real.nodeWorkspace?.name == "saved")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func unavailableSecondExportProofPreservesEstablishedRootAndPendingState() async throws {
+        let (app, _, root) = setup()
+        root.attributes["windowType"] = AxUiElementWindowType.popup
+        await ReplayCoordinator.restorePendingAssignments()
+        let token = ReplayCoordinator.restorationRootTokens[42]
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        do {
+            _ = try await ReplayCoordinator.sessionForUpdate()
+            Issue.record("A failed second export proof must block export")
+        } catch {}
+        #expect(ReplayCoordinator.restorationRootTokens[42] == token)
+        #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
+        root.set(Ax.childrenAttr, [AXUIElement]())
+        let json = try await ReplayCoordinator.sessionForUpdate()
+        let exported = try JSONDecoder().decode(WindowManagerSession.self, from: Data(json.utf8))
+        #expect(exported.windows.contains(["42", "saved", "floating", "true"]))
+        #expect(Simulation.mutations.isEmpty)
     }
 
 }

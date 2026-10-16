@@ -93,11 +93,12 @@ BODY
     static func localCommand(_ args: [String]) async throws { commands.append(args); try onCommand?(args) }
 """ + handoff[handoff.index(restore):handoff.index(switch)] + '\n}\n')
     anchor_start, anchor_end = '    private struct RestorationAnchor:', '    private static func captureOwners('
-    coordinator_start, coordinator_end = '    static func reconcilePendingRestoration()', '    private static func captureCurrentModel()'
+    coordinator_start, coordinator_end = '    static func reconcilePendingRestoration()', '    private static func capture(_ command:'
     if any(handoff.count(marker) != 1 for marker in (anchor_start, anchor_end, coordinator_start, coordinator_end)):
         raise RuntimeError('Deferred adapter extraction boundaries changed.')
     anchor = handoff[handoff.index(anchor_start):handoff.index(anchor_end)].replace('private ', '')
-    coordinator = handoff[handoff.index(coordinator_start):handoff.index(coordinator_end)]
+    coordinator = handoff[handoff.index(coordinator_start):handoff.index(coordinator_end)].replace('private static func captureCurrentModel', 'static func captureCurrentModel')
+    capture_owners = handoff[handoff.index(anchor_end):handoff.index(coordinator_start)]
     (source / 'ReplayCoordinator.swift').write_text('''import Foundation
 @MainActor enum ReplayCoordinator {
     static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
@@ -108,7 +109,39 @@ BODY
     static func freezeAXWrites() { Simulation.controls = false }
     static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
     static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
-''' + anchor + coordinator + '\n}\n')
+    enum HandoffError: Error { case message(String) }
+''' + anchor + capture_owners + coordinator + '\n}\n')
+    # Exercise the real shell command entrypoint and movement helper. Only tree
+    # storage/AX are replaced; the pre-bind policy is extracted from production.
+    shell = (production / 'shell/Shell.swift').read_text()
+    shell_start = '    @MainActor func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode {'
+    shell_end = '\n    @discardableResult @MainActor func run('
+    if shell.count(shell_start) != 1 or shell.count(shell_end) != 1:
+        raise RuntimeError('Shell command extraction boundaries changed.')
+    (source / 'ReplayCommandRunner.swift').write_text('extension Shell where T == any Command {\n' +
+        shell[shell.index(shell_start):shell.index(shell_end)] + '\n}\n')
+    move = (production / 'command/impl/MoveNodeToWorkspaceCommand.swift').read_text()
+    move_start = '@MainActor\nfunc moveWindowToWorkspace('
+    if move.count(move_start) != 1:
+        raise RuntimeError('Move command extraction boundary changed.')
+    (source / 'MoveWindow.swift').write_text(move[move.index(move_start):])
+    fullscreen = (production / 'command/impl/FullscreenCommand.swift').read_text()
+    (source / 'FullscreenCommand.swift').write_text(fullscreen.replace('import AppKit\n', '').replace('import Common\n', '')
+        .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+    tree = (production / 'tree/TreeNode.swift').read_text()
+    bind_start = 'func bind(to newParent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) -> BindingData? {'
+    bind_end = '        let result = unbindIfBound()'
+    if tree.count(bind_start) != 1 or tree.count(bind_end) != 1:
+        raise RuntimeError('Tree mutation extraction boundaries changed.')
+    before_bind = tree[tree.index(bind_start) + len(bind_start):tree.index(bind_end)]
+    (source / 'ReplayBeforeBind.swift').write_text('extension MacWindow {\nfunc beforeBind() {\n' +
+        before_bind.replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n}\n')
+    mutation = production / 'model/WindowRestorationMutation.swift'
+    destination = source / mutation.name
+    if mutation.exists():
+        destination.write_text(mutation.read_text())
+    elif destination.exists():
+        destination.unlink()
     fixture_root = root / 'script/window-discovery-offline'
     (source / 'ReplaySupport.swift').write_text((fixture_root / 'ReplaySupport.swift').read_text())
     (tests / 'WindowDiscoveryTest.swift').write_text((fixture_root / 'WindowDiscoveryTest.swift').read_text())

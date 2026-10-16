@@ -201,11 +201,11 @@ enum WindowManagerHandoff {
         // Freeze synchronously, before any AX/network await. Disabled AeroSpace's
         // normal layout path unhides every window, which must not run in a handoff.
         pauseWindowManagementForHandoff()
-        let session = captureCurrentModel()
-        pendingRestoration.removeAll()
-        restorationAnchors.removeAll()
-        restorationRootTokens.removeAll()
         do {
+            let session = try await captureCurrentModel()
+            pendingRestoration.removeAll()
+            restorationAnchors.removeAll()
+            restorationRootTokens.removeAll()
             await activateMode_nonCancellable(nil)
             // Drain canceled AX work before launching another controller.
             for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
@@ -266,12 +266,12 @@ enum WindowManagerHandoff {
         }
     }
 
-    static func sessionForUpdate() throws -> String {
+    static func sessionForUpdate() async throws -> String {
         guard canControlWindows, TrayMenuModel.shared.isEnabled,
               try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
             throw HandoffError.message("Cannot capture a session without exclusive window control")
         }
-        let session = captureCurrentModel()
+        let session = try await captureCurrentModel()
         guard canControlWindows, try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
             throw HandoffError.message("Window-control ownership changed during capture")
         }
@@ -305,6 +305,35 @@ enum WindowManagerHandoff {
         }
     }
 
+    /// Explicit commands supersede saved intent even before the first anchor or
+    /// conventional discovery. Automatic normalization and our startup commands
+    /// do not acquire user-mutation provenance.
+    static func cancelPendingForUserMutation(_ windows: [Window]) {
+        guard WindowRestorationMutation.isUserCommand, !WindowRestorationMutation.isSessionRestore else { return }
+        for window in windows where MacWindow.allWindowsMap[window.windowId] === window &&
+            pendingRestoration.assignments[window.windowId]?.owner.pid == window.app.pid {
+            discardPendingRestoration(window.windowId)
+        }
+    }
+
+    private static func discardPendingRestoration(_ id: UInt32) {
+        pendingRestoration.discard(id)
+        restorationAnchors.removeValue(forKey: id)
+        restorationRootTokens.removeValue(forKey: id)
+    }
+
+    /// Remember every successful read, including one followed by an unavailable
+    /// second proof. Never replace established root history with a new token.
+    private static func rememberRestorationRoot(_ token: UUID, for id: UInt32) -> Bool {
+        guard pendingRestoration.assignments[id] != nil else { return false }
+        if let previous = restorationRootTokens[id], previous != token {
+            discardPendingRestoration(id)
+            return false
+        }
+        restorationRootTokens[id] = token
+        return true
+    }
+
     static func restorePendingAssignments() async {
         guard canControlWindows, TrayMenuModel.shared.isEnabled, !restoringPending,
               !pendingRestoration.assignments.isEmpty else { return }
@@ -332,7 +361,8 @@ enum WindowManagerHandoff {
             restorationAnchors[id] = anchor
             var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
             let initialRootToken = proof?.token
-            if proof != nil, proof?.type != .popup {
+            let initialRootAccepted = proof.map { rememberRestorationRoot($0.token, for: id) } ?? true
+            if initialRootAccepted, proof != nil, proof?.type != .popup {
                 proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
             }
             // A fresh native read may suspend. Revalidate model, native ownership,
@@ -351,10 +381,9 @@ enum WindowManagerHandoff {
             let changed = MacWindow.allWindowsMap[id] !== window || RestorationAnchor(window) != anchor ||
                 focus.windowOrNil?.windowId == id || proof?.focused == true
             // Token checks are separate to keep an unavailable AX read retryable.
-            let rootChanged = proof.map { value in
-                initialRootToken != value.token || (restorationRootTokens[id].map { $0 != value.token } ?? false)
+            let rootChanged = !initialRootAccepted || proof.map { value in
+                initialRootToken != value.token || !rememberRestorationRoot(value.token, for: id)
             } ?? false
-            if let proof { restorationRootTokens[id] = proof.token }
             let owners = getRestorationWindowOwners()
             if owners == nil { pendingRestoration.removeAll(); return }
             let currentOwner = WindowManagerProcesses.restorationOwner(assignment.owner.pid)
@@ -389,7 +418,22 @@ enum WindowManagerHandoff {
         }
     }
 
-    private static func captureCurrentModel() -> WindowManagerSession {
+    private static func captureCurrentModel() async throws -> WindowManagerSession {
+        reconcilePendingRestoration()
+        // An update must not erase established root history. An unavailable AX
+        // read blocks export (leaving the running manager alone); a proven root
+        // replacement revokes stale intent before any saved row can override it.
+        for id in Array(restorationRootTokens.keys).sorted() where pendingRestoration.assignments[id] != nil {
+            guard let window = MacWindow.allWindowsMap[id],
+                  let proof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+                throw HandoffError.message("Cannot verify pending window root continuity for export")
+            }
+            guard rememberRestorationRoot(proof.token, for: id) else { continue }
+            guard let finalProof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+                throw HandoffError.message("Cannot verify pending window root continuity for export")
+            }
+            _ = rememberRestorationRoot(finalProof.token, for: id)
+        }
         reconcilePendingRestoration()
         let windows = MacWindow.allWindows.compactMap { window -> String? in
             guard window.isBound, let workspace = window.nodeWorkspace,
@@ -437,7 +481,9 @@ enum WindowManagerHandoff {
 
     private static func localCommand(_ args: [String]) async throws -> String {
         guard let command = parseCommand(args).cmdOrNil else { throw HandoffError.message("Invalid handoff command") }
-        let result = await command.run(.defaultEnv, .emptyStdin)
+        let result = await WindowRestorationMutation.$isSessionRestore.withValue(true) {
+            await command.run(.defaultEnv, .emptyStdin)
+        }
         guard result.exitCode.rawValue == 0 else { throw HandoffError.message(result.stderr.joined(separator: "\n")) }
         return result.stdout.joined(separator: "\n")
     }

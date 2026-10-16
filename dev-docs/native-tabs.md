@@ -374,3 +374,12 @@ sole verified controller. All 256 monitored samples across the attempts peaked
 at one manager. The seventh historical ID, Vesktop 30682, was already gone and
 was not recreated; it is not counted as a live-restoration pass. See the
 [live installation and validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
+
+The later offline review found and repaired three additional sequences: explicit
+background changes before the first anchor, forgotten first-root proof after a
+second-read failure, and stale root intent surviving export/restart. Command
+mutations now revoke affected intent before changing the model, root history is
+retained across failed reads, and export rechecks established continuity. All
+138 offline Swift and 232 Python tests pass, with full library compilation but
+no app/helper launch. This additional source repair forms a local checkpoint
+after `f60c1e5f` and is not installed or live-validated. See the [safety repair record](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).

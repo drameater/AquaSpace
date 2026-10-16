@@ -480,3 +480,101 @@ Evidence is in `.debug/aquaspace/deferred-handoff/run-20261015-221802/`, especia
 `cold-pending-export.json`, `rediscovery-observations.json`, `final-export.json`,
 `manager-samples.jsonl` and `results.json`. See the [installation, guarded stops,
 identities and full validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
+
+## Deferred-restoration command and root-continuity safety repair — 2026-10-16
+
+The offline review of checkpoint `f60c1e5f` found three additional paths that
+the successful six-window live run did not exercise. The user authorized fixing
+them and adding offline regressions, with no app/helper launches, live tests,
+installation or push. The earlier installed/live result remains historical;
+this repair forms a local source-only checkpoint after `f60c1e5f`.
+
+### Reproduced failures
+
+1. A newly registered background window is published before registration awaits
+   callbacks and before the deferred coordinator records its first model anchor.
+   An explicit background move during that interval, or before the first retry
+   of a failed startup assignment, was accepted as the untouched baseline. The
+   later restore overwrote the user's workspace with stale saved intent.
+2. A successful first AX proof established root A, but only the final proof's
+   token was retained. If the second read became unavailable, the coordinator
+   forgot A. Replacement root B in the same process and under the same numeric
+   ID could then pass B/B checks on a later attempt and inherit A's assignment.
+3. Session export checked native/process identity and model state but omitted
+   registered-root continuity. Export after A was replaced with B could substitute
+   A's pending desired row for B's current row. Restart removed the remembered
+   token and turned this into a newly admitted stale assignment.
+
+All three new regression methods reproduced their specific failure against the
+checkpoint: the 42-test replay failed in those three methods with six assertion
+failures. Its export reproduction exercises the actual `captureCurrentModel`
+method and an encode/decode/reload, rather than only the pure row-merging helper.
+
+### Source changes
+
+`WindowRestorationMutation` supplies task-local command/initial-restore provenance.
+The real shell dispatcher marks explicit command execution. A tree bind under
+that provenance revokes pending assignments for the affected registered windows,
+including descendants of moved containers, before the model changes. The
+fullscreen command does the same before changing its flag. Revocation checks the
+exact registered model object and its matching application PID, so an unrelated
+window or an impostor sharing a numeric ID cannot cancel another assignment.
+It works before any anchor exists and while a candidate is not yet conventional.
+
+Internal initial restoration commands have a separate task-local scope and do
+not revoke their own retryable intent. That scope cannot suppress an independent
+user input task while the initial command awaits. Automatic discovery/native
+normalization outside command execution retains its existing eligibility and
+anchor behavior. No global suppression flag or ownership bypass was added.
+
+The coordinator now remembers each successful root proof immediately, before
+another read can suspend. A failed second read leaves the original token and
+pending assignment retryable. A different token revokes intent; it is never
+written over the established token as a new baseline. The existing final
+process/native-owner/model/focus/controller checks remain in place.
+
+Session capture now verifies any established pending root with two fresh AX
+proofs before carrying its saved intent. A changed root revokes the old pending
+row; export preserves the current model row instead. An unavailable proof blocks
+the export and preserves retryable pending state. The updater consequently
+receives an error before stopping the running manager, without a legacy fallback.
+Assignments never discovered or proved still survive export using their original
+native/process continuity checks; the repair does not invent AX roots for them.
+
+`sessionForUpdate` retains exclusive-controller checks both before and after the
+new awaits. The switch-to-stock path also uses the validated capture, after
+freezing writes; failure exits without starting another manager. Controller locks,
+peer classification, admission policy, native-tab precedence and ambiguity
+rejection are unchanged.
+
+### Offline verification
+
+The replay now extracts the production shell dispatcher, movement helper,
+fullscreen command, pre-bind mutation policy, owner capture, complete deferred
+coordinator and guarded update-export method. AX, processes, model storage and
+controller admission use memory-only backends. New coverage includes the three
+original failures, explicit fullscreen before the first anchor, unrelated and
+impostor windows, initial-restore versus independent user tasks, automatic native
+normalization, unchanged-root retries, first/second export-read failures, a root
+replacement during export, untouched undiscovered export and peer/inventory
+changes across export awaits.
+
+All **138 offline Swift test methods** pass: **53** discovery/deferred tests,
+**27** ownership/process tests, **49** native-tab tests and **9** hidden-window
+tests. All **232 Python tests** also pass. The complete `AppBundle` library
+compile check uses the changed production sources without executing the library
+or building/launching an app or helper. An initial compile attempt hit a denied
+global module-cache path; retrying with caches inside the repository resolved it.
+Whitespace checks pass. No existing ownership or ambiguity regression was removed
+or relaxed.
+
+Evidence and source hashes are under
+`.debug/aquaspace/seven-window-diagnosis/safety-*`, including the original failing
+`safety-red.log`, final `safety-final-replay.log`, `safety-ownership.log`,
+`safety-tabs.log`, `safety-hidden.log`, `safety-python.log` and
+`safety-library-exact-source.log`. No app/helper, installed CLI, native desktop
+reader or live harness was launched; nothing was installed or pushed. The
+previously installed `0.21.3-aquaspace.20261015.3` does not contain this source-only
+repair, and no new live-validation claim is made. Creating this local checkpoint
+involved no additional tests, builds, installations, app/helper launches or live
+checks. Nothing was pushed.

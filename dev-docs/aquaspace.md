@@ -2079,3 +2079,43 @@ followed the successful result. These notes form the local live-validation
 checkpoint after `de5541d9`. Creating this documentation checkpoint involved no
 additional tests, builds, installations, app/helper launches or live checks.
 Nothing was pushed.
+
+## Offline deferred-restoration safety repair after f60c1e5f — 2026-10-16
+
+The user authorized fixing all three gaps found in the offline checkpoint review,
+with no apps/helpers, live tests, installation or push. All three were reproduced
+against the checkpoint before the fix: an explicit background move before the
+first anchor was undone; a failed second AX read forgot the first root; and an
+update export carried stale pending intent after a root replacement.
+
+The shell now tags explicit command execution with task-local provenance. Tree
+binding and fullscreen changes revoke affected windows' pending intent before
+mutation, even without an anchor, after checking the exact registered model and
+application PID. Internal startup restoration has a separate task-local scope;
+it cannot suppress a separate user input task while awaiting work. Automatic
+native normalization continues to preserve retryable assignments.
+
+Each successful AX proof now records root continuity immediately. Failure of a
+later read cannot erase it, and a different token revokes the assignment. Export
+also verifies established roots twice, before carrying pending metadata. Proven
+replacement preserves the current model row instead of the stale desired row;
+an unavailable proof rejects export without discarding retryable pending state.
+Never-discovered assignments still survive using their native/process continuity
+checks. Controller admission is rechecked after export awaits. No ownership,
+ambiguity, native-tab or controller-lock check was weakened.
+
+All **138 offline Swift tests** pass, including **53 discovery/deferred tests**
+(14 added), **27 ownership/process**, **49 native-tab** and **9 hidden-window**
+tests. The three original regressions were observed failing against the old
+source. The replay now includes actual command dispatch/movement, pre-bind
+policy, fullscreen mutation, owner capture and guarded export/reload, rather than
+testing only isolated row merging. All **232 Python tests** pass, and the complete
+changed `AppBundle` library passes a compile-only check. Whitespace checks pass.
+
+The repair, regressions and notes form the local checkpoint after `f60c1e5f`.
+Creating this checkpoint involved no additional tests, builds, installations,
+app/helper launches or live checks. No app/helper,
+installed CLI, native desktop reader or live harness was launched, nothing was
+installed or pushed, and the installed release is unchanged. The last installed
+`0.21.3-aquaspace.20261015.3` does not yet include this repair. See the
+[diagnosis, implementation and offline evidence](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).
