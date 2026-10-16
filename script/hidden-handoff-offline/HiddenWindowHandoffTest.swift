@@ -86,4 +86,18 @@ struct HiddenWindowHandoffTest {
             }
         }
     }
+
+    @Test func delayedRestorationOwnershipIncludesOffscreenRowsAndExposesAmbiguity() {
+        ReplayServer.reset([
+            ReplayWindow(id: 42, pid: 9, layer: 0, onScreen: false),
+            ReplayWindow(id: 42, pid: 10, layer: 0, onScreen: true),
+        ])
+        #expect(getRestorationWindowOwners()?[42] == [9, 10])
+    }
+    @Test func malformedOrUnavailableNativeOwnershipCannotAuthorizeDelayedMoves() {
+        ReplayServer.reset([ReplayWindow(id: 42, pid: 0, layer: 0, onScreen: false)])
+        #expect(getRestorationWindowOwners() == nil)
+        ReplayServer.available = false
+        #expect(getRestorationWindowOwners() == nil)
+    }
 }

@@ -1928,3 +1928,53 @@ checkpoint after `fafd604a`, including the seven unresolved IDs and the failed
 broader comparison. Creating this documentation checkpoint involved no additional
 tests, builds, installations, app/helper launches or live checks. Nothing was
 pushed.
+
+## Offline seven-ID handoff diagnosis after b0928c61 — 2026-10-15
+
+Offline source comparison and a differential replay explain a mechanism for the
+stock/fork disagreement: both versions retain previously acquired AX roots that
+are absent from current AXWindows, but a fresh manager cannot discover those
+roots from WindowServer IDs alone. Stock with retained roots and a cold fork
+reproduces exactly **30583**, **29724**, **30197**, **29754**, **29598**, **30290**
+and **30682** as stock-only; equal state or reversed retained state removes or
+reverses the difference. No native-tab transfer is needed in that reproduction.
+Inactive native macOS Space visibility during the recorded fullscreen ChatGPT
+foreground is the leading trigger hypothesis, not a proved historical event.
+
+The investigation also reproduces a definite gap in the actual one-shot session
+restore: saved assignments for undiscovered windows are discarded and never
+retried when their AX roots become available. No production repair was made.
+All **8 offline diagnostic test methods** pass. The full live handoff result
+remains failed, and the earlier hidden-Zen/sole-manager passes are unchanged.
+See the [evidence, per-app IDs, limits and repair direction](native-tabs-diagnosis.md#seven-stock-only-ids-retained-discovery-state-and-one-shot-restoration--2026-10-15).
+
+Only memory-only tests were built/run. No app/helper, native desktop reader or
+installed CLI was launched; no live tests, installation or push occurred. The
+diagnosis and replay are included in the local deferred-restoration checkpoint
+below.
+
+## Offline identity-safe pending-restoration repair — 2026-10-15
+
+The user authorized fixing deferred restoration with offline regressions only.
+The fork now retains undiscovered/failed assignments with kernel-verified
+per-window application identity and retries them through ordinary discovery.
+Native ownership, birth/exec identity, exact registered AX roots, controller
+admission and user focus/model state are rechecked before a synchronous
+background model update. No delayed focus, unhide or workspace activation is
+queued. Proven native-tab ownership supersedes stale stock per-tab assignments.
+
+Identity-session export preserves unresolved metadata through future updates;
+the updater verifies the same controller and schema before stopping anything.
+Old snapshots without owner identity remain immediate-only and cannot authorize
+a future move. A separately authorized live handoff must capture fresh identity
+metadata; the old failed seven-ID record is not a substitute. Native hidden and
+multi-tab windows are not forcibly promoted into eligible conventional windows.
+
+All **124 offline Swift test methods** and **232 Python tests** pass. The full
+library and CLI target compile checks passed without running their products.
+No apps/helpers, native readers or live tests were launched, nothing was installed
+or pushed, and the installed release remains unchanged. This repair, its tests
+and these notes form the local checkpoint after `b0928c61`. Creating the checkpoint
+involved no additional tests, builds, installations, app/helper launches or live
+checks. Nothing was pushed. See the [full implementation, safety rules and
+validation record](native-tabs-diagnosis.md#identity-safe-deferred-restoration-repair--2026-10-15).

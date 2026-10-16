@@ -302,6 +302,35 @@ def valid_status(value, process):
             value.get('phase') == 'controlling' and value.get('originalPids') == [])
 
 
+def validate_identity_session(session, uid):
+    if (not isinstance(session, dict) or not isinstance(session.get('windows'), list)
+            or not isinstance(session.get('workspaces'), list) or not isinstance(session.get('owners'), dict)
+            or not isinstance(session.get('workspace'), str) or not isinstance(session.get('focusedWindow'), str)):
+        raise UpdateError('Invalid identity session; leaving the manager alone.')
+    ids = set()
+    for row in session['windows']:
+        if (not isinstance(row, list) or len(row) != 4 or any(not isinstance(x, str) for x in row)
+                or not row[0].isascii() or not row[0].isdigit() or not 0 < int(row[0]) <= 0xffffffff
+                or str(int(row[0])) != row[0] or row[0] in ids or not row[1] or row[3] not in ('true', 'false')):
+            raise UpdateError('Invalid identity window rows; leaving the manager alone.')
+        ids.add(row[0])
+    if any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(x, str) or not x for x in row)
+           for row in session['workspaces']):
+        raise UpdateError('Invalid identity workspace rows; leaving the manager alone.')
+    for window_id, owner in session['owners'].items():
+        if window_id not in ids or not isinstance(owner, dict):
+            raise UpdateError('Identity owner is not a recorded window.')
+        numbers = ('pid', 'uid', 'startedSeconds', 'startedMicroseconds', 'uniqueId', 'execVersion')
+        if (any(type(owner.get(k)) is not int for k in numbers) or not 0 < owner['pid'] <= 0x7fffffff
+                or owner['uid'] != uid or not 0 < owner['startedSeconds'] <= 0xffffffffffffffff
+                or not 0 <= owner['startedMicroseconds'] < 1000000 or not 0 < owner['uniqueId'] <= 0xffffffffffffffff
+                or not 0 < owner['execVersion'] <= 0x7fffffff
+                or not isinstance(owner.get('executable'), str) or not owner['executable'].startswith('/')
+                or not isinstance(owner.get('imageUUID'), list) or len(owner['imageUUID']) != 16
+                or any(type(x) is not int or not 0 <= x <= 255 for x in owner['imageUUID']) or not any(owner['imageUUID'])):
+            raise UpdateError('Invalid application identity; leaving the manager alone.')
+
+
 class NativeSystem:
     def __init__(self):
         self.processes = DarwinProcesses()
@@ -327,8 +356,22 @@ class NativeSystem:
 
     def capture_session(self, old, cli):
         def query(*args): return self.run([cli, *args])
-        if not valid_status(json.loads(query('management-status')), old):
+        initial_status = json.loads(query('management-status'))
+        if not valid_status(initial_status, old):
             raise UpdateError('The installed CLI does not own the running AquaSpace process.')
+        schema = initial_status.get('sessionSchema')
+        if schema is not None:
+            if type(schema) is not int or schema != 2:
+                raise UpdateError('Unsupported handoff identity schema; leaving the manager alone.')
+            session = json.loads(query('handoff-session'))
+            validate_identity_session(session, os.getuid())
+            final_status = json.loads(query('management-status'))
+            if (not valid_status(final_status, old) or type(final_status.get('sessionSchema')) is not int
+                    or final_status.get('sessionSchema') != schema):
+                raise UpdateError('Window-manager ownership changed while saving the identity session.')
+            return session
+        # Old releases have no authenticated per-window identity export. Keep
+        # immediate startup compatibility; they cannot authorize delayed moves.
         windows = [line.split('\t') for line in query('list-windows', '--all', '--format',
             '%{window-id}\t%{workspace}\t%{window-layout}\t%{window-is-fullscreen}').splitlines()]
         workspaces = [line.split('\t') for line in query('list-workspaces', '--all', '--format',

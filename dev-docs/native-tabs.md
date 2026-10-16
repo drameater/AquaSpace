@@ -344,3 +344,21 @@ hidden on workspace **2**, original native/model focus was preserved, and
 all-window check remains failed for seven other IDs whose native AX/WindowServer
 inventories disagree; the scoped Zen success does not relabel that result.
 See the [live validation record and unresolved discrepancy](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).
+
+An offline differential replay now reproduces all seven stock-only IDs from
+retained versus fresh AX discovery state, without native-tab transfers. Both
+versions agree when given the same retained state. It also confirms that the
+one-shot handoff drops undiscovered assignments and does not restore them on
+later discovery. All eight diagnostic test methods pass. Native fullscreen Space
+visibility is the leading trigger inference, but the historical trace lacks the
+native membership data needed to prove it. No production fix or live action was
+made in this investigation. See the [seven-ID diagnosis](native-tabs-diagnosis.md#seven-stock-only-ids-retained-discovery-state-and-one-shot-restoration--2026-10-15).
+
+Deferred restoration now retains identity-backed assignments until ordinary AX
+rediscovery, with process/native-owner/root/controller checks before a background
+model update. It cannot override foreground/user changes, popup classification or
+proven native-tab ownership. Legacy snapshots cannot authorize delayed moves.
+All 124 offline Swift tests and 232 Python tests pass; library/CLI compilation is
+validated without executing either product. The source repair is not installed
+or live-validated, and the historical broader handoff failure remains unchanged.
+See the [deferred-restoration repair record](native-tabs-diagnosis.md#identity-safe-deferred-restoration-repair--2026-10-15).

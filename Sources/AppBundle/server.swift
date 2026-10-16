@@ -52,6 +52,15 @@ private func newConnection(_ connection: NWConnection) async { // todo add exit 
             await answerToClient(exitCode: EXIT_CODE_ZERO, stdout: WindowManagerHandoff.status)
             continue
         }
+        if request.args == ["handoff-session"] {
+            do {
+                let session = try await WindowManagerHandoff.sessionForUpdate()
+                await answerToClient(exitCode: EXIT_CODE_ZERO, stdout: session)
+            } catch {
+                await answerToClient(exitCode: EXIT_CODE_TWO, stderr: "Cannot capture handoff session: \(error)")
+            }
+            continue
+        }
         if request.args == ["switch-to-aerospace"] {
             guard await WindowManagerHandoff.canHandoff else {
                 await answerToClient(exitCode: EXIT_CODE_TWO, stderr: "This instance cannot start a handoff.")

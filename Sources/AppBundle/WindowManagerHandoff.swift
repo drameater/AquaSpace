@@ -12,12 +12,38 @@ struct WindowManagerSession: Codable, Equatable, Sendable {
     let workspaces: [[String]]
     let workspace: String
     let focusedWindow: String
+    var owners: [String: WindowRestorationOwner]? = nil
 
     init(windows: String, workspaces: String, workspace: String, focusedWindow: String) {
         self.windows = windows.split(separator: "\n").map { $0.components(separatedBy: "\t") }.filter { $0.count == 4 && UInt32($0[0]) != nil }
         self.workspaces = workspaces.split(separator: "\n").map { $0.components(separatedBy: "\t") }.filter { $0.count == 2 }
         self.workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         self.focusedWindow = focusedWindow.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Carry authenticated unresolved intent through subsequent updates. Existing
+    /// rows may be replaced only when their captured process identity agrees.
+    func retainingPending(_ pending: [UInt32: PendingWindowAssignment]) -> WindowManagerSession {
+        var rows = windows
+        var identities = owners ?? [:]
+        var workspaceRows = workspaces
+        for (id, assignment) in pending.sorted(by: { $0.key < $1.key }) {
+            let key = String(id)
+            let matches = rows.indices.filter { rows[$0].first == key }
+            guard assignment.owner.isValid, matches.count <= 1,
+                  matches.isEmpty || identities[key] == assignment.owner else { continue }
+            let row = [key, assignment.workspace, assignment.floating ? "floating" : "h_tiles", String(assignment.fullscreen)]
+            if let index = matches.first { rows[index] = row } else { rows.append(row) }
+            identities[key] = assignment.owner
+            if let layout = assignment.rootLayout, !workspaceRows.contains(where: { $0.first == assignment.workspace }) {
+                workspaceRows.append([assignment.workspace, layout])
+            }
+        }
+        var result = WindowManagerSession(windows: rows.map { $0.joined(separator: "\t") }.joined(separator: "\n"),
+            workspaces: workspaceRows.map { $0.joined(separator: "\t") }.joined(separator: "\n"),
+            workspace: workspace, focusedWindow: focusedWindow)
+        result.owners = identities
+        return result
     }
 
     func restorationCommands(availableWindowIds: Set<String>) -> [[String]] {
@@ -36,6 +62,9 @@ struct WindowManagerSession: Codable, Equatable, Sendable {
 enum WindowManagerHandoff {
     private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers)
     private static var startupSession: WindowManagerSession?
+    private static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
+    private static var restoringPending = false
+    private static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
     private static var applicationWatch: Task<(), Never>?
     nonisolated private static let writePermission = OSAllocatedUnfairLock(initialState: false)
     nonisolated static var permitsAXWrites: Bool { writePermission.withLock { $0 } }
@@ -50,7 +79,7 @@ enum WindowManagerHandoff {
         let peers = inventory?.map(\.pid) ?? []
         let data = try? JSONSerialization.data(withJSONObject: ["pid": myPid, "phase": admission.ownership.rawValue,
             "controlsWindows": canControlWindows && inventory != nil, "readOnly": serverArgs.isReadOnly, "originalPids": peers,
-            "inventoryVerified": inventory != nil])
+            "inventoryVerified": inventory != nil, "sessionSchema": 2])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
     private static let originalSocketPath = "/tmp/\(originalAeroSpaceAppId)-\(unixUserName).sock"
@@ -91,6 +120,9 @@ enum WindowManagerHandoff {
     private static func stopForUncertainOwnership(_ error: any Error) async {
         guard !serverArgs.isReadOnly else { return }
         admission.yield()
+        pendingRestoration.removeAll()
+        restorationAnchors.removeAll()
+        restorationRootTokens.removeAll()
         freezeAXWrites()
         pauseWindowManagementForHandoff()
         await activateMode_nonCancellable(nil)
@@ -144,9 +176,21 @@ enum WindowManagerHandoff {
     static func restoreStartupSession() async {
         guard let session = startupSession else { return }
         startupSession = nil
+        pendingRestoration = PendingWindowRestoration(windows: session.windows, owners: session.owners ?? [:], workspaces: session.workspaces)
+        reconcilePendingRestoration()
         let ids = Set(MacWindow.allWindowsMap.keys.map(String.init))
+        var failed: Set<UInt32> = []
         for args in session.restorationCommands(availableWindowIds: ids) {
-            _ = try? await localCommand(args)
+            let id = args.firstIndex(of: "--window-id").flatMap { args.indices.contains($0 + 1) ? UInt32(args[$0 + 1]) : nil }
+            if let id, session.owners?[String(id)] != nil,
+               pendingRestoration.assignments[id] == nil { continue }
+            do { _ = try await localCommand(args) }
+            catch { if let id, args.first != "focus" { failed.insert(id) } }
+        }
+        // Discovery can run while a command awaits. Only IDs included in the
+        // original command plan have actually had their assignment restored.
+        for text in ids {
+            if let id = UInt32(text), !failed.contains(id) { pendingRestoration.discard(id) }
         }
     }
 
@@ -158,6 +202,9 @@ enum WindowManagerHandoff {
         // normal layout path unhides every window, which must not run in a handoff.
         pauseWindowManagementForHandoff()
         let session = captureCurrentModel()
+        pendingRestoration.removeAll()
+        restorationAnchors.removeAll()
+        restorationRootTokens.removeAll()
         do {
             await activateMode_nonCancellable(nil)
             // Drain canceled AX work before launching another controller.
@@ -192,7 +239,158 @@ enum WindowManagerHandoff {
         }
     }
 
+    private struct RestorationAnchor: Equatable {
+        let window: ObjectIdentifier
+        let parent: ObjectIdentifier?
+        let workspace: String?
+        let fullscreen: Bool
+        @MainActor init(_ value: MacWindow) {
+            window = ObjectIdentifier(value)
+            parent = value.parent.map { ObjectIdentifier($0) }
+            workspace = value.nodeWorkspace?.name
+            fullscreen = value.isFullscreen
+        }
+    }
+    private static var restorationRootTokens: [UInt32: UUID] = [:]
+
+    private static func captureOwners(_ pids: [UInt32: Int32]) -> [String: WindowRestorationOwner] {
+        guard let before = getRestorationWindowOwners() else { return [:] }
+        var owners: [String: WindowRestorationOwner] = [:]
+        for (id, pid) in pids where before[id] == [pid] {
+            if let owner = WindowManagerProcesses.restorationOwner(pid) { owners[String(id)] = owner }
+        }
+        guard let after = getRestorationWindowOwners() else { return [:] }
+        return owners.filter { id, owner in
+            UInt32(id).map { after[$0] == [owner.pid] } == true &&
+                WindowManagerProcesses.restorationOwner(owner.pid) == owner
+        }
+    }
+
+    static func sessionForUpdate() throws -> String {
+        guard canControlWindows, TrayMenuModel.shared.isEnabled,
+              try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
+            throw HandoffError.message("Cannot capture a session without exclusive window control")
+        }
+        let session = captureCurrentModel()
+        guard canControlWindows, try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
+            throw HandoffError.message("Window-control ownership changed during capture")
+        }
+        return String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+    }
+
+    /// Called even before discovery, so observing a closed/reused native ID can
+    /// never leave an old pending assignment alive until that ID is exposed again.
+    static func reconcilePendingRestoration() {
+        guard !pendingRestoration.assignments.isEmpty else {
+            restorationAnchors.removeAll()
+            restorationRootTokens.removeAll()
+            return
+        }
+        pendingRestoration.reconcile(ownersByWindow: getRestorationWindowOwners(),
+            process: WindowManagerProcesses.restorationOwner)
+        restorationAnchors = restorationAnchors.filter { pendingRestoration.assignments[$0.key] != nil }
+        restorationRootTokens = restorationRootTokens.filter { pendingRestoration.assignments[$0.key] != nil }
+    }
+
+    /// A proven native-tab transfer owns its workspace slot. Stock's old per-tab
+    /// assignment must never override that slot when an inactive tab reappears.
+    static func cancelPendingNativeTabAssignments(_ update: NativeTabUpdate, pid: Int32) {
+        let participants = Set(Array(update.replacements.keys) + Array(update.replacements.values) +
+            Array(update.absorptions.keys) + Array(update.absorptions.values) +
+            Array(update.inheritances.keys) + Array(update.inheritances.values))
+        for id in participants where pendingRestoration.assignments[id]?.owner.pid == pid {
+            pendingRestoration.discard(id)
+            restorationAnchors.removeValue(forKey: id)
+            restorationRootTokens.removeValue(forKey: id)
+        }
+    }
+
+    static func restorePendingAssignments() async {
+        guard canControlWindows, TrayMenuModel.shared.isEnabled, !restoringPending,
+              !pendingRestoration.assignments.isEmpty else { return }
+        restoringPending = true
+        defer { restoringPending = false }
+        reconcilePendingRestoration()
+        for id in Array(pendingRestoration.assignments.keys).sorted() {
+            guard let assignment = pendingRestoration.assignments[id],
+                  let window = MacWindow.allWindowsMap[id], window.macApp.pid == assignment.owner.pid else { continue }
+            if focus.windowOrNil?.windowId == id || NSWorkspace.shared.frontmostApplication?.processIdentifier == assignment.owner.pid {
+                pendingRestoration.discard(id)
+                continue
+            }
+            // Automatic native hide/fullscreen normalization changes the parent.
+            // Do not pin a user-change anchor until the window is conventional.
+            switch window.windowParentCases {
+                case .tilingContainer, .floatingWindowsContainer: break
+                default: continue
+            }
+            let anchor = RestorationAnchor(window)
+            if let old = restorationAnchors[id], old != anchor {
+                pendingRestoration.discard(id)
+                continue
+            }
+            restorationAnchors[id] = anchor
+            var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+            let initialRootToken = proof?.token
+            if proof != nil, proof?.type != .popup {
+                proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+            }
+            // A fresh native read may suspend. Revalidate model, native ownership,
+            // process generation and exclusive controller admission afterwards.
+            guard canControlWindows, TrayMenuModel.shared.isEnabled else { return }
+            do {
+                let peers = try admission.observedPeers(freeze: freezeAXWrites)
+                if !peers.isEmpty {
+                    await yieldToPeers(peers)
+                    return
+                }
+            } catch {
+                await stopForUncertainOwnership(error)
+                return
+            }
+            let changed = MacWindow.allWindowsMap[id] !== window || RestorationAnchor(window) != anchor ||
+                focus.windowOrNil?.windowId == id || proof?.focused == true
+            // Token checks are separate to keep an unavailable AX read retryable.
+            let rootChanged = proof.map { value in
+                initialRootToken != value.token || (restorationRootTokens[id].map { $0 != value.token } ?? false)
+            } ?? false
+            if let proof { restorationRootTokens[id] = proof.token }
+            let owners = getRestorationWindowOwners()
+            if owners == nil { pendingRestoration.removeAll(); return }
+            let currentOwner = WindowManagerProcesses.restorationOwner(assignment.owner.pid)
+            let foregroundPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            _ = pendingRestoration.attempt(id,
+                owner: currentOwner, nativeOwners: owners?[id],
+                axVerified: proof != nil && proof?.type != .popup && proof?.isNativeTab == false && foregroundPid != nil, controlsWindows: canControlWindows,
+                userChanged: changed || rootChanged || foregroundPid == assignment.owner.pid
+            ) { desired in
+                guard WorkspaceName.parse(desired.workspace).getIgnoringErrorsOrNil() != nil,
+                      window.isBound else { return false }
+                // Native hidden/minimized/fullscreen windows retain their native
+                // containers until normal discovery exposes a conventional window.
+                switch window.windowParentCases {
+                    case .tilingContainer, .floatingWindowsContainer: break
+                    default: return false
+                }
+                let existed = Workspace.all.contains { $0.name == desired.workspace }
+                let workspace = Workspace.get(byName: desired.workspace)
+                if !existed, let layout = desired.rootLayout {
+                    workspace.rootTilingContainer.layout = layout.hasSuffix("accordion") ? .accordion : .tiles
+                    workspace.rootTilingContainer.changeOrientation(layout.hasPrefix("v_") ? .v : .h)
+                }
+                if desired.floating || proof?.type == .dialog {
+                    window.bindAsFloatingWindow(to: workspace)
+                } else {
+                    window.bind(to: workspace.rootTilingContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
+                }
+                window.isFullscreen = desired.fullscreen
+                return true
+            }
+        }
+    }
+
     private static func captureCurrentModel() -> WindowManagerSession {
+        reconcilePendingRestoration()
         let windows = MacWindow.allWindows.compactMap { window -> String? in
             guard window.isBound, let workspace = window.nodeWorkspace,
                   let layout = toLayoutResult(w: window).getIgnoringErrorsOrNil()
@@ -200,8 +398,20 @@ enum WindowManagerHandoff {
             return [String(window.windowId), workspace.name, layout.toString(), String(window.isFullscreen)].joined(separator: "\t")
         }
         let workspaces = Workspace.all.map { [$0.name, toLayoutString(tc: $0.rootTilingContainer)].joined(separator: "\t") }
-        return WindowManagerSession(windows: windows.joined(separator: "\n"), workspaces: workspaces.joined(separator: "\n"),
+        var session = WindowManagerSession(windows: windows.joined(separator: "\n"), workspaces: workspaces.joined(separator: "\n"),
                                     workspace: focus.workspace.name, focusedWindow: focus.windowOrNil.map { String($0.windowId) } ?? "")
+        let currentIds = Set(session.windows.compactMap { UInt32($0[0]) })
+        session.owners = captureOwners(MacWindow.allWindowsMap.filter { currentIds.contains($0.key) }.mapValues { $0.macApp.pid })
+        let foregroundPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for (id, assignment) in pendingRestoration.assignments {
+            let current = MacWindow.allWindowsMap[id]
+            let changed = current.map { value in restorationAnchors[id].map { $0 != RestorationAnchor(value) } ?? false } ?? false
+            if foregroundPid == nil || foregroundPid == assignment.owner.pid ||
+                focus.windowOrNil?.windowId == id || changed {
+                pendingRestoration.discard(id)
+            }
+        }
+        return session.retainingPending(pendingRestoration.assignments)
     }
 
     private static func capture(_ command: ([String]) async throws -> String) async throws -> WindowManagerSession {
@@ -209,7 +419,20 @@ enum WindowManagerHandoff {
         let workspaces = try await command(WindowManagerSession.workspaceQuery)
         let workspace = try await command(["list-workspaces", "--focused"])
         let focused = (try? await command(["list-windows", "--focused", "--format", "%{window-id}"])) ?? ""
-        return WindowManagerSession(windows: windows, workspaces: workspaces, workspace: workspace, focusedWindow: focused)
+        var session = WindowManagerSession(windows: windows, workspaces: workspaces, workspace: workspace, focusedWindow: focused)
+        let rows = try await command(["list-windows", "--all", "--format", "%{window-id}\t%{app-pid}"])
+        var pids: [UInt32: Int32] = [:]
+        var duplicates: Set<UInt32> = []
+        for row in rows.split(separator: "\n").map({ $0.components(separatedBy: "\t") }) {
+            guard row.count == 2, let id = UInt32(row[0]), let pid = Int32(row[1]), pid > 0 else { continue }
+            if pids.updateValue(pid, forKey: id) != nil { duplicates.insert(id) }
+        }
+        for id in duplicates { pids.removeValue(forKey: id) }
+        session.owners = captureOwners(pids)
+        guard try await command(WindowManagerSession.windowQuery) == windows else {
+            throw HandoffError.message("Stock window assignments changed during capture")
+        }
+        return session
     }
 
     private static func localCommand(_ args: [String]) async throws -> String {

@@ -131,6 +131,7 @@ func refreshModel_nonCancellable() async {
 @MainActor
 private func refresh() async throws {
     // Garbage collect terminated apps and windows before working with all windows
+    WindowManagerHandoff.reconcilePendingRestoration()
     let mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     let aliveWindowIds = mapping.values.flatMap(\.aliveWindowIds).toSet()
 
@@ -150,6 +151,8 @@ private func refresh() async throws {
             try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
         }
     }
+
+    await WindowManagerHandoff.restorePendingAssignments()
 
     // Garbage collect workspaces after apps, because workspaces contain apps.
     Workspace.garbageCollectUnusedWorkspaces()

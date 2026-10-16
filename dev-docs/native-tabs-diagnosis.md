@@ -221,3 +221,217 @@ broader all-window comparison failed for seven other stock IDs that remain in
 WindowServer metadata and are absent from the apps' current AX window lists.
 That separate discrepancy remains unresolved and the full result remains
 failed. See the [scoped live validation and limitations](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).
+
+## Seven stock-only IDs: retained discovery state and one-shot restoration — 2026-10-15
+
+The user authorized offline investigation only: no app/helper launch, live test,
+desktop query, installation or push. This investigation reads the saved
+`run-20261015-205646` evidence and local source; the earlier live failure remains
+unchanged. No production code was changed.
+
+The stock snapshot minus the AquaSpace workspace inventory is exactly these
+seven IDs. Every one had saved stock workspace **1**, fullscreen flag `false`,
+and a layer-zero WindowServer record after the handoff:
+
+| App | PID | Missing IDs | Saved later AXWindows observation |
+| --- | --- | --- | --- |
+| Finder | 684 | 30583, 29724 | Only window 30881 and the desktop element |
+| System Settings | 738 | 29598 | Empty |
+| Obsidian | 22595 | 30197, 29754 | Empty |
+| VSCodium | 93525 | 30290 | Empty |
+| Vesktop | 15177 | 30682 | Empty |
+
+Those reads succeeded and reported the applications unhidden. They did not
+report seven accessibility errors. A layer-zero WindowServer record establishes
+that the ID was still present in that native inventory; it does not provide an
+AX window root or prove that a fresh client can manage the window. No saved
+trace proves that these were closed windows or inactive members of native tab
+groups.
+
+The important source behavior is shared by stock tag `v0.21.3-Beta` (local
+commit `d56e1637c3a1ed660d0cadd7534e94fb3218d1c3`) and AquaSpace:
+
+1. `Ax.windowsAttr` explicitly documents that windows on inactive native macOS
+   Spaces may be absent from AXWindows. Those Spaces are separate from the
+   numbered AeroSpace workspaces in the session file.
+2. `MacApp.refreshAndGetAliveWindowIds` starts from already retained AX windows.
+   A retained root survives an empty AXWindows list while
+   `containingWindowId()` still succeeds. A fresh manager has no such roots and
+   can discover only the roots returned by AXWindows/focused-window discovery.
+3. AquaSpace's all-Spaces WindowServer inventory supplies ID/layer and native-tab
+   evidence. It does not manufacture AX roots for every ID. The hidden-Zen
+   layer fix therefore cannot discover a different app's absent AX root.
+
+The captured foreground was ChatGPT **28146**, whose recorded layout was
+`macos_native_fullscreen`. The first attempt also recorded native foreground
+changes between ChatGPT, Zen and Helium before the later stock-to-fork switch.
+Stock retaining windows observed before a native Space transition, followed by
+an AquaSpace cold start on ChatGPT's fullscreen Space, is the leading explanation
+for this cross-application pattern. This is an inference: no native Space
+membership/visibility map or pre-handoff retained-root validation was captured.
+Stale-but-still-resolvable references, or a discovery transition between the
+snapshots, cannot be excluded. The records do not prove that AquaSpace closed,
+reclassified or merged these seven windows.
+
+`script/test-window-discovery-offline.py` now compiles the actual stock and fork
+refresh methods, actual AquaSpace tab reconciliation and actual session
+restoration method against memory-only AX/application/thread objects. The small
+registration seam models successful subscriptions; no native registration or
+app lifecycle code is used. The sanitized captured inventory records evidence
+file hashes and explicitly labels the retained-root premise as a hypothesis.
+
+The differential replay establishes:
+
+- Stock with retained roots versus a cold AquaSpace reproduces **exactly the
+  seven-ID difference**, without any tab replacement, absorption or inheritance.
+- Equal retained state makes both versions retain the same IDs across all five
+  apps. Reversing which manager retains the roots reverses the difference.
+- WindowServer IDs alone discover no AX windows. Exposing the same roots again
+  lets both implementations discover them; confirmed invalid roots are collected
+  by both. An unavailable AXWindows attribute has the same cold-start limit.
+
+This establishes a discovery-history mechanism consistent with the saved
+disagreement; it is not a retrospective capture of the missing pre-handoff AX
+state. It rules out a necessary native-tab or classification regression in the
+reproduced path, rather than claiming to rule out every possible historical API
+failure.
+
+There is also a definite restoration defect independent of the exact visibility
+trigger. `WindowManagerSession.restorationCommands` filters out undiscovered
+IDs, while `restoreStartupSession` clears the saved session before executing
+commands and ignores command failures. The replay invokes the actual restoration
+method with the seven IDs absent, then exposes them and invokes it again: **no
+saved move for those IDs is ever issued**. A later discovery cannot recover the
+discarded workspace/layout/fullscreen intent. The historical trace did not save
+the startup all-windows map or individual command results, so it cannot show
+which IDs were filtered versus attempted and rejected during that particular
+startup; neither path currently has deferred restoration.
+
+The repair direction is to retain unresolved per-window metadata and apply it
+when a legitimate AX root reappears, after validating the source application's
+identity and window ownership. The current four-field window session has no
+per-window PID/birth identity, so an identity-safe deferred repair also needs
+source identity captured before the handoff; a numeric window ID alone must not
+authorize a later move. It must not create windows from CG IDs, focus or
+unhide other Spaces to force enumeration, relax popup/native-tab admission, or
+replay stale desktop focus when a user has moved on. That repair is **not
+implemented** in this investigation. The full live all-window comparison
+remains failed; the earlier hidden-Zen and single-manager results remain scoped
+passes.
+
+All **8 diagnostic test methods** pass, including the five-app parameterized
+case. Only isolated memory-only test binaries were compiled and run. No manager,
+diagnostic helper/library, installed CLI or native desktop reader was invoked;
+nothing was installed or pushed. Replay output and extracted-source hashes are
+under `.debug/aquaspace/seven-window-diagnosis/` and
+`.debug/window-discovery-offline/`. The diagnostic tests and these notes are
+included in the local deferred-restoration repair checkpoint below.
+
+## Identity-safe deferred restoration repair — 2026-10-15
+
+The user authorized the source repair and offline regressions, without app/helper
+launches, live tests, installation or pushing. This supersedes the earlier
+source-only finding that deferred restoration was not implemented; it does not
+change either historical live result.
+
+`WindowManagerSession` now carries optional per-window owner metadata: PID, UID,
+kernel start seconds/microseconds, executable path, unique process identifier,
+exec version and image UUID. The reader brackets path/generation reads with
+kernel identity checks and refuses missing, changed or foreign-user identity.
+Capture also matches the source's window/PID attribution against strict native
+owner inventories before and after capture. A stock capture must retain the same
+window rows through its final exchange before the old manager is stopped.
+
+The session remains compatible with existing four-field JSON. Legacy snapshots
+without authenticated owners retain immediate startup restoration, but cannot
+authorize a delayed numeric-ID move. In particular, the old saved seven-ID live
+session must not be retrofitted with guessed ownership and relabeled verified.
+A future live test needs fresh identity capture from the updated path.
+
+The new `PendingWindowRestoration` policy retains workspace, floating/tiling mode,
+AeroSpace fullscreen flag and saved root layout for undiscovered windows and
+failed startup assignments. It rejects duplicate/invalid window rows and
+unvalidated owners. A window that appears while another startup command awaits
+is not incorrectly marked completed: completion is limited to IDs in the actual
+original command plan. Successful restoration is consumed once; retryable AX
+reads or an unsuccessful model commit do not silently consume the assignment.
+
+Before ordinary discovery and again before a delayed commit, the adapter checks
+native window ownership and the exact current process identity. An observed
+native disappearance, ambiguous owner, unreadable native inventory, process exit,
+PID reuse, exec change or missing process identity revokes pending intent.
+There is no timer that launches an app or forces AX discovery.
+
+A delayed candidate needs a normal registered model window plus fresh AXWindows
+membership for that same retained root and PID. Duplicate IDs/roots, missing
+children/titlebar information and popup classification cannot authorize it. Two
+AX reads must agree on the registered root's subscription token; a replacement
+root cannot inherit the previous root's pending assignment. Model object,
+parent/workspace/fullscreen state and token changes across reads are checked.
+After the reads the adapter rechecks controller admission and native ownership,
+then commits synchronously without another await.
+
+The commit changes only that background window's model parent and fullscreen
+flag. It runs no CLI, focus/workspace activation, unhide, native fullscreen,
+menu or AX write command. A new empty target workspace can regain its saved root
+layout; an existing workspace's layout is never overwritten by delayed intent.
+Native hidden/minimized/fullscreen containers are left alone until ordinary
+conventional discovery makes restoration eligible. The user-change anchor is
+pinned only at that point, so automatic native-container normalization does not
+consume an unrestored assignment. Dialogs remain floating.
+A model-focused window, native-focused window, foreground application, or a
+window whose observed model state was changed by the user loses stale pending
+intent. An unreadable foreground prevents a commit. Desktop focus commands are
+confined to the existing initial session restore and are never queued for later.
+
+Native-tab ownership takes precedence over stock's per-tab metadata. A native
+bar with multiple tabs is ineligible for delayed reassignment. Proven replacement,
+merge absorption and split inheritance cancel pending assignments for their
+participants, scoped to the matching application PID. Existing tab matching,
+ambiguity and ownership checks are unchanged.
+
+For updates, `management-status` advertises identity-session schema 2 and
+`handoff-session` exports the source manager's metadata under the existing
+exclusive-controller admission checks. Unresolved, untouched assignments survive
+that export, including absent target workspace metadata. An existing row can be
+overridden only by the same captured owner. The Python updater validates the
+schema, field types/ranges, unique rows and owner associations, and verifies the
+same controller and schema afterward, before any stop. Once schema 2 is
+advertised, a malformed or failed export cannot fall back to weaker legacy
+capture. Older installed releases without that capability use their existing
+immediate-only capture; no owner identity is invented for their old files.
+Stock AeroSpace itself remains unmodified and does not acquire a deferred queue.
+
+Offline validation:
+
+- **39 discovery/deferred-restoration tests**, using actual stock/fork discovery,
+  actual startup/deferral methods, actual AX proof logic and the pure policy
+  against memory-only backends. Includes the seven-ID replay, startup discovery
+  race, failed commands, later rediscovery, legacy decoding, export preservation,
+  root layout, PID/exec/root reuse, native ambiguity, foreground/model changes,
+  popup/dialog/native-tab exclusions, and peer arrival or inventory failure.
+- **27 ownership/process tests**, including five new injected-kernel identity
+  methods. Native process calls in this package abort if invoked accidentally.
+- **9 hidden-window tests**, including strict native ownership ambiguity and
+  malformed/unavailable inventory checks.
+- **49 existing native-tab tests**.
+- **232 Python tests**, including nine new identity-export transport methods;
+  those tests block native library loading, subprocesses and signals.
+- Full `AppBundle` library and CLI target compilation with the macOS 26.5 SDK;
+  neither compiled product was executed. CLI debug-symbol generation required
+  retrying outside the filesystem sandbox after an `Operation not permitted`
+  error. No application launch or installation was part of that retry.
+- Whitespace checks passed.
+
+The earlier regression asserting that undiscovered assignments were discarded
+was replaced by assertions requiring identity-backed pending state; legacy
+snapshots still have an explicit rejection test. The startup-discovery race was
+observed failing before its fix. No ambiguity or controller-admission test was
+removed or relaxed. Only isolated memory-only test executables ran; no manager,
+diagnostic helper/library, installed CLI, native process/window/focus reader or
+live harness was invoked. No app bundle was installed and nothing was pushed.
+The repair, offline regressions and diagnosis notes form the local checkpoint
+after `b0928c61`; creating it involved no additional tests, builds, installations,
+app/helper launches or live checks. The installed release and the failed broader
+live handoff result are unchanged. Logs/source hashes are under
+`.debug/aquaspace/seven-window-diagnosis/deferred-*`.

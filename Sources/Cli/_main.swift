@@ -8,7 +8,7 @@ let usage =
     USAGE: \(CommandLine.arguments.first ?? "aerospace") [-h|--help] [-v|--version] <subcommand> [<args>...]
 
     SUBCOMMANDS:
-    \((subcommandDescriptions + [["  management-status", "Show AquaSpace's window-control ownership"], ["  switch-to-aerospace", "Freeze AquaSpace and hand control to AeroSpace"]]).sortedBy { $0[0] }.toPaddingTable(columnSeparator: "   ").joined(separator: "\n"))
+    \((subcommandDescriptions + [["  handoff-session", "Export workspace metadata with window owner identities"], ["  management-status", "Show AquaSpace's window-control ownership"], ["  switch-to-aerospace", "Freeze AquaSpace and hand control to AeroSpace"]]).sortedBy { $0[0] }.toPaddingTable(columnSeparator: "   ").joined(separator: "\n"))
     """
 
 @main
@@ -53,7 +53,7 @@ struct Main {
             exit(EXIT_CODE_ZERO)
         }
 
-        if args.toArray() == ["management-status"] || args.toArray() == ["switch-to-aerospace"] {
+        if [["management-status"], ["switch-to-aerospace"], ["handoff-session"]].contains(args.toArray()) {
             let connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
             guard await connection.initConnection().error == nil else {
                 exit(EXIT_CODE_TWO, err: "AquaSpace is not responding")

@@ -26,6 +26,7 @@ def main():
             # Private cache reset is exposed only inside this isolated copy.
             text += '\n@MainActor func resetReplayCache() { cache = [:] }\n'
         (source / Path(relative).name).write_text(text)
+    (source / 'PendingWindowRestoration.swift').write_text((production / 'model/PendingWindowRestoration.swift').read_text())
     handoff = (production / 'WindowManagerHandoff.swift').read_text()
     start, end = 'struct WindowManagerSession:', '\n@MainActor\nenum WindowManagerHandoff'
     if handoff.count(start) != 1 or handoff.count(end) != 1:

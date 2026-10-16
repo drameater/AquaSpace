@@ -67,10 +67,38 @@ protocol WindowManagerProcessAPI {
     func metadata(_ executable: String) throws -> WindowManagerBundleMetadata
 }
 
+protocol WindowRestorationProcessAPI {
+    var userId: UInt32 { get }
+    func identity(_ pid: Int32) throws -> WindowManagerProcessBirth?
+    func executable(_ pid: Int32) throws -> String?
+    func generation(_ pid: Int32) throws -> WindowManagerExecGeneration
+}
+
 /// Classify kernel executable paths before requesting BSD identity. macOS can
 /// deny BSD records for unrelated helpers; those records are irrelevant to control.
 enum WindowManagerProcesses {
     static func peers() throws -> [WindowManagerProcess] { try peers(using: NativeWindowManagerProcessAPI()) }
+
+    /// Ordinary application identity, not manager admission. Every read is
+    /// bracketed by kernel birth and exec-generation reads; uncertainty is nil.
+    static func restorationOwner(_ pid: Int32) -> WindowRestorationOwner? {
+        restorationOwner(pid, using: NativeWindowManagerProcessAPI())
+    }
+
+    static func restorationOwner(_ pid: Int32, using api: any WindowRestorationProcessAPI) -> WindowRestorationOwner? {
+        do {
+            guard let before = try api.identity(pid), before.pid == pid, before.uid == api.userId,
+                  let executable = try api.executable(pid) else { return nil }
+            let generation = try api.generation(pid)
+            guard try api.identity(pid) == before, try api.executable(pid) == executable,
+                  try api.generation(pid) == generation else { return nil }
+            let owner = WindowRestorationOwner(pid: pid, uid: before.uid, startedSeconds: before.seconds,
+                startedMicroseconds: before.microseconds, executable: executable,
+                uniqueId: generation.uniqueId, execVersion: generation.version, imageUUID: generation.uuid)
+            return owner.isValid ? owner : nil
+        } catch { return nil }
+    }
+
 
     static func peers(using api: any WindowManagerProcessAPI) throws -> [WindowManagerProcess] {
         var result: [WindowManagerProcess] = []
@@ -91,7 +119,7 @@ enum WindowManagerProcesses {
     }
 }
 
-private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI {
+private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRestorationProcessAPI {
     var userId: UInt32 { getuid() }
     var ownPid: Int32 { getpid() }
 
@@ -150,7 +178,7 @@ private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI {
         return String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
-    private func generation(_ pid: Int32) throws -> WindowManagerExecGeneration {
+    func generation(_ pid: Int32) throws -> WindowManagerExecGeneration {
         var value = AquaSpaceProcUniqueInfo()
         let count = unsafe proc_pidinfo(pid, 17 /* PROC_PIDUNIQIDENTIFIERINFO */, 0, &value, 56)
         guard count == 56 else { throw scanError("exec-generation", pid: pid, count: count, code: errno) }

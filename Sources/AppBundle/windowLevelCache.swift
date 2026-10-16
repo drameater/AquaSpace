@@ -15,6 +15,19 @@ func getWindowServerWindowIdsByPid() -> [Int32: Set<UInt32>]? {
     return result
 }
 
+/// Strict ownership inventory for delayed restoration. Malformed/partial rows
+/// revoke pending intent instead of authorizing a later numeric-ID match.
+func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
+    guard let rows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    var result: [UInt32: Set<Int32>] = [:]
+    for row in rows {
+        guard let pid = row[kCGWindowOwnerPID as String] as? Int32, pid > 0,
+              let id = row[kCGWindowNumber as String] as? UInt32, id > 0 else { return nil }
+        result[id, default: []].insert(pid)
+    }
+    return result
+}
+
 @MainActor
 private var cache: [UInt32: MacOsWindowLevel] = [:]
 

@@ -141,8 +141,47 @@ final class MacApp: AbstractApp {
         return try await MacWindow.getOrRegister(windowId: windowId, macApp: self)
     }
 
+    struct RestorationWindowProof: Sendable {
+        let token: UUID
+        let type: AxUiElementWindowType
+        let isNativeTab: Bool
+        let focused: Bool
+    }
+
+    /// Uses the existing registered root AND a fresh exposed root. Never guesses
+    /// an AX object from WindowServer IDs or promotes an inactive tab to a window.
+    func restorationWindowProof(_ id: UInt32, level: MacOsWindowLevel?) async throws -> RestorationWindowProof? {
+        try await thread?.runInLoop(.cancellable) { [nsApp, axApp, windows, nativeTabs] job in
+            guard let window = windows.threadGuarded[id], window.ax.containingWindowId() == id,
+                  !nativeTabs.threadGuarded.inactiveWindowIds.contains(id),
+                  let exposed = axApp.threadGuarded.get(Ax.windowsAttr)
+            else { return nil }
+            let matches = exposed.filter { $0.windowId == id }
+            guard matches.count == 1, CFEqual(matches[0].ax, window.ax) else { return nil }
+            var pid: Int32 = 0
+            guard unsafe AXUIElementGetPid(window.ax, &pid) == .success, pid == nsApp.processIdentifier,
+                  let children = window.ax.get(Ax.childrenAttr) else { return nil }
+            var isNativeTab = false
+            for child in children {
+                guard let role = child.get(Ax.roleAttr) else { return nil }
+                if role == kAXTabGroupRole {
+                    guard let tabs = child.get(Ax.tabsAttr), !tabs.isEmpty,
+                          tabs.allSatisfy({ $0.get(Ax.subroleAttr) == "AXTabButton" }) else { return nil }
+                    isNativeTab = isNativeTab || tabs.count > 1
+                }
+            }
+            try job.checkCancellation()
+            return RestorationWindowProof(token: window.restorationToken,
+                type: window.ax.getWindowType(axApp: axApp.threadGuarded,
+                    nsApp.bundleIdentifier.flatMap(KnownBundleId.init(rawValue:)), nsApp.activationPolicy, level),
+                isNativeTab: isNativeTab,
+                focused: nsApp.isActive && axApp.threadGuarded.get(Ax.focusedWindowAttr)?.windowId == id)
+        }
+    }
+
     @MainActor
     func applyNativeTabUpdate(_ update: NativeTabUpdate) async throws {
+        WindowManagerHandoff.cancelPendingNativeTabAssignments(update, pid: pid)
         let replacements = update.replacements
         let exposedWindowIds = update.exposedWindowIds
         func managedOwner(_ id: UInt32) -> MacWindow? {
@@ -454,6 +493,7 @@ final class MacApp: AbstractApp {
 }
 
 private final class AxWindow {
+    let restorationToken = UUID()
     let windowId: UInt32
     let ax: AXUIElement
     // periphery:ignore

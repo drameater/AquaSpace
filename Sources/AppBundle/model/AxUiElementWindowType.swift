@@ -1,6 +1,6 @@
 import AppKit
 
-enum AxUiElementWindowType: String {
+enum AxUiElementWindowType: String, Sendable {
     case window
     case dialog
     /// Not even a real window

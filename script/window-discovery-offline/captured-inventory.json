@@ -1,0 +1,55 @@
+{
+  "evidence": ".debug/aquaspace/hidden-zen-handoff/run-20261015-205646/",
+  "caveat": "Retained references are a replay hypothesis, not captured pre-handoff AX handles. Exposed IDs come from the saved post-handoff AX read; Finder's AXDesktop with no window ID is excluded.",
+  "apps": [
+    {
+      "pid": 684,
+      "name": "Finder",
+      "retained_ids": [
+        30583,
+        29724
+      ],
+      "exposed_ids": [
+        30881
+      ]
+    },
+    {
+      "pid": 738,
+      "name": "System Settings",
+      "retained_ids": [
+        29598
+      ],
+      "exposed_ids": []
+    },
+    {
+      "pid": 22595,
+      "name": "Obsidian",
+      "retained_ids": [
+        30197,
+        29754
+      ],
+      "exposed_ids": []
+    },
+    {
+      "pid": 93525,
+      "name": "VSCodium",
+      "retained_ids": [
+        30290
+      ],
+      "exposed_ids": []
+    },
+    {
+      "pid": 15177,
+      "name": "Vesktop",
+      "retained_ids": [
+        30682
+      ],
+      "exposed_ids": []
+    }
+  ],
+  "source_sha256": {
+    "session.json": "a7020fb019b42d7de72da91c08a0c16ff01c3b434ab2dcd5b6ff6e8118db6938",
+    "post-handoff-read-only.json": "62d7b2a8e95ed2b7770987c178dd665b463c9e406ed9e4de41f4cabf509d3093",
+    "other-baseline-native-read-only.json": "1869fe029c54ac290526eb821089739aa8c09a9a7016950623340cae7b10ef5d"
+  }
+}
