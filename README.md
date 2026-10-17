@@ -2,8 +2,7 @@
 
 <img src="resources/Assets.xcassets/AppIcon.appiconset/icon.png" alt="AquaSpace icon" width="96">
 
-AquaSpace is a fork of [AeroSpace](https://github.com/nikitabobko/AeroSpace),
-maintained by [@drameater](https://github.com/drameater). It keeps native macOS
+AquaSpace is a fork of [AeroSpace](https://github.com/nikitabobko/AeroSpace). It keeps native macOS
 tab groups together across workspaces while preserving AeroSpace's keyboard-driven
 tiling, configuration format and original icon.
 
