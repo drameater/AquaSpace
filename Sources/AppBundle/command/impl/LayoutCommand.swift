@@ -79,7 +79,7 @@ struct LayoutCommand: Command {
                     case .tilingContainer:
                         return .succ // Nothing to do
                     case .floatingWindowsContainer(let container):
-                        let continuation = WindowCommandContinuation(window)
+                        let continuation = WindowCommandContinuation.beforeMutation(window)
                         let size = try? await window.getAxSize(.nonCancellable)
                         guard continuation.mayContinue else { return .fail }
                         window.lastFloatingSize = size ?? window.lastFloatingSize

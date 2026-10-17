@@ -11,7 +11,7 @@ struct MoveCommand: Command {
         guard let currentWindow = target.windowOrNil else {
             return .fail(io.err(noWindowIsFocused))
         }
-        let continuation = WindowCommandContinuation(currentWindow)
+        let continuation = WindowCommandContinuation.beforeMutation(currentWindow)
         if await shouldFailBecauseFullscreen_nonCancellable(
             window: currentWindow,
             failIfFullscreen: args.failIfFullscreen,

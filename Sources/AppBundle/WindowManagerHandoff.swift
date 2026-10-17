@@ -121,7 +121,10 @@ enum WindowManagerHandoff {
         }
     }
 
-    private static func stopForUncertainOwnership(_ error: any Error) async {
+    private static func stopForUncertainOwnership(
+        _ error: any Error,
+        phase: WindowManagerFailureReport.Phase = .monitoring,
+    ) async {
         guard !serverArgs.isReadOnly else { return }
         admission.yield()
         pendingRestoration.removeAll()
@@ -129,9 +132,9 @@ enum WindowManagerHandoff {
         restorationRootTokens.removeAll()
         freezeAXWrites()
         pauseWindowManagementForHandoff()
+        showFailure(error, phase: phase)
         await activateMode_nonCancellable(nil)
         for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
-        showFailure(error)
         exit(EXIT_FAILURE)
     }
 
@@ -161,7 +164,7 @@ enum WindowManagerHandoff {
             }
             throw HandoffError.message("AeroSpace did not stop. AquaSpace will not start a second window manager.")
         } catch {
-            showFailure(error)
+            showFailure(error, phase: .startup)
             exit(EXIT_FAILURE)
         }
     }
@@ -173,8 +176,12 @@ enum WindowManagerHandoff {
             writePermission.withLock { $0.claim() }
             watchForOriginal()
         } catch {
-            await stopForUncertainOwnership(error)
+            await failStartup(error)
         }
+    }
+
+    static func failStartup(_ error: any Error) async {
+        await stopForUncertainOwnership(error, phase: .startup)
     }
 
     static func restoreStartupSession() async {
@@ -243,7 +250,7 @@ enum WindowManagerHandoff {
         } catch {
             // Fail closed. Never kill/restart AeroSpace, rebind its socket, or
             // re-enable AquaSpace while the original may already be managing windows.
-            showFailure(error)
+            showFailure(error, phase: .handoff)
             exit(EXIT_FAILURE)
         }
     }
@@ -528,9 +535,11 @@ enum WindowManagerHandoff {
         return try JSONDecoder().decode(ServerAnswer.self, from: data)
     }
 
-    private static func showFailure(_ error: any Error) {
-        // A modal alert can stall the main actor and leave a half-completed handoff.
-        NSLog("AquaSpace handoff stopped: %@", error.localizedDescription)
+    private static func showFailure(_ error: any Error, phase: WindowManagerFailureReport.Phase) {
+        // Keep reporting nonmodal: neither focus nor controller lifetime should
+        // depend on dismissing a dialog. Persist before the existing exit path.
+        WindowManagerFailureReport(error: error, phase: phase, version: aeroSpaceAppVersion,
+            executable: CommandLine.arguments.first ?? "AquaSpace", pid: myPid).publish()
     }
 
     private enum HandoffError: LocalizedError {

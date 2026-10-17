@@ -2339,3 +2339,33 @@ installation or push. These fixes, offline regressions and diagnosis notes are
 included in this local checkpoint. Creating it involved no additional tests,
 builds, installations, app/helper launches or live checks.
 Installed AquaSpace remains `0.21.3-aquaspace.20261016.2`.
+
+## Offline native intent and failure reporting — 2026-10-17
+
+The working source fixes the native-fullscreen no-op gap and records explicit
+assignment intent before native reads. The same entry helper covers tiling,
+native fullscreen/minimize, move, close and relayout without changing automatic
+or session provenance, exact-model validation, or controller authority.
+
+Lifecycle failures now leave a readable, timestamped report at
+`~/Library/Logs/AquaSpace/last-failure.txt` and write the reason to stderr and
+public Console output. The report includes phase/version/executable/PID and
+nested error details; missing-executable proof failures retain PID/errno/stage.
+File-write failures retain both output fallbacks. Reporting is nonmodal and
+cannot retry, grant control, activate a window or start another manager. Existing
+failure paths still exit; freeze/pause precede reporting, and reporting precedes
+shutdown waits. The final startup session's thrown errors are reported too.
+
+The callback regressions reproduced 29 failed assertions before repair. All
+**198 offline Swift methods** and **235 Python tests** pass; the production
+library compiles using cached dependencies. See the
+[diagnosis and coverage limits](native-tabs-diagnosis.md#native-intent-before-reads-and-readable-lifecycle-failures--2026-10-17)
+for the executed cases and source-only lifecycle wiring checks.
+
+The installed `.20261016.2` bundle matches the saved release and does not contain
+these changes. Its recent startup logs show a rapid exit but redact the final
+reason, so the current blocker has not been confirmed or repaired by installing
+anything. Both intent fixes, failure reporting, offline regression tests and
+diagnosis notes are included in this local checkpoint. Creating the checkpoint
+involved no additional tests, builds, installations, app/helper launches or live
+checks. Nothing was pushed.

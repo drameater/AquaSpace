@@ -11,7 +11,7 @@ struct CloseCommand: Command {
             return .fail(io.err("Empty workspace"))
         }
         // Access ax directly. Not cool :(
-        let continuation = WindowCommandContinuation(window)
+        let continuation = WindowCommandContinuation.beforeMutation(window)
         let quit = await args.quitIfLastWindow.andAsync({ @MainActor @Sendable in (try? await window.macAppUnsafe.getAxWindowsCount(.nonCancellable)) == 1 })
         guard continuation.mayContinue else { return .fail }
         // Termination is a native effect outside the AX write adapter. Startup

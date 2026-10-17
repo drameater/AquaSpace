@@ -223,6 +223,7 @@ BODY
     (tests / 'CallbackCommandContinuationTest.swift').write_text((fixture_root / 'CallbackCommandContinuationTest.swift').read_text())
     (tests / 'CallbackSafetyTest.swift').write_text((fixture_root / 'CallbackSafetyTest.swift').read_text())
     (tests / 'NoOpIntentTest.swift').write_text((fixture_root / 'NoOpIntentTest.swift').read_text())
+    (tests / 'MutationIntentEntryTest.swift').write_text((fixture_root / 'MutationIntentEntryTest.swift').read_text())
     fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
     (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')

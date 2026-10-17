@@ -13,7 +13,7 @@ struct MacosNativeMinimizeCommand: Command {
         guard let window = target.windowOrNil else {
             return .fail(io.err(noWindowIsFocused))
         }
-        let continuation = WindowCommandContinuation(window)
+        let continuation = WindowCommandContinuation.beforeMutation(window)
         guard let newState: Bool = try? await !window.isMacosMinimized(.nonCancellable) else { return .fail(io.err(bugPrompt())) }
         guard continuation.mayContinue else { return .fail }
         window.asMacWindow().setNativeMinimized(newState)

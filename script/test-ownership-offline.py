@@ -20,7 +20,8 @@ def main():
     headers = package / 'Sources/PrivateApi/include'
     tests = package / 'Tests/OwnershipTests'
     for directory in [source, headers, tests]: directory.mkdir(parents=True, exist_ok=True)
-    for path in ['model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift', 'model/PendingWindowRestoration.swift']:
+    for path in ['model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift', 'model/PendingWindowRestoration.swift',
+                 'model/WindowManagerFailureReport.swift']:
         shutil.copy2(root / 'Sources/AppBundle' / path, source / Path(path).name)
     # Only process/signing declarations, no AppKit/AX or app entrypoint in this test.
     shutil.copy2(root / 'Sources/PrivateApi/include/process_inventory.h', headers / 'process_inventory.h')
@@ -33,7 +34,8 @@ int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buf, int size) { abort
 int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
 int csops_audittoken(pid_t pid, unsigned int op, void *buf, size_t size, void *token) { abort(); }
 ''')
-    for name in ['WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift', 'WindowRestorationProcessTest.swift']:
+    for name in ['WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift', 'WindowRestorationProcessTest.swift',
+                 'WindowManagerFailureReportTest.swift']:
         path = root / 'Sources/AppBundleTests' / name
         (tests / path.name).write_text(path.read_text().replace('@testable import AppBundle', '@testable import Ownership'))
     (package / 'Package.swift').write_text('''// swift-tools-version: 6.2

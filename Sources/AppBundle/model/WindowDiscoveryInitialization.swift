@@ -67,6 +67,13 @@ final class WindowDiscoveryInitialization {
 /// affected model too: a callback may explicitly target a different window.
 @MainActor
 struct WindowCommandContinuation {
+    /// Accepted assignment intent must supersede discovery before a native read,
+    /// even if that read later fails or proves the requested state is a no-op.
+    static func beforeMutation(_ window: Window) -> Self {
+        WindowManagerHandoff.cancelPendingForUserMutation([window])
+        return Self(window)
+    }
+
     private let window: Window
     private let userMutationToken: UUID
     private let initialization: WindowDiscoveryInitialization?

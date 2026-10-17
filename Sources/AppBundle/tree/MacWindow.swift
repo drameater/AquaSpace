@@ -254,7 +254,7 @@ extension Window {
 // The function is private because it's unsafe. It leaves the window in unbound state
 @MainActor
 private func unbindAndGetBindingDataForNewWindow(_ windowId: UInt32, _ macApp: MacApp, _ workspace: Workspace, window: Window?, _ cm: CancellationMode) async throws -> BindingData {
-    let continuation = window.map { WindowCommandContinuation($0) }
+    let continuation = window.map { WindowCommandContinuation.beforeMutation($0) }
     let windowLevel = getWindowLevel(for: windowId)
     let type = try await macApp.getAxUiElementWindowType(windowId, windowLevel, cm)
     guard WindowDiscoveryInitialization.mayRunAutomaticCommand,

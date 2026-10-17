@@ -887,3 +887,79 @@ Nothing was installed or pushed. These fixes, regressions and diagnosis notes ar
 included in this local checkpoint. Creating it involved no additional tests,
 builds, installations, app/helper launches or live checks. Installed AquaSpace
 remains `0.21.3-aquaspace.20261016.2`.
+
+## Native intent before reads and readable lifecycle failures — 2026-10-17
+
+Review of `7317f7b5` found a native counterpart to the model-fullscreen no-op gap:
+an explicit native-fullscreen request returned without invalidating discovery
+when AX already reported that state. Floating-to-tiling also awaited native size
+before recording user intent. An older detection callback could remain authorized
+while the newer explicit assignment awaited its read. The sibling native-state,
+close, move and relayout entries had the same timing boundary.
+
+The replay adds three methods / eleven case invocations using the production
+callback/shell loop, layout/native-state/close commands and relayout adapter.
+Native reads suspend on memory gates and all native effects remain memory logs.
+Before repair these cases produced **29 failed assertions**: native no-ops left
+pending intent active and older automatic closes dispatched during newer reads.
+The repaired entry helper records exact-window user mutation before constructing
+its continuation and before the read. Layout tiling, native fullscreen/minimize,
+close, move and relayout use it; focus and mouse reads retain their separate
+semantics. Automatic/session provenance still prevents these entries from
+acquiring user intent. All existing generation, exact-model, ownership and
+physical-write authority checks remain. Move's complete body is compile/audit
+checked; the five executed read paths are tiling, relayout, native fullscreen,
+minimize and close.
+
+The launch investigation separately verified all nine installed bundle files
+against the saved `.20261016.2` release (revision `96ef60c5`). Saved October 17
+logs show successful process startup followed by a rapid orderly exit, with the
+final Foundation message redacted. An earlier saved October 16 log reports an
+uncertain process inventory. This supports an admission-failure hypothesis but
+does not establish the current exact blocker; neither app nor any reader/helper
+was launched to reproduce it. These recent checkpoints are not installed.
+
+`WindowManagerFailureReport` now records lifecycle phase, timestamp, version,
+executable, own PID and a bounded NSError cause chain. Reports go to
+`~/Library/Logs/AquaSpace/last-failure.txt`, with a private directory (0700) and
+file (0600), and to stderr plus explicitly public Console logging. Persistence
+failure leaves the original cause in both fallback sinks. The process scanner's
+missing-path proof wrapper retains its PID, errno and stage alongside the
+underlying proof error, rather than losing those details in a generic refusal.
+Its trust/signature/identity policy is unchanged; this wrapper is compile/audit
+checked, while report-chain rendering is exercised with fixture errors.
+
+Admission and handoff catches retain their fail-closed exits. The final startup
+session also catches thrown errors and uses the same failure path. That path
+yields, freezes writes and pauses management before reporting, then disables
+bindings/drains writes before exiting. Reporting precedes shutdown awaits so a
+slow drain cannot hide the reason. Reporting has no UI, activation, process,
+retry or control-grant capability and cannot launch a replacement manager. The
+last report is timestamped historical evidence; it is not cleared on success.
+
+Four new behavioral report tests write only to isolated temporary directories
+and inject both output sinks. They cover all three admission reasons, metadata,
+permissions, overwrite, nested causes, bounded chains and persistence failure.
+Three Python boundary checks reject the old log-only checkpoint and protect
+public logging, phase wiring, freeze-before-report and report-before-await.
+They do not execute the app lifecycle or native process functions.
+
+All **105 discovery/deferred**, **33 ownership/report/process**, **49 native-tab**,
+**9 hidden-window** and two simulated real-model tests pass: **198 offline Swift
+methods**. All **235 Python tests** pass. The production library compiles with
+cached dependencies and the macOS 26.5 SDK; source hashes match the checkout.
+No app entrypoint, diagnostic helper, installed CLI, native process inventory,
+desktop reader or live harness was launched. Nothing was installed or pushed.
+The installed app's current startup blocker remains unconfirmed until a future
+authorized run can produce the new report.
+
+Evidence is under `.debug/window-discovery-offline/`: `mutation-entry-red.log`,
+`mutation-entry-green.log`, `startup-report-ownership.log`,
+`startup-report-wiring-red.log`, `startup-report-python.log`,
+`mutation-entry-tabs.log`, `mutation-entry-hidden.log`,
+`mutation-entry-tab-model.log`, `startup-report-library.log` and
+`mutation-entry-source-record.json`. Both intent fixes, failure reporting,
+offline regression tests and diagnosis notes are included in this local
+checkpoint. Creating the checkpoint involved no additional tests, builds,
+installations, app/helper launches or live checks. Installed AquaSpace remains
+`0.21.3-aquaspace.20261016.2`.

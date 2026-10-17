@@ -169,9 +169,15 @@ private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRes
         let code = errno
         guard count > 0 else {
             if code == ESRCH { return nil }
-            if try WindowManagerMissingExecutable.resolve(code: code, identity: { try identity(pid) },
-                generation: { try generation(pid) }, signature: { try signature(pid, generation: $0) }, userId: userId) {
-                return nil // Positively identified immutable nonmanager, not an unexamined process.
+            do {
+                if try WindowManagerMissingExecutable.resolve(code: code, identity: { try identity(pid) },
+                    generation: { try generation(pid) }, signature: { try signature(pid, generation: $0) }, userId: userId) {
+                    return nil // Positively identified immutable nonmanager, not an unexamined process.
+                }
+            } catch {
+                let context = scanError("pid-path-proof", pid: pid, count: count, code: code)
+                throw NSError(domain: context.domain, code: context.code,
+                    userInfo: [NSLocalizedDescriptionKey: context.localizedDescription, NSUnderlyingErrorKey: error])
             }
             throw scanError("pid-path", pid: pid, count: count, code: code)
         }
