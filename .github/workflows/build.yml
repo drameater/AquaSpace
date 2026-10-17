@@ -1,4 +1,4 @@
-name: build
+name: AquaSpace checks
 
 on:
   push:
@@ -7,8 +7,6 @@ on:
       - 'rr/**' # "rr" stands for "remote run"
   pull_request:
     branches: [ "main" ]
-  schedule:
-    - cron: '0 0 * * *' # every day at 00:00
 
 env:
   AEROSPACE_VERBOSE_BUILD: 1
@@ -41,29 +39,8 @@ jobs:
       - run: ./build-debug.sh
       - run: ./test.sh
 
-  # We build release artifacts only on the latest macOS versions because:
-  # 1. It cuts the build time twice on GH Actions
-  # 2. The latest Xcode version is not available on old macOS, and old Xcode versions bundle too old Swift version
-  build-release:
-    strategy:
-      # fail-fast: false # Disable fail-fast in matrix
-      matrix:
-        os: [macos-15, macos-26, xcode-27]
-    name: build-release
-    runs-on: ${{ matrix.os }}
-    steps:
-      - run: env # Debug
-      - uses: actions/checkout@v6
-      - run: ./.github/gh-actions-runner-xcode-select.sh
-      - run: brew update && brew install bash fish xcbeautify swiftly
-      - run: swiftly init --skip-install --assume-yes --verbose && swiftly install
-      - run: swiftly run swift --version
-      - name: './build-release.sh'
-        run: |
-          # "-" means "Sign to run locally". There is no aerospace-codesign-certificate on GH Actions
-          ./build-release.sh --codesign-identity -
-          brew trust nikitabobko/tap
-          ./install-from-sources.sh --dont-rebuild
-      - name: cat ./.release/xcodebuild.log
-        if: ${{ always() }}
-        run: 'if test -f ./.release/xcodebuild.log; then cat ./.release/xcodebuild.log; fi'
+  # The inherited upstream release/install job is retired for this local fork.
+  # It expected a Homebrew distribution, a signing identity and .release output.
+  # Local signed bundles use build-release.sh and the serialized installer,
+  # with an explicitly available AeroSpace.app resource donor; CI never launches
+  # or installs a window manager.

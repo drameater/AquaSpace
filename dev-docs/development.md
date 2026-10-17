@@ -1,6 +1,7 @@
 # Development Notes
 
-To build/install from sources do the following:
+For current local build/install and safety instructions, see [aquaspace.md](aquaspace.md).
+The optional upstream toolchain setup follows:
 1. Install dependencies
 2. Create codesign certificate in `Keychain Access.app`
 3. Run one of the entry point scripts to build/install from sources
@@ -25,37 +26,36 @@ If you struggle to build AeroSpace locally, you can also refer to [builds in Git
     -   Install asciidoctor using Ruby `bundler`. `cd AeroSpace && bundler install`
 5.  Install optional `xcbeautify` to make Xcode build logs readable. `brew install xcbeautify`
 
-## 2. Create codesign certificate
+## 2. Local signing
 
-If you want to run AeroSpace as App Bundle (AeroSpace.app) you need to create self-signed certificate that will be used to codesign AeroSpace.
-Release artifact is built as App Bundle.
-If you only plan to build the debug version of AeroSpace, you can run it from the terminal and custom certificate is not required.
-
-1.  Open `Keychain Access.app`
-2.  Menu -> `Keychain Access` -> `Certificate Assistance` -> `Create a Certificate...`
-    -   Name: `aerospace-codesign-certificate`
-    -   Identity Type: `Self-Signed Root`
-    -   Certificate Type: `Code Signing`
+The local AquaSpace builder signs the app and CLI ad hoc with the existing
+local.aquaspace identity. No custom signing certificate, sudo, SIP change or
+injection is required. The app uses the normal macOS Accessibility permission.
+The resource donor defaults to /Applications/AeroSpace.app, retaining the same
+logo; pass --base-app to use another verified local resource copy.
 
 ## 3. Entry point scripts
 
-**Debug build**
--   `build-debug.sh` - Build debug build to `.debug` dir by using SPM. (Xcode is not involved)
--   `test.sh` - Run tests.
--   `swiftformat.sh` - Format the code.
--   `run-debug.sh` - Run AeroSpace.app debug build.
--   `run-cli.sh` - Run `aerospace` in CLI. Arguments are forwarded to `aerospace` binary.
--   `build-docs.sh` - Build the site and man pages to `.site` and `.man` dirs respectively.
--   `build-shell-completion.sh` - Build shell completion to `.shell-completion`.
-    You can test that the completion works properly by sourcing the file `source ./.shell-completion/zsh/_aerospace`
--   `generate.sh` - Regenerate generated project files. `xcode/AquaSpace.xcodeproj` is generated, and some of the source files
-    (the source files have `Generated` suffix in their names).
+- build-release.sh stages a signed bundle at .debug/aquaspace/release/AquaSpace.app.
+  It forwards builder options, including --sdk, --version and --base-app;
+  --build-version remains an alias for --version. It does not install or launch.
+- install-from-sources.sh builds and invokes the serialized AquaSpace updater.
+  --dont-rebuild uses the existing staged build. The updater preserves the
+  separate stock AeroSpace installation and never launches a rollback manager.
+- script/install-aquaspace.py installs a staged bundle. Add --restart to capture
+  the sole installed AquaSpace's identity-backed session, stop it, verify exit,
+  and start the replacement exactly once. Without --restart it launches nothing.
+- build-debug.sh stages AquaSpaceApp and aquaspace in .debug/aquaspace-debug;
+  run-debug.sh and run-cli.sh use those products. Debug admission refuses another
+  manager rather than taking over stock. Existing .debug evidence is preserved.
+- test.sh runs the upstream model suite. The script/test-*-offline.py entry
+  points exercise deterministic in-memory regressions without controlling windows.
+- generate.sh regenerates command metadata and xcode/AquaSpace.xcodeproj.
+  Existing config/command compatibility identifiers intentionally remain.
 
-**Release build**
--   `build-release.sh` - Build release build to `.release` dir by using Xcode.
--   `install-from-sources.sh` - Build release build from sources and install it as `aerospace-dev` brew cask.
-    This script is "work in progress".
-    Use it on your own risk.
+The inherited Homebrew release/install CI job and nightly schedule are retired
+in this local fork. Push/PR debug checks remain defined for a future fork remote;
+no workflow was run or remote changed during the local development pass.
 
 ## IDE
 
