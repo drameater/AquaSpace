@@ -963,3 +963,60 @@ offline regression tests and diagnosis notes are included in this local
 checkpoint. Creating the checkpoint involved no additional tests, builds,
 installations, app/helper launches or live checks. Installed AquaSpace remains
 `0.21.3-aquaspace.20261016.2`.
+
+## Cross-window callback chains retain cancellation — 2026-10-17
+
+Review of `8ff76fe3` found that a rejected continuation was only a command
+failure. If window A's automatic callback explicitly targeted B, newer user
+intent for B correctly stopped that awaited command without superseding A's
+initialization. An `||` fallback, subsequent sequence command or pipeline stage
+could then capture B's new mutation token and move or close it anyway. A later
+callback in A's same initialization could also continue.
+
+The shell now gives each leaf command a task-local collection of its automatic
+window continuations. After a failed command, stale continuations supersede
+their captured initialization before refresh and again after refresh returns.
+This preserves cancellation across every compound operator and later callback,
+including reads that throw before reaching their continuation guard and newer
+target intent arriving during the command's awaited refresh. The existing
+initialization gate rejects subsequent dispatch; no branch acquires replacement
+authority. Ordinary failures with valid targets still allow fallbacks. Successful
+optional probes can skip changed candidates without canceling unrelated
+placement. The scope is local to one command and cannot suppress another
+window's independent initialization. All exact-model, user-intent, provenance,
+controller generation, native ownership and physical-write checks remain.
+
+The offline replay now extracts all four production compound shell functions;
+fallback and pipeline no longer use fail-if-invoked stubs. I/O storage and model
+refresh remain memory substitutes. Six new methods / 41 case invocations cover:
+
+- Fallback, sequence and pipeline after five real awaited command paths:
+  tiling, relayout, native fullscreen, minimize and close. Each is exercised with
+  a successful native read and a throwing read while newer user input moves B.
+- Nested follow-up movement and close commands, later callback dispatch, and
+  an independent initialization after the rejected source callback ends.
+- Newer user intent during the failed command's refresh, for all three operators.
+- Ordinary read-failure fallbacks, unrelated user input, successful optional
+  geometry probes, and pipeline input/output/error/exit-status propagation.
+
+The original 30 stale-target cases reproduced **150 failed assertions** before
+repair. Three additional refresh cases reproduced **six failed assertions**
+against the initial repair, proving the need for the second cancellation check.
+All **111 discovery/deferred**, **33 ownership/report/process**, **49 native-tab**,
+**9 hidden-window** and two simulated real-model tests pass: **204 offline Swift
+methods**. All **235 Python tests** pass. The full production `AppBundle` library
+compiled through the simulated real-model test package using cached dependencies
+and the macOS 26.5 SDK. An initial attempt used a scratch directory without
+dependencies; SwiftPM attempted fetches that failed under the network restriction.
+No dependency was fetched. The successful rerun used the existing AquaSpace build
+cache. A separate relative scratch-path invocation was rejected before building.
+
+Evidence is under `.debug/window-discovery-offline/cross-window-chain-*`:
+`red.log`, `refresh-red.log`, `green.log`, `ownership.log`, `tabs.log`,
+`hidden.log`, `python.log`, `model.log`, `model-cached.log` and `source-record.json`.
+No app entrypoint, diagnostic helper, installed CLI, native desktop reader, live
+inventory or live harness was launched. Nothing was installed or pushed. The
+continuation fix, offline regressions and diagnosis notes are included in this
+local checkpoint. Creating it involved no additional tests, builds, app/helper
+launches, installations or live checks. Installed AquaSpace remains
+`0.21.3-aquaspace.20261016.2`.

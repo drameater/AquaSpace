@@ -127,8 +127,11 @@ BODY
     shell_end = '\n    @discardableResult @MainActor func run('
     if shell.count(shell_start) != 1 or shell.count(shell_end) != 1:
         raise RuntimeError('Shell command extraction boundaries changed.')
+    compound_start = '@MainActor private func runShellOr('
+    if shell.count(compound_start) != 1:
+        raise RuntimeError('Compound shell extraction boundary changed.')
     (source / 'ReplayCommandRunner.swift').write_text('extension Shell where T == any Command {\n' +
-        shell[shell.index(shell_start):shell.index(shell_end)] + '\n}\n')
+        shell[shell.index(shell_start):shell.index(shell_end)] + '\n}\n' + shell[shell.index(compound_start):])
     move = (production / 'command/impl/MoveNodeToWorkspaceCommand.swift').read_text()
     move_start = '@MainActor\nfunc moveWindowToWorkspace('
     if move.count(move_start) != 1:
@@ -179,12 +182,8 @@ BODY
         raise RuntimeError('Detection callback matcher boundary changed.')
     (source / 'AutomaticDetection.swift').write_text(mac_window[
         mac_window.index(detected_start):mac_window.index(matcher_start)])
-    seq_start = '@MainActor private func runShellSeq('
-    seq_end = '\n/// runs commands sequentially'
-    if shell.count(seq_start) != 1 or shell.count(seq_end) != 1:
-        raise RuntimeError('Sequential shell extraction boundaries changed.')
-    (source / 'SequentialShell.swift').write_text(shell[
-        shell.index(seq_start):shell.index(seq_end)].replace('private func', 'func', 1))
+    # All four compound operators now come from the production shell above.
+    (source / 'SequentialShell.swift').unlink(missing_ok=True)
     registration_start = '        let initialization = WindowDiscoveryInitialization(window)'
     registration_end = '        return window\n    }'
     if mac_window.count(registration_start) != 1 or mac_window.count(registration_end) != 1:
@@ -224,6 +223,7 @@ BODY
     (tests / 'CallbackSafetyTest.swift').write_text((fixture_root / 'CallbackSafetyTest.swift').read_text())
     (tests / 'NoOpIntentTest.swift').write_text((fixture_root / 'NoOpIntentTest.swift').read_text())
     (tests / 'MutationIntentEntryTest.swift').write_text((fixture_root / 'MutationIntentEntryTest.swift').read_text())
+    (tests / 'CrossWindowCallbackChainTest.swift').write_text((fixture_root / 'CrossWindowCallbackChainTest.swift').read_text())
     fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
     (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')

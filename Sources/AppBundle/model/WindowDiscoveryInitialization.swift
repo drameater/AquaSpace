@@ -63,6 +63,26 @@ final class WindowDiscoveryInitialization {
     }
 }
 
+/// A failed automatic command must not turn a rejected cross-window continuation
+/// into an ordinary shell failure that a fallback can bypass. Keep this scope
+/// local to one leaf command; optional probes in a successful command may still
+/// skip changed candidates without canceling unrelated automatic placement.
+@MainActor
+final class WindowAutomaticCommandContinuations {
+    private var continuations: [WindowCommandContinuation] = []
+
+    func register(_ continuation: WindowCommandContinuation) {
+        continuations.append(continuation)
+    }
+
+    func cancelStaleInitialization(ifFailed failed: Bool) {
+        guard failed else { return }
+        for continuation in continuations {
+            continuation.supersedeStaleAutomaticInitialization()
+        }
+    }
+}
+
 /// Command entry checks do not cover suspension inside the command. Capture the
 /// affected model too: a callback may explicitly target a different window.
 @MainActor
@@ -88,6 +108,7 @@ struct WindowCommandContinuation {
         automatic = WindowRestorationMutation.isAutomaticDiscovery
         hadWindowControl = WindowManagerHandoff.canControlWindows
         controlGeneration = WindowManagerHandoff.controlGeneration
+        if automatic { WindowRestorationMutation.commandContinuations?.register(self) }
     }
 
     var targetIsUnchanged: Bool {
@@ -99,5 +120,9 @@ struct WindowCommandContinuation {
         !automatic || (initialization?.mayContinue == true && targetIsUnchanged &&
             WindowManagerHandoff.canInitializeWindows && controlGeneration == WindowManagerHandoff.controlGeneration &&
             !WindowManagerHandoff.isYielding && (!hadWindowControl || WindowManagerHandoff.canControlWindows))
+    }
+
+    fileprivate func supersedeStaleAutomaticInitialization() {
+        if automatic, !mayContinue { initialization?.supersede() }
     }
 }

@@ -102,6 +102,7 @@ extension AXUIElement {
     static var nativeWrites: [String] = []
     static var unbinds: [UInt32] = []
     static var awaitCenter: ((MacWindow) async throws -> CGPoint?)?
+    static var commandRefresh: (() async -> Void)?
     static var geometryTarget: MacWindow?
     static var mruWrites: [UInt32] = []
     static var normalizeOrientation = false
@@ -263,8 +264,24 @@ struct CmdEnv {
     var windowId: UInt32?
     func withWindowId(_ id: UInt32) -> Self { Self(windowId: id) }
 }
-@MainActor final class CmdIo { func err(_ value: String) -> String { value } }
-@MainActor enum CmdIoImpl { static var emptyStdinIgnoringOut: CmdIo { CmdIo() } }
+@MainActor class CmdIo {
+    var stdout: [String] = [], stderr: [String] = []
+    private var input: String
+    init(input: String = "") { self.input = input }
+    func readStdin() -> String { let result = input; input = ""; return result }
+    @discardableResult func out(_ value: String) -> String { stdout.append(value); return value }
+    @discardableResult func out(_ values: [String]) -> [String] { stdout += values; return values }
+    @discardableResult func err(_ value: String) -> String { stderr.append(value); return value }
+}
+@MainActor final class CmdIoImpl: CmdIo {
+    init(stdin: CmdStdin) { super.init(input: stdin.input) }
+    static var emptyStdinIgnoringOut: CmdIo { CmdIo() }
+}
+@MainActor final class CmdIoForwardingStdin: CmdIo {
+    let original: CmdIo
+    init(stdin: CmdIo) { original = stdin; super.init() }
+    override func readStdin() -> String { original.readStdin() }
+}
 struct BinaryExitCode: Sendable {
     let rawValue: Int32
     static let succ = Self(rawValue: 0)
@@ -275,6 +292,7 @@ struct BinaryExitCode: Sendable {
 }
 struct Int32ExitCode: Sendable { let rawValue: Int32; static let fail = Self(rawValue: 1); static let succ = Self(rawValue: 0) }
 let EXIT_CODE_ZERO: Int32 = 0
+let EXIT_CODE_TWO: Int32 = 2
 @MainActor protocol Command {
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode
     var shouldResetClosedWindowsCache: Bool { get }
@@ -404,7 +422,11 @@ struct BindingData { let parent: ReplayParent; let adaptiveWeight: CGFloat; let 
 @MainActor extension LayoutCommand {
     func run(_ env: CmdEnv, _ stdin: CmdStdin) async { _ = await Shell<any Command>.cmd(self).run(env, CmdIo()) }
 }
-enum CmdStdin { case emptyStdin }
+struct CmdStdin {
+    let input: String
+    init(_ input: String) { self.input = input }
+    static var emptyStdin: Self { Self("") }
+}
 extension Array { func singleOrNil() -> Element? { count == 1 ? first : nil }; func orDie() -> Self { self } }
 extension Optional { func orDie() -> Wrapped { self! } }
 @MainActor func bugPrompt() -> String { "replay error" }
@@ -442,10 +464,7 @@ extension Bool {
     func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> Target? { Target(windowOrNil: window) }
 }
 @MainActor func resetClosedWindowsCache() {}
-@MainActor func refreshModel_nonCancellable() async {}
-@MainActor func runShellAnd(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
-@MainActor func runShellOr(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
-@MainActor func runShellPipe(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
+@MainActor func refreshModel_nonCancellable() async { await Simulation.commandRefresh?() }
 
 struct ReplayLayoutResult {
     let value: String

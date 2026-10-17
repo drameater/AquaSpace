@@ -2369,3 +2369,23 @@ anything. Both intent fixes, failure reporting, offline regression tests and
 diagnosis notes are included in this local checkpoint. Creating the checkpoint
 involved no additional tests, builds, installations, app/helper launches or live
 checks. Nothing was pushed.
+
+## Cross-window callback chain cancellation — 2026-10-17
+
+An awaited automatic command targeting another window could reject newer user
+intent correctly, then let a fallback, sequence or pipeline command recapture
+that window and override the user's choice. Failed commands now retain their
+continuations through model refresh and supersede the original initialization
+when those continuations become stale. Later branches and callbacks remain
+blocked; ordinary failures and successful optional probes retain their behavior.
+Ownership and physical-write authority checks are unchanged.
+
+Six new offline methods / 41 cases exercise all three operators, throwing reads,
+nested movement/close, refresh suspension, independent initialization and valid
+fallback/pipeline behavior. All **204 offline Swift methods** and **235 Python
+tests** pass, and the production library compiles with cached dependencies. See
+the [diagnosis and validation limits](native-tabs-diagnosis.md#cross-window-callback-chains-retain-cancellation--2026-10-17).
+The continuation fix, offline regressions and diagnosis notes are included in
+this local checkpoint and are not installed. Creating the checkpoint involved
+no additional tests, builds, app/helper launches, installations or live checks.
+Nothing was pushed.

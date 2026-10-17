@@ -131,6 +131,7 @@ extension OfflineWindowDiscoveryTests {
         Simulation.awaitSize = nil; Simulation.awaitType = nil; Simulation.awaitFullscreen = nil
         Simulation.awaitMinimized = nil; Simulation.awaitWindowCount = nil
         Simulation.nativeWrites = []; Simulation.unbinds = []; Simulation.awaitCenter = nil
+        Simulation.commandRefresh = nil
         Simulation.geometryTarget = nil; Simulation.mruWrites = []
         Simulation.normalizeOrientation = false
         global_layoutForNextDetectedWindow = nil
