@@ -1,195 +1,135 @@
 # AquaSpace
 
-A local fork of AeroSpace with native macOS tab groups kept together across workspaces. AquaSpace retains the original icon, config paths, keybindings, and command compatibility. See [local build and switching instructions](dev-docs/aquaspace.md).
+<img src="resources/Assets.xcassets/AppIcon.appiconset/icon.png" alt="AquaSpace icon" width="96">
 
-For future local updates, use `./install-from-sources.sh` with the [SDK options documented here](dev-docs/aquaspace.md#updating-aquaspace). The updater confirms the old AquaSpace has exited before starting its replacement; recovery restores files without launching another copy.
+AquaSpace is a fork of [AeroSpace](https://github.com/nikitabobko/AeroSpace),
+maintained by [@drameater](https://github.com/drameater). It keeps native macOS
+tab groups together across workspaces while preserving AeroSpace's keyboard-driven
+tiling, configuration format and original icon.
 
-The app is **AquaSpace.app**, the command is **aquaspace**, and the Swift app
-product is **AquaSpaceApp**. `build-release.sh` builds a signed local bundle
-without installing or publishing it. `install-from-sources.sh` uses the serialized
-updater. The legacy `aerospace` CLI alias, config paths, callback environment
-variables, and original icon remain compatible. Runtime errors and config
-diagnostics identify AquaSpace; stock AeroSpace remains separately installed.
+## What changes
 
-The upstream AeroSpace documentation and attribution follow below. This fork is maintained locally; no remote has been created or changed.
+- Native tabs share one workspace slot. Selecting another tab keeps the group on
+  its assigned workspace.
+- Merging groups adopts the destination's workspace; detached tabs can move
+  independently.
+- Identity-checked session transfer preserves workspace assignments when switching
+  between AquaSpace and stock AeroSpace, including windows discovered later.
+- The local updater waits for the old AquaSpace to exit before starting its
+  replacement. Failed updates retain a recovery record and never launch a rollback
+  manager automatically.
 
-# AeroSpace Beta [![Build](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml)
+The [validation notes](dev-docs/aquaspace.md) record the exact releases and cases
+checked in Finder, Ghostty and AppKit fixtures, plus offline regressions. AquaSpace
+uses ordinary macOS Accessibility permission. It requires no sudo, SIP changes
+or code injection.
 
-<img src="./resources/Assets.xcassets/AppIcon.appiconset/icon.png" width="40%" align="right">
+## Build and install
 
-AeroSpace is an i3-like tiling window manager for macOS
+You need macOS, Python 3, Git, a Swift toolchain compatible with
+[Package.swift](Package.swift), and a compatible macOS SDK from Xcode or the
+Command Line Tools. The [development guide](dev-docs/development.md) covers
+additional tooling. Keep `/Applications/AeroSpace.app` installed: the local
+builder copies its icon and bundle resources, then gives AquaSpace its separate
+application identity. `--base-app` can select another local resource donor.
 
-Videos:
-- [YouTube 91 sec Demo](https://www.youtube.com/watch?v=UOl7ErqWbrk)
-- [YouTube Guide by Josean Martinez](https://www.youtube.com/watch?v=-FoWClVHG5g)
-
-Docs:
-- [AeroSpace Guide](https://nikitabobko.github.io/AeroSpace/guide)
-- [AeroSpace Commands](https://nikitabobko.github.io/AeroSpace/commands)
-- [AeroSpace Goodies](https://nikitabobko.github.io/AeroSpace/goodies)
-
-## Key features
-
-- Tiling window manager based on a [tree paradigm](https://nikitabobko.github.io/AeroSpace/guide#tree)
-- [i3](https://i3wm.org/) inspired
-- Fast workspaces switching without animations and without the necessity to disable SIP
-- AeroSpace employs its [own emulation of virtual workspaces](https://nikitabobko.github.io/AeroSpace/guide#emulation-of-virtual-workspaces) instead of relying on native macOS Spaces due to [their considerable limitations](https://nikitabobko.github.io/AeroSpace/guide#emulation-of-virtual-workspaces)
-- Plain text configuration (dotfiles friendly). See: [default-config.toml](https://nikitabobko.github.io/AeroSpace/guide#default-config)
-- CLI first (manpages and shell completion included)
-- Doesn't require disabling SIP (System Integrity Protection)
-- [Proper multi-monitor support](https://nikitabobko.github.io/AeroSpace/guide#multiple-monitors) (i3-like paradigm)
-
-## Installation
-
-Install via [Homebrew](https://brew.sh/) to get autoupdates (Preferred)
-
-```
-brew install --cask nikitabobko/tap/aerospace
+```sh
+git clone https://github.com/drameater/AquaSpace.git
+cd AquaSpace
+./build-release.sh
 ```
 
-In multi-monitor setup please make sure that monitors [are properly arranged](https://nikitabobko.github.io/AeroSpace/guide#proper-monitor-arrangement).
+This stages an ad hoc signed bundle at
+`.debug/aquaspace/release/AquaSpace.app` without installing or launching it.
+If you need a specific SDK, pass `--sdk /path/to/MacOSX.sdk`; see the
+[SDK and build options](dev-docs/aquaspace.md#build-locally).
 
-Other installation options: https://nikitabobko.github.io/AeroSpace/guide#installation
+For the first installation, quit any running window manager, then install the
+staged build:
 
-> [!NOTE]
-> By using AeroSpace, you acknowledge that it's not [notarized](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution).
->
-> Notarization is a "security" feature by Apple.
-> You send binaries to Apple, and they either approve them or not.
-> In reality, notarization is about building binaries the way Apple likes it.
->
-> I don't have anything against notarization as a concept.
-> I specifically don't like the way Apple does notarization.
-> I don't have time to deal with Apple.
->
-> [Homebrew installation script](https://github.com/nikitabobko/homebrew-tap/blob/main/Casks/aerospace.rb) is configured to
-> automatically delete `com.apple.quarantine` attribute, that's why the app should work out of the box, without any warnings that
-> "Apple cannot check AeroSpace for malicious software"
-
-## Community, discussions, issues
-
-AeroSpace project doesn't accept Issues directly - we ask you to create a [Discussion](https://github.com/nikitabobko/AeroSpace/discussions) first.
-Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for more details.
-
-Community discussions happen at GitHub Discussions.
-There you can discuss bugs, propose new features, ask your questions, show off your setup, or just chat.
-
-There are 7 channels:
--   [#all](https://github.com/nikitabobko/AeroSpace/discussions).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions.atom?discussions_q=sort%3Adate_created).
-    Feed with all discussions.
--   [#announcements](https://github.com/nikitabobko/AeroSpace/discussions/categories/announcements).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/announcements.atom?discussions_q=category%3Aannouncements+sort%3Adate_created).
-    Only maintainers can post here.
-    Highly moderated traffic.
--   [#announcements-releases](https://github.com/nikitabobko/AeroSpace/discussions/categories/announcements-releases).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/announcements-releases.atom?discussions_q=category%3Aannouncements-releases+sort%3Adate_created).
-    Announcements about non-patch releases.
-    Only maintainers can post here.
--   [#feature-ideas](https://github.com/nikitabobko/AeroSpace/discussions/categories/feature-ideas).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/feature-ideas.atom?discussions_q=category%3Afeature-ideas+sort%3Adate_created).
--   [#general](https://github.com/nikitabobko/AeroSpace/discussions/categories/general).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/general.atom?discussions_q=sort%3Adate_created+category%3Ageneral).
--   [#potential-bugs](https://github.com/nikitabobko/AeroSpace/discussions/categories/potential-bugs).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/potential-bugs.atom?discussions_q=category%3Apotential-bugs+sort%3Adate_created).
-    If you think that you have encountered a bug, you can discuss your bugs here.
--   [#questions-and-answers](https://github.com/nikitabobko/AeroSpace/discussions/categories/questions-and-answers).
-    [RSS](https://github.com/nikitabobko/AeroSpace/discussions/categories/questions-and-answers.atom?discussions_q=category%3Aquestions-and-answers+sort%3Adate_created).
-    Everyone is welcome to ask questions.
-    Everyone is encouraged to answer other people's questions.
-
-## Project status
-
-Public Beta. AeroSpace can be used as a daily driver, but expect breaking changes until 1.0 is reached.
-
-What stops us from 1.0 release:
-- [x] https://github.com/nikitabobko/AeroSpace/issues/131 Performance. Implement thread-per-application to circumvent macOS blocking AX API.
-- [ ] https://github.com/nikitabobko/AeroSpace/issues/1215 _Big refactoring_. Rewrite mutable double-linked core tree data structure to immutable single-linked persistent tree.
-  Important for: stability and potential performance
-  - [ ] https://github.com/nikitabobko/AeroSpace/issues/1216 The big refactoring will help us to fix stability issue that windows may randomly jump to the focused workspace
-  - [ ] https://github.com/nikitabobko/AeroSpace/issues/68 The big refactoring will help us to support macOS native tabs
-- [x] https://github.com/nikitabobko/AeroSpace/issues/278 Implement shell-like combinators.
-  Ignore a lot of crazy fuss in the issue,
-  We are most probably going with the minimal approach to only introduce common shell-combinators: `||`, `&&`, `;` and `eval` command to send multiple commands in one go.
-- [ ] https://github.com/nikitabobko/AeroSpace/issues/1012 Investigate a possibility to use `CGEvent.tapCreate` API for global hotkeys
-  - [ ] https://github.com/nikitabobko/AeroSpace/issues/28 Maybe it will allow to distinguish left and right modifiers. Maybe not
-
-Big and important issues which will go after 1.0 release:
-- [ ] https://github.com/nikitabobko/AeroSpace/issues/2 sticky windows
-- [ ] https://github.com/nikitabobko/AeroSpace/issues/260 Dynamic TWM
-
-## Development
-
-A notes on how to setup the project, build it, how to run the tests, etc. can be found here: [dev-docs/development.md](./dev-docs/development.md)
-
-## Project values
-
-**Values**
-- AeroSpace is targeted at advanced users and developers
-- Keyboard centric
-- Breaking changes (configuration files, CLI, behavior) are avoided as much as possible, but it must not let the software stagnate.
-  Thus breaking changes can happen, but with careful considerations and helpful message.
-  [Semver](https://semver.org/) major version is bumped in case of a breaking change (It's all guaranteed once AeroSpace reaches 1.0 version, until then breaking changes just happen)
-- AeroSpace doesn't use GUI, unless necessarily
-  - AeroSpace will never provide a GUI for configuration.
-    For advanced users, it's easier to edit a configuration file in text editor rather than navigating through checkboxes in GUI.
-  - Status menu icon is ok, because visual feedback is needed
-- Provide _practical_ features. Fancy appearance features are not _practical_ (e.g. window borders, transparency, animations, etc.)
-- "dark magic" (aka "private APIs", "code injections", etc.) must be avoided as much as possible
-  - Right now, AeroSpace uses only a single private API to get window ID of accessibility object `_AXUIElementGetWindow`.
-    Everything else is [macOS public accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement_h).
-  - AeroSpace will never require you to disable SIP (System Integrity Protection).
-  - The goal is to make AeroSpace easily maintainable, and resistant to macOS updates.
-
-**Non Values**
-- Play nicely with existing macOS features.
-  If limitations are imposed then AeroSpace won't play nicely with existing macOS features
-  (For example, AeroSpace doesn't acknowledge the existence of macOS Spaces, and it uses [emulation of its own workspaces](https://nikitabobko.github.io/AeroSpace/guide#emulation-of-virtual-workspaces))
-- Ricing.
-  AeroSpace provides only a very minimal support for ricing - gaps and a few callbacks for integrations with bars.
-  The current maintainer doesn't care about ricing.
-  Ricing issues are not a priority, and they are mostly ignored.
-  The ricing stance can change only with the appearance of more maintainers.
-
-## macOS compatibility
-
-* AeroSpace binary runs on: macOS 13+
-* AeroSpace debug build from sources is supported on: macOS 14+
-* AeroSpace release build from sources is supported on: macOS 15+ (Requires: Swift 6.4, Xcode 26.6+)
-
-## Sponsorship
-
-AeroSpace is developed and maintained in my free time.
-If you find it useful, [consider sponsoring](https://github.com/sponsors/nikitabobko#sponsors).
-
-## People who have write access
-
-In alphabetical order:
-
-- [@mobile-ar](https://github.com/mobile-ar)
-- [@nikitabobko](https://github.com/nikitabobko)
-- [@rickyz](https://github.com/rickyz)
-
-## Tip of the day
-
-```bash
-defaults write -g NSWindowShouldDragOnGesture -bool true
+```sh
+./install-from-sources.sh --dont-rebuild
 ```
 
-Now, you can move windows by holding `ctrl`+`cmd` and dragging any part of the window (not necessarily the window title)
+This installs and starts `/Applications/AquaSpace.app`. Grant its ordinary
+Accessibility permission in System Settings (called **Device Control and Data
+Access** on some macOS versions). Stock `/Applications/AeroSpace.app` remains
+installed separately. The upstream Homebrew cask installs stock AeroSpace;
+it does not install this fork.
 
-Source: [reddit](https://www.reddit.com/r/MacOS/comments/k6hiwk/keyboard_modifier_to_simplify_click_drag_of/)
+### Updates
 
-## Related projects
+```sh
+./install-from-sources.sh
+```
 
-In alphabetical order:
+The updater builds, saves the sole installed AquaSpace's session, waits for it to
+exit, then starts the replacement once. It refuses to update while stock
+AeroSpace or another manager is running. Pass build options such as `--sdk` as
+needed, or use `--dont-rebuild` after staging a build yourself. See
+[update and recovery details](dev-docs/aquaspace.md#updating-aquaspace).
 
-- [Amethyst](https://github.com/ianyh/Amethyst) -
-  Beginners friendly GUI-configurable tiling window manager with automatic layouts à la xmonad.
-- [InstantSpaceSwitcher](https://github.com/jurplel/InstantSpaceSwitcher) -
-  Instant space switching by synthesizing trackpad gesture with an artificially high velocity.
-- [rift](https://github.com/acsandmann/rift) -
-  Virtual workspaces + private APIs.
-- [yabai](https://github.com/koekeishiya/yabai) -
-  A window manager that provides tight integration with native macOS Spaces and goes all the way to private APIs and code injection.
-  yabai is a source of inspiration for a lot of other OSS projects.
+## Configuration and commands
+
+AquaSpace keeps these existing config locations:
+
+- `~/.aerospace.toml`
+- `$XDG_CONFIG_HOME/aerospace/aerospace.toml` (normally
+  `~/.config/aerospace/aerospace.toml`)
+
+Your existing keybindings and `AEROSPACE_*` callback variables remain compatible.
+The app is **AquaSpace.app**, the command is **aquaspace**, and its bundle ID is
+`local.aquaspace`.
+
+The bundled CLI is `/Applications/AquaSpace.app/Contents/MacOS/aquaspace-cli`.
+If `aquaspace` is not on your PATH, use that full path or create a symlink named
+`aquaspace` in a directory on your PATH. The installer does not add a global CLI
+symlink. Stock `aerospace` and the fork's `aquaspace` address separate managers.
+AquaSpace supplies a bundled `aerospace` compatibility alias to its own config
+callbacks; external scripts and absolute CLI paths should explicitly use the
+manager they intend to control.
+
+The upstream [configuration guide](https://nikitabobko.github.io/AeroSpace/guide)
+and [command reference](https://nikitabobko.github.io/AeroSpace/commands) remain
+useful for the shared configuration and command syntax.
+
+## Switching managers
+
+Open **AquaSpace** normally to take over from stock AeroSpace. To switch back,
+choose **Switch to AeroSpace** in AquaSpace's menu or run:
+
+```sh
+aquaspace switch-to-aerospace
+```
+
+Use this explicit switch so AquaSpace freezes and drains its window writes before
+stock starts. Directly launching unmodified stock while AquaSpace is running has
+a notification/polling race. Session transfer preserves workspace, root-layout,
+floating/fullscreen and focus state; exact nested container structure and weights
+are rebuilt across managers.
+
+Startup failures report a readable reason at
+`~/Library/Logs/AquaSpace/last-failure.txt`, with stderr and Console fallbacks.
+
+## Checks and development
+
+GitHub Actions is **manual-only**. Pushes, pull requests, issues and schedules do
+not start jobs. The single optional workflow runs the offline Python suite on one
+Linux runner with a five-minute limit. It does not build or launch either manager.
+Run the same checks locally with Python's standard library:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
+```
+
+Swift model/ownership regressions and build instructions are in the
+[development guide](dev-docs/development.md). Live harnesses require explicit
+foreground-testing authorization and are separate from offline checks.
+
+## Attribution and license
+
+AquaSpace builds on AeroSpace by [@nikitabobko](https://github.com/nikitabobko)
+and its contributors. The original icon and upstream attribution are retained.
+Licensed under the [MIT license](LICENSE.txt); third-party notices are in
+[legal](legal/README.md). To support the upstream work, see
+[AeroSpace sponsorship](https://github.com/sponsors/nikitabobko).
