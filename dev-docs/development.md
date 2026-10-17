@@ -6,7 +6,10 @@ The optional upstream toolchain setup follows:
 2. Create codesign certificate in `Keychain Access.app`
 3. Run one of the entry point scripts to build/install from sources
 
-If you struggle to build AeroSpace locally, you can also refer to [builds in GitHub Actions](https://github.com/nikitabobko/AeroSpace/actions?query=branch%3Amain)
+For this fork's checks, see [AquaSpace Actions](https://github.com/drameater/AquaSpace/actions).
+They run only when manually requested and cover the offline Python regressions.
+Swift builds and model regressions remain local checks; hosted CI does not build,
+install or launch a window manager.
 
 ## Definitions
 
@@ -53,9 +56,16 @@ logo; pass --base-app to use another verified local resource copy.
 - generate.sh regenerates command metadata and xcode/AquaSpace.xcodeproj.
   Existing config/command compatibility identifiers intentionally remain.
 
-The inherited Homebrew release/install CI job and nightly schedule are retired
-in this local fork. Push/PR debug checks remain defined for a future fork remote;
-no workflow was run or remote changed during the local development pass.
+The inherited Homebrew release/install job, four-runner macOS matrix, nightly
+schedule and upstream issue/PR bots are retired in this fork. The sole workflow
+uses workflow_dispatch; pushes, pull requests and issue events start no jobs.
+It runs the Python suite on one Linux runner with a five-minute limit and cancels
+superseded runs on the same ref. Run the same checks locally without installing
+dependencies or starting an app:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
+```
 
 ## IDE
 

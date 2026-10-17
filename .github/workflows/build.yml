@@ -1,46 +1,26 @@
-name: AquaSpace checks
+name: AquaSpace offline checks
 
+# Run from the Actions page only. Pushes, PRs and schedules consume no runner time.
 on:
-  push:
-    branches:
-      - 'main'
-      - 'rr/**' # "rr" stands for "remote run"
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
-env:
-  AEROSPACE_VERBOSE_BUILD: 1
+permissions:
+  contents: read
+
+concurrency:
+  group: aquaspace-offline-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-
-  build-debug:
-    strategy:
-      # fail-fast: false # Disable fail-fast in matrix
-      matrix:
-        # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-14-arm64-Readme.md
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md
-        # https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md
-        #
-        # Xcode versions:
-        # - https://en.wikipedia.org/wiki/Xcode
-        # - https://xcodereleases.com/?scope=release
-        os: [macos-14, macos-15, macos-26, xcode-27]
-    name: build-debug
-    runs-on: ${{ matrix.os }}
+  python-offline:
+    name: Offline Python regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - run: env # Debug
       - uses: actions/checkout@v6
-      - run: ./.github/gh-actions-runner-xcode-select.sh
-      - run: brew update && brew install swiftly bash
-      - run: swiftly init --skip-install --assume-yes --verbose && swiftly install
-      - run: swiftly run swift --version
-      - run: ./build-debug.sh
-      - run: ./test.sh
-
-  # The inherited upstream release/install job is retired for this local fork.
-  # It expected a Homebrew distribution, a signing identity and .release output.
-  # Local signed bundles use build-release.sh and the serialized installer,
-  # with an explicitly available AeroSpace.app resource donor; CI never launches
-  # or installs a window manager.
+        with:
+          persist-credentials: false
+      - name: Run offline regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s script/tests -v

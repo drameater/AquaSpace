@@ -1,23 +1,20 @@
-name: New Issue
-description: New Issue
+name: AquaSpace bug report
+description: Report a problem with this fork
 body:
   - type: markdown
     attributes:
       value: |
-        AeroSpace project doesn't accept Issues directly. Please prefer GitHub Discussions. See: https://github.com/nikitabobko/AeroSpace/issues/947
-  - type: checkboxes
-    id: checkbox
+        Describe the AquaSpace problem and how to reproduce it. Remove private data from configuration or diagnostic excerpts before sharing them.
+  - type: input
+    id: version
     attributes:
-      label: 'Sanity check'
-      options:
-        - label: |
-            I read https://github.com/nikitabobko/AeroSpace/issues/947
-          required: true
+      label: AquaSpace version and macOS version
+    validations:
+      required: true
   - type: textarea
     id: body
     attributes:
-      label: Body
-      value: |
-        YOUR ISSUE WILL BE IMMEDIATELY CLOSED BY BOT, DON'T OPEN NEW ISSUES DIRECTLY, USE DISCUSSIONS INSTEAD
+      label: Reproduction and expected behavior
+      description: Include the affected app, steps to reproduce, what happened, and what you expected.
     validations:
       required: true
