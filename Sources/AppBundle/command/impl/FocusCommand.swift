@@ -7,6 +7,7 @@ struct FocusCommand: Command {
 
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
         guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
+        let continuation = target.windowOrNil.map { WindowCommandContinuation($0) }
         if let window = target.windowOrNil, await shouldFailBecauseFullscreen_nonCancellable(
             window: window,
             failIfFullscreen: args.failIfFullscreen,
@@ -14,6 +15,8 @@ struct FocusCommand: Command {
         ) {
             return .fail
         }
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
+              continuation?.mayContinue != false else { return .fail }
         // todo bug: floating windows break mru
         let floatingWindows = args.floatingAsTiling ? await makeFloatingWindowsSeenAsTiling(workspace: target.workspace) : []
         defer {
@@ -22,6 +25,8 @@ struct FocusCommand: Command {
             }
         }
 
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
+              continuation?.mayContinue != false else { return .fail }
         switch args.target {
             case .direction(let direction):
                 let window = target.windowOrNil
@@ -124,21 +129,32 @@ struct FocusCommand: Command {
 
 @MainActor private func makeFloatingWindowsSeenAsTiling(workspace: Workspace) async -> [FloatingWindowData] {
     let mruBefore = workspace.mostRecentWindowRecursive
+    let mruContinuation = mruBefore.map { WindowCommandContinuation($0) }
     defer {
-        mruBefore?.markAsMostRecentChild()
+        if WindowDiscoveryInitialization.mayRunAutomaticCommand, mruContinuation?.mayContinue != false {
+            mruBefore?.markAsMostRecentChild()
+        }
     }
-    var _floatingWindows: [FloatingWindowData] = []
+    var candidates: [(Window, CGPoint, TilingContainer, Int, WindowCommandContinuation)] = []
     for window in workspace.floatingWindows {
+        let continuation = WindowCommandContinuation(window)
         // todo bug: we shouldn't access ax api here. What if the window was moved but it wasn't committed to ax yet?
         guard let center = try? await window.getCenter(.nonCancellable) else { continue }
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+        guard continuation.mayContinue, window.isFloating, window.nodeWorkspace === workspace else { continue }
 
         let tilingParent: TilingContainer
         let index: Int
         if let target = center.coerce(in: workspace.workspaceMonitor.visibleRectPaddedByOuterGaps)?
             .findWindowRecursively(in: workspace.rootTilingContainer, virtual: true, fullscreenCoversAll: false)
         {
+            let targetContinuation = WindowCommandContinuation(target)
             guard let targetCenter = try? await target.getCenter(.nonCancellable) else { continue }
-            guard let _tilingParent = target.parent as? TilingContainer else { continue }
+            guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+            guard continuation.mayContinue, window.isFloating, window.nodeWorkspace === workspace else { continue }
+            guard targetContinuation.targetIsUnchanged,
+                  let _tilingParent = target.parent as? TilingContainer,
+                  _tilingParent.nodeWorkspace === workspace else { continue }
             tilingParent = _tilingParent
             index = switch tilingParent.layout {
                 case .tiles:
@@ -155,20 +171,26 @@ struct FocusCommand: Command {
             tilingParent = workspace.rootTilingContainer
         }
 
-        let data = window.unbindFromParent()
-        let floatingWindowData = FloatingWindowData(
-            window: window,
-            center: center,
-            tilingParent: tilingParent,
-            adaptiveWeight: data.adaptiveWeight,
-            index: index,
-        )
-        _floatingWindows.append(floatingWindowData)
+        candidates.append((window, center, tilingParent, index, continuation))
     }
-    let floatingWindows: [FloatingWindowData] = _floatingWindows.sortedBy { $0.center.getProjection($0.tilingParent.orientation) }.reversed()
+    // Complete every read before temporarily unbinding any window. An abort
+    // during a later read must not leave earlier candidates outside the tree.
+    guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+    let valid = candidates.filter { window, _, parent, index, continuation in
+        continuation.mayContinue && window.isFloating && window.nodeWorkspace === workspace &&
+            parent.nodeWorkspace === workspace && index >= 0 && index <= parent.children.count
+    }
+    let prepared = valid.map { window, center, parent, index, _ in
+        let data = window.unbindFromParent()
+        return FloatingWindowData(window: window, center: center, tilingParent: parent,
+            adaptiveWeight: data.adaptiveWeight, index: index, userMutationToken: window.userMutationToken)
+    }
+    var floatingWindows: [FloatingWindowData] = prepared.sortedBy { $0.center.getProjection($0.tilingParent.orientation) }.reversed()
 
-    for floating in floatingWindows { // Make floating windows be seen as tiling
+    for index in floatingWindows.indices { // Make floating windows be seen as tiling
+        let floating = floatingWindows[index]
         floating.window.bind(to: floating.tilingParent, adaptiveWeight: 1, index: floating.index)
+        floatingWindows[index].userMutationToken = floating.window.userMutationToken
     }
     return floatingWindows
 }
@@ -179,6 +201,10 @@ struct FocusCommand: Command {
         mruBefore?.markAsMostRecentChild()
     }
     for floating in floatingWindows {
+        // Undo only our untouched temporary binding, preserving newer user choices.
+        guard Window.get(byId: floating.window.windowId) === floating.window,
+              floating.window.parent === floating.tilingParent,
+              floating.window.userMutationToken == floating.userMutationToken else { continue }
         floating.window.bind(to: workspace.floatingWindowsContainer, adaptiveWeight: floating.adaptiveWeight, index: INDEX_BIND_LAST)
     }
 }
@@ -190,6 +216,7 @@ private struct FloatingWindowData {
     let tilingParent: TilingContainer
     let adaptiveWeight: CGFloat
     let index: Int
+    var userMutationToken: UUID
 }
 
 extension TreeNode {

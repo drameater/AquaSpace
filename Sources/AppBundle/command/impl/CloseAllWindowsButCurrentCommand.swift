@@ -14,7 +14,9 @@ struct CloseAllWindowsButCurrentCommand: Command {
             return .fail(io.err("Focused window '\(focused.windowId)' doesn't belong to workspace"))
         }
         var result = BinaryExitCode.succ
+        let continuation = WindowCommandContinuation(focused)
         for window in workspace.allLeafWindowsRecursive where window != focused {
+            guard continuation.mayContinue else { return .fail }
             result = await CloseCommand(args: args.closeArgs).run(env.withWindowId(window.windowId), io).and(result)
         }
         return result

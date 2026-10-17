@@ -11,6 +11,7 @@ struct MoveCommand: Command {
         guard let currentWindow = target.windowOrNil else {
             return .fail(io.err(noWindowIsFocused))
         }
+        let continuation = WindowCommandContinuation(currentWindow)
         if await shouldFailBecauseFullscreen_nonCancellable(
             window: currentWindow,
             failIfFullscreen: args.failIfFullscreen,
@@ -18,6 +19,7 @@ struct MoveCommand: Command {
         ) {
             return .fail
         }
+        guard continuation.mayContinue else { return .fail }
         switch currentWindow.windowParentCases {
             case .unbound: return .fail
             case .tilingContainer(let parent):

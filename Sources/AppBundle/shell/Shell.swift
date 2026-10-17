@@ -97,6 +97,7 @@ extension Shell where T == any Command {
 // 4. Tray icon buttons
 extension Shell where T == any Command {
     @MainActor func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode {
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return .fail }
         switch self {
             case .cmd(let command):
                 let exitCode = await WindowRestorationMutation.$isUserCommand.withValue(!WindowRestorationMutation.isAutomaticDiscovery) {

@@ -8,9 +8,11 @@ struct MoveMouseCommand: Command {
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
         let mouse = mouseLocation
         guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
+        let continuation = target.windowOrNil.map { WindowCommandContinuation($0) }
         switch args.mouseTarget.val {
             case .windowLazyCenter:
                 guard let rect = await windowSubjectRectOrReportError(target, io) else { return .fail }
+                guard WindowDiscoveryInitialization.mayRunAutomaticCommand, continuation?.mayContinue != false else { return .fail }
                 if rect.contains(mouse) {
                     return switch args.failIfNoop {
                         case true: .fail
@@ -21,6 +23,7 @@ struct MoveMouseCommand: Command {
                 return moveMouse(io, rect.center)
             case .windowForceCenter:
                 guard let rect = await windowSubjectRectOrReportError(target, io) else { return .fail }
+                guard WindowDiscoveryInitialization.mayRunAutomaticCommand, continuation?.mayContinue != false else { return .fail }
                 return moveMouse(io, rect.center)
             case .monitorLazyCenter:
                 let rect = target.workspace.workspaceMonitor.rect

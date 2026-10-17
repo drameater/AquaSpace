@@ -60,11 +60,16 @@ final class MacWindow: Window {
             return existing
         }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
+        let initialization = WindowDiscoveryInitialization(window)
         allWindowsMap[windowId] = window
+        defer { initialization.finish() }
 
-        try await debugWindowsIfRecording(window, .cancellable)
-        if try await !restoreClosedWindowsCacheIfNeeded(newlyDetectedWindow: window) {
-            await runOnWindowDetected(ifConventional: window)
+        try await WindowRestorationMutation.$discoveryInitialization.withValue(initialization) {
+            try await debugWindowsIfRecording(window, .cancellable)
+            guard initialization.mayContinue else { return }
+            if try await !restoreClosedWindowsCacheIfNeeded(newlyDetectedWindow: window) {
+                await runOnWindowDetected(ifConventional: window)
+            }
         }
         return window
     }
@@ -238,6 +243,7 @@ final class MacWindow: Window {
 extension Window {
     @MainActor
     func relayoutWindow(on workspace: Workspace, _ cm: CancellationMode, forceTile: Bool = false) async throws {
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { throw CancellationError() }
         let data = forceTile
             ? unbindAndGetBindingDataForNewTilingWindow(workspace, window: self)
             : try await unbindAndGetBindingDataForNewWindow(self.asMacWindow().windowId, self.asMacWindow().macApp, workspace, window: self, cm)
@@ -248,8 +254,12 @@ extension Window {
 // The function is private because it's unsafe. It leaves the window in unbound state
 @MainActor
 private func unbindAndGetBindingDataForNewWindow(_ windowId: UInt32, _ macApp: MacApp, _ workspace: Workspace, window: Window?, _ cm: CancellationMode) async throws -> BindingData {
+    let continuation = window.map { WindowCommandContinuation($0) }
     let windowLevel = getWindowLevel(for: windowId)
-    return switch try await macApp.getAxUiElementWindowType(windowId, windowLevel, cm) {
+    let type = try await macApp.getAxUiElementWindowType(windowId, windowLevel, cm)
+    guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
+          continuation?.mayContinue != false else { throw CancellationError() }
+    return switch type {
         case .popup: BindingData(parent: macosPopupWindowsContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
         case .dialog: BindingData(parent: workspace.floatingWindowsContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
         case .window: unbindAndGetBindingDataForNewTilingWindow(workspace, window: window)
@@ -281,25 +291,27 @@ func runOnWindowDetected(ifConventional window: Window) async {
     // Reapplying saved discovery rules is automatic initialization. A separate
     // input task (or an explicit run-callback command) still supersedes pending
     // restoration; it must not inherit this registration-only scope.
-    await WindowRestorationMutation.$isAutomaticDiscovery.withValue(true) {
-        switch window.windowParentCases {
-            case .tilingContainer, .floatingWindowsContainer, .macosMinimizedWindowsContainer,
-                 .macosFullscreenWindowsContainer, .macosHiddenAppsWindowsContainer:
-                let layout = global_layoutForNextDetectedWindow
-                global_layoutForNextDetectedWindow = nil
-                defer {
+    await WindowDiscoveryInitialization.run(for: window) {
+        await WindowRestorationMutation.$isAutomaticDiscovery.withValue(true) {
+            switch window.windowParentCases {
+                case .tilingContainer, .floatingWindowsContainer, .macosMinimizedWindowsContainer,
+                     .macosFullscreenWindowsContainer, .macosHiddenAppsWindowsContainer:
+                    let layout = global_layoutForNextDetectedWindow
+                    global_layoutForNextDetectedWindow = nil
+                    defer {
+                        if let layout, WindowDiscoveryInitialization.mayRunAutomaticCommand {
+                            await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
+                                .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
+                        }
+                    }
                     if let layout {
                         await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
                             .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
                     }
-                }
-                if let layout {
-                    await LayoutCommand(args: LayoutCmdArgs(rawArgs: [], toggleBetween: [layout]))
-                        .run(.defaultEnv.withWindowId(window.windowId), .emptyStdin)
-                }
-                _ = await onWindowDetected(.defaultEnv, CmdIoImpl.emptyStdinIgnoringOut, window)
-            case .macosPopupWindowsContainer, .unbound:
-                break
+                    _ = await onWindowDetected(.defaultEnv, CmdIoImpl.emptyStdinIgnoringOut, window)
+                case .macosPopupWindowsContainer, .unbound:
+                    break
+            }
         }
     }
 }
@@ -313,7 +325,11 @@ func onWindowDetected(_ env: CmdEnv, _ io: CmdIo, _ window: Window) async -> Int
         appName: window.app.name,
     ))
     var lastExitCode = Int32ExitCode.succ
-    for callback in config.onWindowDetected where await callback.matches(window) {
+    for callback in config.onWindowDetected {
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return .fail }
+        let matches = await callback.matches(window)
+        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return .fail }
+        if !matches { continue }
         lastExitCode = await callback.run.run(env.withWindowId(window.windowId), io)
         if !callback.checkFurtherCallbacks {
             return lastExitCode

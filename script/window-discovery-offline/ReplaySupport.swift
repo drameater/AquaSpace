@@ -1,6 +1,6 @@
 import Foundation
 
-enum CancellationMode { case cancellable }
+enum CancellationMode { case cancellable, nonCancellable }
 @MainActor final class ReplayThread {
     var afterRead: (() -> Void)?
     func runInLoop<T>(_ mode: CancellationMode, _ body: (RunLoopJob) throws -> T) async throws -> T {
@@ -21,6 +21,7 @@ final class ReplayApplication {
     var bundleIdentifier: String? = nil
     var activationPolicy = "regular"
     var isActive = false
+    @MainActor func terminate() -> Bool { Simulation.nativeWrites.append("terminate"); return true }
 }
 let lockScreenAppBundleId = "replay.lock-screen"
 final class AxWindow {
@@ -87,6 +88,18 @@ extension AXUIElement {
     static var mutations: [UInt32] = []
     static var foreground: Int32? = 99
     static var detectedRule: ((MacWindow) async -> Void)?
+    static var callbacks: [WindowDetectedCallback]?
+    static var beforeDetection: (() async throws -> Void)?
+    static var awaitSize: (() async throws -> CGSize?)?
+    static var awaitType: (() async throws -> AxUiElementWindowType)?
+    static var awaitFullscreen: (() async throws -> Bool)?
+    static var awaitMinimized: (() async throws -> Bool)?
+    static var awaitWindowCount: (() async throws -> Int?)?
+    static var nativeWrites: [String] = []
+    static var unbinds: [UInt32] = []
+    static var awaitCenter: ((MacWindow) async throws -> CGPoint?)?
+    static var geometryTarget: MacWindow?
+    static var mruWrites: [UInt32] = []
 }
 @MainActor func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? { Simulation.owners }
 @MainActor func getWindowLevel(for id: UInt32) -> MacOsWindowLevel? { .normalWindow }
@@ -105,11 +118,14 @@ extension AXUIElement {
     var workspace: Workspace { windowOrNil?.nodeWorkspace ?? Workspace.get(byName: "current") }
 }
 @MainActor var focus = ReplayFocus()
-let WEIGHT_AUTO = 0
+let WEIGHT_AUTO: CGFloat = 0
 let INDEX_BIND_LAST = 0
 @MainActor final class ReplayParent {
     let workspace: Workspace
     let floating: Bool
+    var isAttached = true
+    var nodeWorkspace: Workspace? { isAttached ? workspace : nil }
+    var children: [MacWindow] { MacWindow.allWindows.filter { $0.parent === self } }
     enum Layout { case tiles, accordion }
     enum Orientation { case h, v }
     var layout: Layout = .tiles
@@ -122,6 +138,11 @@ let INDEX_BIND_LAST = 0
     let name: String
     lazy var rootTilingContainer = ReplayParent(self, floating: false)
     lazy var floatingContainer = ReplayParent(self, floating: true)
+    lazy var macOsNativeFullscreenWindowsContainer = ReplayParent(self, floating: false)
+    var allLeafWindowsRecursive: [MacWindow] { MacWindow.allWindows.filter { $0.nodeWorkspace === self } }
+    var floatingWindows: [MacWindow] { allLeafWindowsRecursive.filter { $0.isFloating }.sorted { $0.windowId < $1.windowId } }
+    var mostRecentWindowRecursive: MacWindow? { allLeafWindowsRecursive.first }
+    var workspaceMonitor: ReplayMonitor { ReplayMonitor() }
     var floatingWindowsContainer: ReplayParent { floatingContainer }
     static var registry: [String: Workspace] = [:]
     static var all: [Workspace] { Array(registry.values) }
@@ -136,12 +157,14 @@ struct WorkspaceName {
     static func parse(_ value: String) -> Parsed { Parsed(value: value.isEmpty ? nil : value) }
 }
 enum ReplayParentCase {
-    case tilingContainer, floatingWindowsContainer, macosMinimizedWindowsContainer,
+    case tilingContainer(ReplayParent), floatingWindowsContainer(ReplayParent)
+    case macosMinimizedWindowsContainer,
          macosFullscreenWindowsContainer, macosHiddenAppsWindowsContainer, macosPopupWindowsContainer, unbound
 }
 @MainActor final class MacWindow {
     static var allWindowsMap: [UInt32: MacWindow] = [:]
     static var allWindows: [MacWindow] { Array(allWindowsMap.values) }
+    static func get(byId id: UInt32) -> MacWindow? { allWindowsMap[id] }
     let windowId: UInt32
     let macApp: ReplayAquaApp
     var app: ReplayAquaApp { macApp }
@@ -149,28 +172,66 @@ enum ReplayParentCase {
     var isFullscreen = false
     var noOuterGapsInFullscreen = false
     var specialParent: ReplayParentCase?
+    var discoveryInitialization: WindowDiscoveryInitialization?
+    var userMutationToken = UUID()
+    var lastFloatingSize: CGSize?
+    var layoutReason: ReplayLayoutReason = .standard
+    var visualWorkspace: Workspace? { nodeWorkspace }
+    var macAppUnsafe: ReplayAquaApp { macApp }
     var nodeWorkspace: Workspace? { parent?.workspace }
     var isBound: Bool { parent != nil }
     var isFloating: Bool { parent?.floating == true }
     var allLeafWindowsRecursive: [MacWindow] { [self] }
-    var windowParentCases: ReplayParentCase { specialParent ?? (parent?.floating == true ? .floatingWindowsContainer : .tilingContainer) }
+    var windowParentCases: ReplayParentCase {
+        if let specialParent { return specialParent }
+        guard let parent else { return .unbound }
+        return parent.floating ? .floatingWindowsContainer(parent) : .tilingContainer(parent)
+    }
     init(_ id: UInt32, app: ReplayAquaApp) {
         windowId = id; macApp = app; parent = Workspace.get(byName: "default").rootTilingContainer
     }
     func bindAsFloatingWindow(to workspace: Workspace) { bind(to: workspace.floatingContainer, adaptiveWeight: 0, index: 0) }
-    func bind(to parent: ReplayParent, adaptiveWeight: Int, index: Int) {
+    func bind(to parent: ReplayParent, adaptiveWeight: CGFloat, index: Int) {
         beforeBind()
         Simulation.mutations.append(windowId); self.parent = parent
     }
+    func getAxSize(_ cm: CancellationMode) async throws -> CGSize? { try await Simulation.awaitSize?() }
+    func isMacosFullscreen(_ cm: CancellationMode) async throws -> Bool { try await Simulation.awaitFullscreen?() ?? false }
+    func isMacosMinimized(_ cm: CancellationMode) async throws -> Bool { try await Simulation.awaitMinimized?() ?? false }
+    func asMacWindow() -> Self { self }
+    func setNativeFullscreen(_ value: Bool) { Simulation.nativeWrites.append("fullscreen") }
+    func setNativeMinimized(_ value: Bool) { Simulation.nativeWrites.append("minimize") }
+    func setAxFrame(_ point: CGPoint?, _ size: CGSize?) { Simulation.nativeWrites.append("frame") }
+    func garbageCollect(skipClosedWindowsCache: Bool) { MacWindow.allWindowsMap.removeValue(forKey: windowId) }
+    func closeAxWindow() { Simulation.nativeWrites.append("close"); MacWindow.allWindowsMap.removeValue(forKey: windowId) }
+    @discardableResult func unbindFromParent() -> BindingData {
+        let data = BindingData(parent: parent!, adaptiveWeight: 1, index: 0)
+        Simulation.unbinds.append(windowId); parent = nil
+        return data
+    }
     func focusWindow() -> Bool { focus.windowOrNil = self; return true }
-    func markAsMostRecentChild() {}
+    func markAsMostRecentChild() { Simulation.mruWrites.append(windowId) }
+    func getCenter(_ cm: CancellationMode) async throws -> CGPoint? { try await Simulation.awaitCenter?(self) ?? CGPoint(x: Double(windowId), y: 0) }
+    var ownIndex: Int? { parent?.children.firstIndex { $0 === self } }
 }
 
+struct ReplayMonitor { let visibleRectPaddedByOuterGaps = CGRect(x: 0, y: 0, width: 1000, height: 1000) }
+extension CGPoint {
+    func coerce(in rect: CGRect) -> Self? { self }
+    @MainActor func findWindowRecursively(in parent: ReplayParent, virtual: Bool, fullscreenCoversAll: Bool) -> MacWindow? { Simulation.geometryTarget }
+    func getProjection(_ orientation: ReplayParent.Orientation) -> CGFloat { orientation == .h ? x : y }
+}
+extension Array {
+    func sortedBy<T: Comparable>(_ key: (Element) -> T) -> Self { sorted { key($0) < key($1) } }
+}
+typealias TilingContainer = ReplayParent
+typealias MacApp = ReplayAquaApp
 typealias Window = MacWindow
 typealias NonLeafTreeNodeObject = ReplayParent
 struct CmdEnv {
     static let defaultEnv = Self()
-    func withWindowId(_ id: UInt32) -> Self { self }
+    var windowId: UInt32?
+    func withWindowId(_ id: UInt32) -> Self { Self(windowId: id) }
 }
 @MainActor final class CmdIo { func err(_ value: String) -> String { value } }
 @MainActor enum CmdIoImpl { static var emptyStdinIgnoringOut: CmdIo { CmdIo() } }
@@ -182,7 +243,7 @@ struct BinaryExitCode: Sendable {
     static func succ(_ message: String) -> Self { .succ }
     static func from(bool: Bool) -> Self { bool ? .succ : .fail }
 }
-struct Int32ExitCode: Sendable { let rawValue: Int32 }
+struct Int32ExitCode: Sendable { let rawValue: Int32; static let fail = Self(rawValue: 1); static let succ = Self(rawValue: 0) }
 let EXIT_CODE_ZERO: Int32 = 0
 @MainActor protocol Command {
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode
@@ -199,6 +260,19 @@ indirect enum Shell<T> {
         moveWindowToWorkspace(window, workspace, io, focusFollowsWindow: false, failIfNoop: false)
     }
 }
+@MainActor struct ReplayAwaitCommand: Command {
+    let body: () async -> Void
+    var shouldResetClosedWindowsCache: Bool { false }
+    func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode { await body(); return .succ }
+}
+@MainActor struct ReplayTileCommand: Command {
+    let window: MacWindow
+    var shouldResetClosedWindowsCache: Bool { true }
+    func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
+        window.bind(to: window.nodeWorkspace!.rootTilingContainer, adaptiveWeight: 0, index: 0)
+        return .succ
+    }
+}
 @MainActor struct ReplayFloatCommand: Command {
     let window: MacWindow
     var shouldResetClosedWindowsCache: Bool { true }
@@ -207,20 +281,110 @@ indirect enum Shell<T> {
         return .succ
     }
 }
-@MainActor func onWindowDetected(_ env: CmdEnv, _ io: CmdIo, _ window: Window) async -> Int32ExitCode {
-    await Simulation.detectedRule?(window)
-    return Int32ExitCode(rawValue: 0)
+@MainActor func debugWindowsIfRecording(_ window: MacWindow, _ cm: CancellationMode) async throws {
+    try await Simulation.beforeDetection?()
 }
+@MainActor func restoreClosedWindowsCacheIfNeeded(newlyDetectedWindow: MacWindow) async throws -> Bool { false }
+// The production callback loop runs unchanged; only matching and storage are
+// memory substitutes, allowing deterministic suspension without native reads.
+@MainActor struct WindowDetectedCallback {
+    let match: (Window) async -> Bool
+    let run: Shell<any Command>
+    var checkFurtherCallbacks = false
+    func matches(_ window: Window) async -> Bool { await match(window) }
+}
+@MainActor struct ReplayConfig {
+    var onWindowDetected: [WindowDetectedCallback] {
+        Simulation.callbacks ?? [WindowDetectedCallback(match: { window in
+            await Simulation.detectedRule?(window); return true
+        }, run: .empty)]
+    }
+}
+@MainActor let config = ReplayConfig()
+struct ReplayEvent {
+    static func windowDetected(windowId: UInt32, workspace: String?, appBundleId: String?, appName: String?) -> Self { Self() }
+}
+func broadcastEvent(_ event: ReplayEvent) {}
+extension ReplayAquaApp {
+    var rawAppBundleId: String? { nil }
+    var name: String? { nil }
+}
+@MainActor final class ReplayGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        opened = true
+        let pending = waiters; waiters = []
+        for continuation in pending { continuation.resume() }
+    }
+}
+struct ReplayValue<T> { var val: T }
 struct LayoutCmdArgs {
-    enum LayoutDescription { case floating }
-    let rawArgs: [String]
-    let toggleBetween: [LayoutDescription]
+    enum LayoutDescription: String { case accordion, tiles, horizontal, vertical, h_accordion, v_accordion, h_tiles, v_tiles, tiling, floating }
+    var forNextDetectedWindow = false
+    var root = false
+    var failIfNoop = false
+    let toggleBetween: ReplayValue<[LayoutDescription]>
+    init(rawArgs: [String], toggleBetween: [LayoutDescription]) { self.toggleBetween = ReplayValue(val: toggleBetween) }
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
 }
-@MainActor var global_layoutForNextDetectedWindow: LayoutCmdArgs.LayoutDescription?
+@MainActor struct ReplayTarget {
+    let windowOrNil: MacWindow?
+    var workspace: Workspace { windowOrNil!.nodeWorkspace! }
+    static func resolve(_ env: CmdEnv) -> Self? {
+        guard let id = env.windowId, let window = MacWindow.allWindowsMap[id] else { return nil }
+        return Self(windowOrNil: window)
+    }
+}
+@MainActor enum ConventionalWindowParentCases {
+    case tilingContainer(ReplayParent), floatingWindowsContainer(ReplayParent)
+    var tilingContainerOrNil: ReplayParent? { if case .tilingContainer(let p) = self { return p }; return nil }
+    var floatingWindowsContainerOrNil: ReplayParent? { if case .floatingWindowsContainer(let p) = self { return p }; return nil }
+}
+typealias Layout = ReplayParent.Layout
+typealias Orientation = ReplayParent.Orientation
+struct BindingData { let parent: ReplayParent; let adaptiveWeight: CGFloat; let index: Int }
+@MainActor func unbindAndGetBindingDataForNewTilingWindow(_ workspace: Workspace, window: Window?) -> BindingData {
+    window?.unbindFromParent()
+    return BindingData(parent: workspace.rootTilingContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
+}
+@MainActor extension ReplayAquaApp {
+    func getAxUiElementWindowType(_ id: UInt32, _ level: MacOsWindowLevel?, _ cm: CancellationMode) async throws -> AxUiElementWindowType { try await Simulation.awaitType?() ?? .window }
+    func getAxWindowsCount(_ cm: CancellationMode) async throws -> Int? { try await Simulation.awaitWindowCount?() ?? 1 }
+}
+@MainActor extension LayoutCommand {
+    func run(_ env: CmdEnv, _ stdin: CmdStdin) async { _ = await Shell<any Command>.cmd(self).run(env, CmdIo()) }
+}
 enum CmdStdin { case emptyStdin }
-struct LayoutCommand {
-    let args: LayoutCmdArgs
-    @MainActor func run(_ env: CmdEnv, _ stdin: CmdStdin) async { fatalError("Unused next-window layout") }
+extension Array { func singleOrNil() -> Element? { count == 1 ? first : nil }; func orDie() -> Self { self } }
+extension Optional { func orDie() -> Wrapped { self! } }
+@MainActor func bugPrompt() -> String { "replay error" }
+@MainActor func windowIsntPartOfTree(_ window: Window) -> String { "unbound" }
+enum ReplayLayoutReason { case standard, macos(prevParentKind: ReplayParentCase) }
+@MainActor let macosPopupWindowsContainer = ReplayParent(Workspace("popup"), floating: false)
+@MainActor let macosMinimizedWindowsContainer = ReplayParent(Workspace("minimized"), floating: false)
+@MainActor func exitMacOsNativeUnconventionalState(window: Window, prevParentKind: ReplayParentCase, workspace: Workspace, _ cm: CancellationMode) async throws {
+    try await window.relayoutWindow(on: workspace, cm)
+}
+struct MacosNativeFullscreenCmdArgs {
+    enum Toggle { case on, off, toggle }
+    var toggle: Toggle = .on
+    var failIfNoop = false
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
+}
+struct MacosNativeMinimizeCmdArgs {
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
+}
+struct CloseCmdArgs {
+    var quitIfLastWindow = true
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
+}
+extension Bool {
+    @MainActor func andAsync(_ body: @MainActor @Sendable () async -> Bool) async -> Bool { self ? await body() : false }
 }
 @MainActor struct FullscreenCmdArgs {
     enum Toggle { case on, off, toggle }
@@ -236,7 +400,6 @@ struct LayoutCommand {
 @MainActor func runShellAnd(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
 @MainActor func runShellOr(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
 @MainActor func runShellPipe(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
-@MainActor func runShellSeq(_ commands: [Shell<any Command>], _ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode { fatalError("Unused compound command") }
 
 struct ReplayLayoutResult {
     let value: String

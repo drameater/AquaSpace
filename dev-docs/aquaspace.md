@@ -2234,3 +2234,60 @@ callback fix, its offline regressions and updated notes are included in this
 local checkpoint. Creating the checkpoint involved no additional tests, builds,
 installations, app/helper launches or live checks. No remote was contacted and
 nothing was pushed.
+
+
+## Offline callback-ordering repair after 4396d3e4 — 2026-10-16
+
+The user authorized repairing both callback-ordering gaps with offline
+regressions only. The working source now tracks initialization for each exact
+window model from before registration publication through its awaited callbacks.
+Startup/deferred restoration waits for that initialization to end and rechecks
+after suspension. Explicit user mutations invalidate outstanding automatic
+callbacks, including when no saved assignment exists; delayed matchers, later
+commands in a compound callback, and deferred next-window layouts stop instead
+of overriding newer input. Exact-model checks reject stale continuations after
+replacement. Existing owner/process/native-root/controller checks remain intact.
+
+Four new reproductions failed against the checkpoint with 10 assertions before
+the repair. All **155 offline Swift tests** now pass: **70 discovery/deferred**
+(including 14 new ordering regressions), **27 ownership/process**, **49 native-tab**
+and **9 hidden-window**. All **232 Python tests** pass, and the exact changed
+production library compiles without executing an app entrypoint. Whitespace
+checks pass. See the [diagnosis, implementation and offline evidence](native-tabs-diagnosis.md#discovery-initialization-and-superseded-callback-ordering--2026-10-16).
+
+No app/helper, installed CLI, native reader or live test was launched; nothing
+was installed, committed or pushed. Installed AquaSpace remains
+`0.21.3-aquaspace.20261016.2`; these working-tree repairs have not been installed
+or live-validated. The preceding live handoff record remains historical evidence
+for that installed build, not a validation of these additional ordering guards.
+
+
+## Offline callback command continuation repair — 2026-10-17
+
+The user authorized repairing awaited callback-command continuations with offline
+regressions, without app/helper launches, live checks, installation or pushing.
+The working source now captures each automatic command's exact affected model,
+initialization and user-mutation token and rechecks after native reads. An
+already-dispatched layout/relayout, native fullscreen/minimize or close operation
+therefore stops before its later mutation when newer user input, model replacement
+or loss of controller ownership supersedes it. Separately targeted windows get
+their own checks; ordinary explicit commands and unrelated input remain supported.
+Other mutating command continuations receive matching guards. Existing owner,
+native-root, ambiguity and exclusive-controller checks remain intact.
+
+Floating-as-tiling focus preparation now performs all reads before temporarily
+unbinding candidates, verifies current destinations, and cleans up only unchanged
+temporary bindings. It preserves newer choices even when they use the same parent.
+The real command/helper replay reproduced 29 failing assertions before repair.
+All **170 offline Swift methods** now pass, including **85 discovery/deferred**
+with **15 new methods / 36 new case invocations**; all **232 Python tests** pass.
+The full changed production library compiles without executing an app entrypoint.
+See the [continuation diagnosis and evidence](native-tabs-diagnosis.md#awaited-callback-command-continuations--2026-10-17)
+for the executed cases and audit/compile-only coverage limits.
+
+No app/helper or live test was launched during this repair; nothing was installed
+or pushed. This continuation repair and the preceding callback-ordering repairs
+are included in this local checkpoint, together with their offline regressions
+and diagnosis notes. Creating the checkpoint involved no additional tests,
+builds, installations, app/helper launches or live checks. Installed
+`0.21.3-aquaspace.20261016.2` is unchanged and does not contain these repairs.

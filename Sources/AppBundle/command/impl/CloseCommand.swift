@@ -11,7 +11,10 @@ struct CloseCommand: Command {
             return .fail(io.err("Empty workspace"))
         }
         // Access ax directly. Not cool :(
-        if await args.quitIfLastWindow.andAsync({ @MainActor @Sendable in (try? await window.macAppUnsafe.getAxWindowsCount(.nonCancellable)) == 1 }) {
+        let continuation = WindowCommandContinuation(window)
+        let quit = await args.quitIfLastWindow.andAsync({ @MainActor @Sendable in (try? await window.macAppUnsafe.getAxWindowsCount(.nonCancellable)) == 1 })
+        guard continuation.mayContinue else { return .fail }
+        if quit {
             let app = window.macAppUnsafe
             if app.nsApp.terminate() {
                 for workspace in Workspace.all {

@@ -30,9 +30,13 @@ struct EnableCommand: Command {
         if newState {
             for workspace in Workspace.all {
                 for window in workspace.allLeafWindowsRecursive where window.isFloating {
-                    window.lastFloatingSize = (try? await window.getAxSize(.nonCancellable)) ?? window.lastFloatingSize
+                    let continuation = WindowCommandContinuation(window)
+                    let size = try? await window.getAxSize(.nonCancellable)
+                    guard continuation.mayContinue, !WindowManagerHandoff.isYielding else { return .fail }
+                    window.lastFloatingSize = size ?? window.lastFloatingSize
                 }
             }
+            guard WindowDiscoveryInitialization.mayRunAutomaticCommand, !WindowManagerHandoff.isYielding else { return .fail }
             await activateMode_nonCancellable(mainModeId)
         } else {
             await activateMode_nonCancellable(nil)

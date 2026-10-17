@@ -126,7 +126,11 @@ extension OfflineWindowDiscoveryTests {
         Simulation.owners = [42: [9]]; Simulation.processes = [9: owner()]
         Simulation.controls = true; Simulation.peers = []; Simulation.inventoryError = false
         Simulation.yields = 0; Simulation.stops = 0; Simulation.mutations = []; Simulation.foreground = 99
-        Simulation.detectedRule = nil
+        Simulation.detectedRule = nil; Simulation.callbacks = nil; Simulation.beforeDetection = nil
+        Simulation.awaitSize = nil; Simulation.awaitType = nil; Simulation.awaitFullscreen = nil
+        Simulation.awaitMinimized = nil; Simulation.awaitWindowCount = nil
+        Simulation.nativeWrites = []; Simulation.unbinds = []; Simulation.awaitCenter = nil
+        Simulation.geometryTarget = nil; Simulation.mruWrites = []
         global_layoutForNextDetectedWindow = nil
         TrayMenuModel.shared.isEnabled = true; focus.windowOrNil = nil; Workspace.registry = [:]
         ReplayCoordinator.pendingRestoration = pending()
@@ -608,6 +612,229 @@ extension OfflineWindowDiscoveryTests {
         #expect(window.isFloating)
         #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
         #expect(Simulation.mutations.isEmpty)
+    }
+
+    @Test func pendingRestoreWaitsForAwaitedDiscoveryMatcherAndItsMutation() async {
+        let (_, window, _) = setup()
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            await ReplayCoordinator.restorePendingAssignments()
+            #expect(window.nodeWorkspace?.name == "default")
+            #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+            #expect(Simulation.mutations.isEmpty)
+            return true
+        }, run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        await runOnWindowDetected(ifConventional: window)
+        #expect(window.nodeWorkspace?.name == "rule")
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+        #expect(window.isFloating && window.isFullscreen)
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func explicitUserMoveInvalidatesTheAwaitedAutomaticMatcher() async {
+        let (_, window, _) = setup()
+        let matched = ReplayGate(), resume = ReplayGate()
+        // Created outside initialization, matching an independent input task.
+        let input = Task { @MainActor in
+            await matched.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            matched.open(); await resume.wait(); return true
+        }, run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(ReplayCoordinator.pendingRestoration.assignments.isEmpty)
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func userMoveStopsLaterCommandsInTheSameAutomaticCallback() async {
+        let (_, window, _) = setup()
+        let matched = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await matched.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run: .seq([
+            .cmd(ReplayAwaitCommand { matched.open(); await resume.wait() }),
+            .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "late"))),
+        ]))]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func userMoveSkipsDeferredNextWindowLayoutAfterMatcherAwait() async {
+        let (_, window, _) = setup()
+        let matched = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await matched.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            _ = await Shell<any Command>.cmd(ReplayTileCommand(window: window)).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        global_layoutForNextDetectedWindow = .floating
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            matched.open(); await resume.wait(); return false
+        }, run: .empty)]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(!window.isFloating)
+    }
+
+    @Test func registrationDefersRestorationBeforeTheFirstCallbackRead() async throws {
+        let (_, window, _) = setup()
+        MacWindow.allWindowsMap = [:]
+        Simulation.beforeDetection = {
+            #expect(MacWindow.allWindowsMap[42] === window)
+            await ReplayCoordinator.restorePendingAssignments()
+            #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+            #expect(Simulation.mutations.isEmpty)
+        }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true },
+            run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        try await MacWindow.initializeRegistered(window)
+        #expect(window.discoveryInitialization?.isInProgress == false)
+        Simulation.mutations = []
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func failedRegistrationReleasesTheInitializationBarrier() async {
+        let (_, window, _) = setup()
+        Simulation.beforeDetection = { throw CancellationError() }
+        do { try await MacWindow.initializeRegistered(window); Issue.record("Expected interrupted initialization") }
+        catch {}
+        #expect(window.discoveryInitialization?.isInProgress == false)
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+    }
+
+    @Test func userMoveBeforeDiscoveryCallbacksPreventsTheirDispatch() async throws {
+        let (_, window, _) = setup()
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.beforeDetection = { entered.open(); await resume.wait() }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            Issue.record("Superseded initialization ran a callback matcher"); return true
+        }, run: .cmd(ReplayFloatCommand(window: window)))]
+        try await MacWindow.initializeRegistered(window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func userMoveWithoutPendingAssignmentStillInvalidatesAutomaticCallback() async {
+        let (_, window, _) = setup()
+        ReplayCoordinator.pendingRestoration.removeAll()
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: window,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            entered.open(); await resume.wait(); return true
+        }, run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "user")
+        #expect(Simulation.mutations == [42])
+    }
+
+    @Test func replacingTheRegisteredModelRejectsItsOldCallbackContinuation() async {
+        let (app, window, _) = setup()
+        let replacement = MacWindow(42, app: app)
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            MacWindow.allWindowsMap[42] = replacement; return true
+        }, run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        await runOnWindowDetected(ifConventional: window)
+        #expect(Simulation.mutations.isEmpty)
+        #expect(replacement.nodeWorkspace?.name == "default")
+    }
+
+    @Test func userMutationOfAnotherWindowDoesNotCancelThisInitialization() async {
+        let (app, window, _) = setup()
+        let other = MacWindow(43, app: app); MacWindow.allWindowsMap[43] = other
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: other,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in
+            entered.open(); await resume.wait(); return true
+        }, run: .cmd(ReplayMoveCommand(window: window, workspace: Workspace.get(byName: "rule"))))]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(window.nodeWorkspace?.name == "rule")
+        #expect(other.nodeWorkspace?.name == "user")
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+    }
+
+    @Test func initializationStartingDuringNativeProofDelaysTheCommit() async {
+        let (app, window, _) = setup()
+        var initialization: WindowDiscoveryInitialization?
+        app.thread?.afterRead = { initialization = WindowDiscoveryInitialization(window) }
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        initialization?.finish()
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+    }
+
+    @Test func initializationFinishingDuringNativeProofAlsoRequiresANewAttempt() async {
+        let (app, window, _) = setup()
+        app.thread?.afterRead = { WindowDiscoveryInitialization(window).finish() }
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(Simulation.mutations.isEmpty)
+        #expect(ReplayCoordinator.pendingRestoration.assignments[42] != nil)
+        await ReplayCoordinator.restorePendingAssignments()
+        #expect(window.nodeWorkspace?.name == "saved")
+    }
+
+    @Test func initializingWindowCannotEnterTheImmediateStartupCommandPlan() async {
+        let (_, window, _) = setup()
+        let initialization = WindowDiscoveryInitialization(window)
+        defer { initialization.finish() }
+        var session = WindowManagerSession(windows: "42\tsaved\tfloating\ttrue", workspaces: "", workspace: "", focusedWindow: "42")
+        session.owners = ["42": owner()]
+        ReplayHandoff.startupSession = session; ReplayHandoff.commands = []; ReplayHandoff.onCommand = nil
+        await ReplayHandoff.restoreStartupSession()
+        #expect(ReplayHandoff.commands.isEmpty)
+        #expect(ReplayHandoff.pendingRestoration.assignments[42] != nil)
+    }
+
+    @Test func initializationBeginningDuringStartupCommandsKeepsItsAssignmentPending() async {
+        let (_, window, _) = setup()
+        var session = WindowManagerSession(windows: "42\tsaved\tfloating\ttrue", workspaces: "", workspace: "", focusedWindow: "")
+        session.owners = ["42": owner()]
+        ReplayHandoff.startupSession = session; ReplayHandoff.commands = []
+        var initialization: WindowDiscoveryInitialization?
+        ReplayHandoff.onCommand = { _ in initialization = WindowDiscoveryInitialization(window) }
+        defer { ReplayHandoff.onCommand = nil; initialization?.finish() }
+        await ReplayHandoff.restoreStartupSession()
+        #expect(ReplayHandoff.commands.count == 1)
+        #expect(ReplayHandoff.pendingRestoration.assignments[42] != nil)
     }
 
 }

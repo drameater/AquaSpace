@@ -54,9 +54,11 @@ struct ReloadConfigResult {
         config = parseResult.config
         configUrl = result.configUrl
         await activateMode_nonCancellable(activeMode)
-        syncStartAtLogin()
-        syncFocusFollowsMouse(config)
-        syncConfigFileWatcher()
+        if WindowDiscoveryInitialization.mayRunAutomaticCommand {
+            syncStartAtLogin()
+            syncFocusFollowsMouse(config)
+            syncConfigFileWatcher()
+        }
     }
 
     if warningsAsErrors {

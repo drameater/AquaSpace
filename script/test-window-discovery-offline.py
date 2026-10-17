@@ -105,6 +105,7 @@ BODY
     static var restoringPending = false
     static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
     static var canControlWindows: Bool { Simulation.controls }
+    static var isYielding: Bool { Simulation.yields > 0 || Simulation.stops > 0 }
     static let admission = ReplayAdmission()
     static func freezeAXWrites() { Simulation.controls = false }
     static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
@@ -125,16 +126,50 @@ BODY
     if move.count(move_start) != 1:
         raise RuntimeError('Move command extraction boundary changed.')
     (source / 'MoveWindow.swift').write_text(move[move.index(move_start):])
+    focus_command = (production / 'command/impl/FocusCommand.swift').read_text()
+    focus_helpers_start, focus_helpers_end = '@MainActor private func makeFloatingWindowsSeenAsTiling(', '\nextension TreeNode {'
+    if focus_command.count(focus_helpers_start) != 1 or focus_command.count(focus_helpers_end) != 1:
+        raise RuntimeError('Floating focus preparation boundaries changed.')
+    focus_helpers = focus_command[focus_command.index(focus_helpers_start):focus_command.index(focus_helpers_end)]
+    (source / 'FloatingFocusPreparation.swift').write_text('import Foundation\n' + focus_helpers.replace('private ', ''))
     fullscreen = (production / 'command/impl/FullscreenCommand.swift').read_text()
     (source / 'FullscreenCommand.swift').write_text(fullscreen.replace('import AppKit\n', '').replace('import Common\n', '')
         .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+    for name in ('LayoutCommand', 'CloseCommand', 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
+        body = (production / ('command/impl/' + name + '.swift')).read_text()
+        (source / (name + '.swift')).write_text(body.replace('import AppKit\n', 'import Foundation\n').replace('import Common\n', ''))
     mac_window = (production / 'tree/MacWindow.swift').read_text()
     detected_start = '@MainActor\nfunc runOnWindowDetected('
     detected_end = '@MainActor\nfunc onWindowDetected('
     if mac_window.count(detected_start) != 1 or mac_window.count(detected_end) != 1:
         raise RuntimeError('Automatic detection callback boundaries changed.')
+    matcher_start = '\nextension WindowDetectedCallback {'
+    if mac_window.count(matcher_start) != 1:
+        raise RuntimeError('Detection callback matcher boundary changed.')
     (source / 'AutomaticDetection.swift').write_text(mac_window[
-        mac_window.index(detected_start):mac_window.index(detected_end)])
+        mac_window.index(detected_start):mac_window.index(matcher_start)])
+    seq_start = '@MainActor private func runShellSeq('
+    seq_end = '\n/// runs commands sequentially'
+    if shell.count(seq_start) != 1 or shell.count(seq_end) != 1:
+        raise RuntimeError('Sequential shell extraction boundaries changed.')
+    (source / 'SequentialShell.swift').write_text(shell[
+        shell.index(seq_start):shell.index(seq_end)].replace('private func', 'func', 1))
+    registration_start = '        let initialization = WindowDiscoveryInitialization(window)'
+    registration_end = '        return window\n    }'
+    if mac_window.count(registration_start) != 1 or mac_window.count(registration_end) != 1:
+        raise RuntimeError('Registration initialization boundaries changed.')
+    registration = mac_window[mac_window.index(registration_start):mac_window.index(registration_end)]
+    (source / 'RegistrationInitialization.swift').write_text(
+        'extension MacWindow {\nstatic func initializeRegistered(_ window: MacWindow) async throws {\n'
+        'let windowId = window.windowId\n' + registration + '\n}\n}\n')
+    relayout_start = 'extension Window {\n    @MainActor\n    func relayoutWindow('
+    relayout_end = 'private func unbindAndGetBindingDataForNewTilingWindow('
+    if mac_window.count(relayout_start) != 1 or mac_window.count(relayout_end) != 1:
+        raise RuntimeError('Relayout continuation extraction boundaries changed.')
+    relayout = mac_window[mac_window.index(relayout_start):mac_window.index(relayout_end)]
+    # Drop only the final annotation for the following memory binding helper.
+    relayout = relayout[:relayout.rindex('@MainActor')]
+    (source / 'WindowRelayout.swift').write_text('import Foundation\n' + relayout)
     tree = (production / 'tree/TreeNode.swift').read_text()
     bind_start = 'func bind(to newParent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) -> BindingData? {'
     bind_end = '        let result = unbindIfBound()'
@@ -149,10 +184,12 @@ BODY
         destination.write_text(mutation.read_text())
     elif destination.exists():
         destination.unlink()
+    (source / 'WindowDiscoveryInitialization.swift').write_text((production / 'model/WindowDiscoveryInitialization.swift').read_text().replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
     fixture_root = root / 'script/window-discovery-offline'
     (source / 'ReplaySupport.swift').write_text((fixture_root / 'ReplaySupport.swift').read_text())
     (tests / 'WindowDiscoveryTest.swift').write_text((fixture_root / 'WindowDiscoveryTest.swift').read_text())
     (tests / 'DeferredRestorationTest.swift').write_text((fixture_root / 'DeferredRestorationTest.swift').read_text())
+    (tests / 'CallbackCommandContinuationTest.swift').write_text((fixture_root / 'CallbackCommandContinuationTest.swift').read_text())
     fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
     (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')

@@ -620,3 +620,145 @@ regressions and these notes are included in this local checkpoint. Creating it
 involved no additional tests, builds, installations, app/helper launches or live
 checks; nothing was pushed.
 See the [installation, setup failures and successful live evidence](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16).
+
+
+## Discovery initialization and superseded callback ordering — 2026-10-16
+
+Offline review of `4396d3e4` found two scheduling gaps left by the automatic
+callback provenance repair. First, registration published its model before
+awaiting diagnostic/cache work and detection rules. A second refresh could
+consume pending restoration while the first task's matcher was still awaiting;
+the late rule then overwrote the restored workspace/layout. Second, an explicit
+user move discarded pending intent but did not invalidate that outstanding
+matcher, so its automatic rule could still move the window afterward. The earlier
+concurrent-input test performed no automatic mutation after the input completed.
+
+Four new deterministic memory-only reproductions failed against the checkpoint,
+with **10 assertions**: restoration during an awaited matcher, a rule move after
+an intervening user move, a later command in the same callback, and the deferred
+next-window layout reapplying after the user's tiling choice. The replay now
+extracts the actual production callback iteration and sequential shell dispatch,
+instead of substituting the callback loop. Its matcher/AX/process/tree storage
+remain memory substitutes; gates establish ordering without desktop input or
+sleep-dependent races.
+
+The working source introduces `WindowDiscoveryInitialization`, a token for one
+exact model object's initialization. Registration installs it synchronously
+before publishing the window, and finishes it in `defer`, including error exits.
+The scope covers the first awaited reads and closed-window-cache path, not only
+the callback function. Popup promotion and direct detection entrypoints establish
+the same scope when registration does not already own it. A second invocation
+cannot run the same initialization concurrently. Finished tokens remain attached
+to their window so an awaiting restoration can detect a newer initialization;
+the token's window reference is weak.
+
+Both immediate startup restoration and deferred restoration exclude initializing
+windows. The deferred adapter checks again after native-proof/controller awaits,
+including initialization that started and finished during those awaits. It keeps
+saved assignments retryable rather than consuming them before late rules. Startup
+also rechecks each planned window command, so initialization beginning after the
+plan was captured cannot cause a skipped assignment to be marked completed.
+
+An explicit binding/fullscreen mutation now supersedes the exact registered
+window's initialization even if no pending assignment exists. The original PID
+check still gates discarding a pending row. Automatic matchers recheck their
+scope before and after awaiting; shell dispatch checks before every subsequent
+command, including commands inside a compound callback. The deferred next-window
+layout also checks before reapplying. A stale scope fails when its registered
+model is replaced or becomes unbound. Explicit callbacks outside the automatic
+scope and independent user tasks retain their ordinary command semantics;
+mutating another window does not invalidate this window's initialization.
+
+All **70 discovery/deferred methods** pass, including **14 new regressions**.
+Beyond the four original reproductions, these cover registration before its first
+callback read, error cleanup, user input before rule dispatch, no-pending user
+input, model replacement, unrelated-window input, initialization starting or
+finishing during native proofs, and both startup-planning interleavings. All
+**27 ownership/process**, **49 native-tab**, **9 hidden-window**, and **232 Python**
+tests pass: **155 offline Swift methods** in total. No existing owner/PID/native
+root, ambiguity, foreground or controller admission regression was relaxed.
+
+The exact changed production `AppBundle` library compiled successfully with
+cached dependencies and the macOS 26.5 SDK, without building or executing an app
+entrypoint. Evidence is under
+`.debug/aquaspace/seven-window-diagnosis/callback-order-*`: `red.log` preserves
+the four original failures, `final.log` the 70-method run, `ownership.log`,
+`tabs.log`, `hidden.log` and `python.log` the remaining suites, and `library.log`
+plus `source-record.json` the compile and production-source hashes. Whitespace
+checks pass. No app/helper, installed CLI, native desktop reader or live harness
+was launched; nothing was installed, committed or pushed. The installed release
+remains `0.21.3-aquaspace.20261016.2` and does not contain this source-only repair.
+
+
+## Awaited callback command continuations — 2026-10-17
+
+The readiness check after the uncommitted ordering repair found a further gap
+inside a dispatched command. `layout tiling` captures its floating container,
+awaits `getAxSize(.nonCancellable)`, then updates cached size and rebinds using
+the captured workspace. An explicit user move during that read invalidated the
+initialization, but there was no continuation check inside the command. Shell
+entry checks cannot stop a command that is already past dispatch. Similar waits
+precede native fullscreen/minimize writes and the close command's quit/close
+choice; relayout also awaits native window classification before unbinding.
+
+The memory replay now extracts the real complete layout, close and native-state
+command bodies, the relayout adapter/classification helper, and floating-focus
+preparation/cleanup. Its native reads suspend on deterministic memory gates and
+its native-write adapters only append to memory logs; even the close/terminate
+cases never interact with an application. Against the prior working source,
+user moves and exact-model replacements during the five command/read paths
+produced **29 failing assertions** across ten parameterized cases. The other
+existing regressions and valid command cases passed. This failing run is retained
+as `command-continuation-red.log`.
+
+The repair adds `WindowCommandContinuation`, which captures automatic-discovery
+provenance, the initialization token, the exact affected model, its latest user
+mutation token and whether window control was held at dispatch. After native
+reads, the command verifies that its original initialization is still current,
+its affected model is still registered/bound, and no explicit mutation of that
+model superseded it. It also rejects a yielding manager or loss of previously
+held control. A per-window mutation token matters because callback commands can
+target another window whose user changes must also win. Explicit command tasks
+outside automatic discovery keep their ordinary command semantics. Existing
+pending-owner PID checks, native-root/WindowServer/process continuity, peer
+admission, controller lock and physical AX-write gates remain intact.
+
+Layout checks before touching cached size, and relayout checks after native
+classification before any unbind. Native fullscreen/minimize and close check
+before their native effect; the close-all loop rechecks its retained subject
+between awaited closes. Movement/focus, mouse positioning, enable size capture
+and post-callback configuration synchronization also revalidate their continuations
+before later effects. These are continuation guards, not attempts to undo an
+operation already completed before newer input arrived.
+
+Floating-as-tiling focus preparation completes all native center reads before
+unbinding any candidate. It rechecks each candidate, geometry target and still
+attached destination/index before the synchronous temporary binding phase.
+Cleanup restores only an exact, unchanged temporary binding, comparing its user
+mutation token even when newer input reused the same parent. Thus canceling a
+later read cannot strand earlier floating windows unbound, and cleanup cannot
+undo a user's intervening tiling choice. Untouched temporary bindings still get
+restored. MRU restoration also skips a superseded automatic continuation.
+
+All **85 discovery/deferred test methods** pass: the prior 70 and **15 new
+methods**, including **36 new case invocations**. The cases cover five actual
+command/read paths for newer user moves, model replacement, loss of control and
+valid execution; separately targeted windows; unrelated user input; failed-read
+fallbacks; ordinary explicit tiling; and seven floating-focus preparation/cleanup
+sequences. All **27 ownership/process**, **49 native-tab**, **9 hidden-window**
+and **232 Python tests** also pass: **170 offline Swift methods** in total.
+The complete changed production `AppBundle` library compiles successfully with
+cached dependencies and the macOS 26.5 SDK. The final source-hash record matches
+the checkout, and whitespace checks pass.
+
+Evidence is under `.debug/aquaspace/seven-window-diagnosis/command-continuation-*`:
+`red.log`, `final.log`, `ownership.log`, `tabs.log`, `hidden.log`, `python.log`,
+`library-final.log` and `source-record.json`. Some additional guarded command
+paths are audited/compile-checked rather than independently fault-injected; the
+read/write and focus-helper cases above are the executed memory-only coverage.
+No app/helper, installed CLI, process inventory, native desktop reader or live
+harness was launched. Nothing was installed or pushed. Both ordering repairs,
+this continuation follow-up, their offline regressions and diagnosis notes are
+included in this local checkpoint. Creating it involved no additional tests,
+builds, installations, app/helper launches or live checks. Installed AquaSpace
+is still `0.21.3-aquaspace.20261016.2` and does not include these repairs.

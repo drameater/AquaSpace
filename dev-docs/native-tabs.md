@@ -396,3 +396,24 @@ independent inventories across the monitored attempts peaked at one manager.
 Vesktop 30682 remains retired/unavailable, not a seventh restoration pass.
 See the [latest installation and live-validation record](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16),
 including setup failures, geometry limits and the local checkpoint status.
+
+
+A subsequent offline repair closes two callback-ordering gaps after `4396d3e4`:
+restoration consuming intent before initialization finished, and delayed automatic
+rules overriding newer explicit input. Initialization now has an exact-window
+lifetime; restoration waits and rechecks after awaits, while superseded callback
+continuations stop. All 155 offline Swift and 232 Python tests pass, including
+14 new ordering regressions, and the changed production library compiles. This
+repair remains uncommitted source only; no app/helper or live test was launched,
+and the installed `.20261016.2` build is unchanged. See the [offline callback-ordering record](native-tabs-diagnosis.md#discovery-initialization-and-superseded-callback-ordering--2026-10-16).
+
+
+The later offline continuation repair also guards commands that already began
+before user input: it checks affected-model/user-mutation/controller continuity
+after native reads and before later effects. Floating-focus preparation/cleanup
+preserves newer user bindings without leaving earlier candidates unbound. All
+170 offline Swift methods and 232 Python tests pass, with full production-library
+compilation and no app/helper or live-test launch. These ordering/continuation
+repairs, regressions and notes are included in the local checkpoint; the installed
+build is unchanged. Checkpoint creation involved no additional tests, builds,
+installations, app/helper launches, live checks or pushes. See the [command-continuation repair record](native-tabs-diagnosis.md#awaited-callback-command-continuations--2026-10-17).

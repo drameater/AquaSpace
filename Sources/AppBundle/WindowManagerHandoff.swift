@@ -178,12 +178,17 @@ enum WindowManagerHandoff {
         startupSession = nil
         pendingRestoration = PendingWindowRestoration(windows: session.windows, owners: session.owners ?? [:], workspaces: session.workspaces)
         reconcilePendingRestoration()
-        let ids = Set(MacWindow.allWindowsMap.keys.map(String.init))
+        let ids = Set(MacWindow.allWindows.filter { $0.discoveryInitialization?.isInProgress != true }
+            .map { String($0.windowId) })
         var failed: Set<UInt32> = []
         for args in session.restorationCommands(availableWindowIds: ids) {
             let id = args.firstIndex(of: "--window-id").flatMap { args.indices.contains($0 + 1) ? UInt32(args[$0 + 1]) : nil }
             if let id, session.owners?[String(id)] != nil,
                pendingRestoration.assignments[id] == nil { continue }
+            if let id, MacWindow.allWindowsMap[id]?.discoveryInitialization?.isInProgress == true {
+                failed.insert(id)
+                continue
+            }
             do { _ = try await localCommand(args) }
             catch { if let id, args.first != "focus" { failed.insert(id) } }
         }
@@ -310,9 +315,13 @@ enum WindowManagerHandoff {
     /// do not acquire user-mutation provenance.
     static func cancelPendingForUserMutation(_ windows: [Window]) {
         guard WindowRestorationMutation.isUserCommand, !WindowRestorationMutation.isSessionRestore else { return }
-        for window in windows where MacWindow.allWindowsMap[window.windowId] === window &&
-            pendingRestoration.assignments[window.windowId]?.owner.pid == window.app.pid {
-            discardPendingRestoration(window.windowId)
+        for window in windows where MacWindow.allWindowsMap[window.windowId] === window {
+            window.userMutationToken = UUID()
+            // Invalidate the delayed callback even if there is no saved intent.
+            window.discoveryInitialization?.supersede()
+            if pendingRestoration.assignments[window.windowId]?.owner.pid == window.app.pid {
+                discardPendingRestoration(window.windowId)
+            }
         }
     }
 
@@ -343,6 +352,8 @@ enum WindowManagerHandoff {
         for id in Array(pendingRestoration.assignments.keys).sorted() {
             guard let assignment = pendingRestoration.assignments[id],
                   let window = MacWindow.allWindowsMap[id], window.macApp.pid == assignment.owner.pid else { continue }
+            if window.discoveryInitialization?.isInProgress == true { continue }
+            let initialization = window.discoveryInitialization
             if focus.windowOrNil?.windowId == id || NSWorkspace.shared.frontmostApplication?.processIdentifier == assignment.owner.pid {
                 pendingRestoration.discard(id)
                 continue
@@ -378,6 +389,10 @@ enum WindowManagerHandoff {
                 await stopForUncertainOwnership(error)
                 return
             }
+            // Initialization may have begun while the fresh native proofs awaited.
+            // Keep the assignment retryable; it must not race subsequent rules.
+            if window.discoveryInitialization?.isInProgress == true ||
+                window.discoveryInitialization !== initialization { continue }
             let changed = MacWindow.allWindowsMap[id] !== window || RestorationAnchor(window) != anchor ||
                 focus.windowOrNil?.windowId == id || proof?.focused == true
             // Token checks are separate to keep an unavailable AX read retryable.
