@@ -2,6 +2,13 @@
 
 AquaSpace installs as `/Applications/AquaSpace.app` with bundle identifier `local.aquaspace`. AeroSpace remains `/Applications/AeroSpace.app` with its original `bobko.aerospace` identity. AquaSpace uses the same icon and assets, `~/.aerospace.toml` / `${XDG_CONFIG_HOME}/aerospace/aerospace.toml`, bindings, and `AEROSPACE_*` environment variables.
 
+Current installed release: **0.21.3-aquaspace.20261017.2**, built from local
+commit **47be2afa**. The continuation repairs and product naming pass are installed
+and live-validated. AquaSpace is left running as the sole controller; stock
+AeroSpace remains separately installed. See the
+[completed daily-use validation](#daily-use-continuation-and-renaming-validation--2026-10-17)
+for the exact checks, evidence and scope. Older sections below are historical.
+
 Open AquaSpace normally to switch from AeroSpace. To switch back, choose **Switch to AeroSpace** in AquaSpace's menu or run `aquaspace switch-to-aerospace`. This freezes and drains AquaSpace's window writes before opening AeroSpace. Opening AeroSpace directly also triggers a one-way exit through launch notifications and process detection, but an unmodified external application can start before that notification is delivered; use the explicit switch for ordered control. AquaSpace stops stock AeroSpace before taking over. Session transfer preserves workspace assignments, root layouts, floating/fullscreen settings, and focus. Nested tiling containers and their exact weights are rebuilt when changing managers.
 
 The original `aerospace` CLI is restored unchanged. AquaSpace adds `/opt/homebrew/bin/aquaspace`, pointing to `AquaSpace.app/Contents/MacOS/aquaspace-cli`. The apps use separate command sockets: the stock CLI controls stock AeroSpace and the fork's CLI controls AquaSpace. AquaSpace prefixes its own callbacks' PATH with a bundled `aerospace` compatibility alias, so relative `aerospace` invocations in the existing config use the fork. The user's shell PATH and original executable remain unchanged; external scripts and absolute CLI paths must explicitly choose the appropriate manager. Only one manager should control windows.
@@ -2406,3 +2413,55 @@ and cannot erase .debug evidence. Local builds generate fresh version metadata.
 The branding changes pass 237 Python tests and 33 ownership/report/process tests,
 including both old and renamed unbundled manager classification and build-only
 wrapper checks. No remote was changed or pushed.
+
+## Daily-use continuation and renaming validation — 2026-10-17
+
+Installed release **0.21.3-aquaspace.20261017.2** contains local source checkpoint
+**47be2afa**. Both original continuation gaps and the nested-wrapper/later-victim
+followups are repaired. Required targets remain pinned through success, fallback,
+sequence, pipeline and nested refresh; complete bulk-close plans reject newer
+intent before physical effects. Successful expected closes do not cancel valid
+remaining work. Optional probes retain their behavior, and exact ownership,
+model identity, user-token and controller-generation checks remain mandatory.
+
+The signed, installed app and CLI match the release manifest and report matching
+versions. Startup now succeeds with the existing ordinary macOS control grant.
+Preflight addressed a pinned windowless orphaned crash helper without broadening
+the inventory exception, and the updater's native-plist parser now handles the
+actual macOS 27 wallpaper metadata without guessing process identities.
+
+Validation completed against the installed application:
+
+- **32 real Ghostty assertions passed:** three native merges, three detachments,
+  independent movement, repeated selection, exact focus restoration and cleanup.
+  The protected disposable Ghostty window retained its workspace/native identities;
+  every real pre-existing window retained its original assignment. This session
+  had no personal Ghostty process, so protection used a separate owned sentinel.
+  The run recorded 2,136 sole-manager and 771 original-window samples.
+- **Installation and normal update restart passed.** The old controller exited
+  before its replacement launched; 7,319 inventory samples recorded no duplicate
+  manager processes. The replacement restored all four original assignments and
+  the original native/model desktop focus.
+- **Explicit stock/fork roundtrip passed.** Stock became the sole manager, then
+  AquaSpace took over through normal release admission. All four assignments and
+  exact focus survived both directions. The 22-sample phase-aware record includes
+  outgoing yielding/disabled-write status and three socket-unavailable transition
+  samples; production freeze/drain/claim boundaries provide the ordering guarantee.
+- **240 Python tests and 212 Swift methods pass**, covering continuation intent,
+  optional probes, ownership/failure reporting, native-tab recovery, hidden-window
+  assignments and the real production model. The release and production library
+  compile. The complete synthetic timing matrix is offline; real Ghostty and
+  lifecycle checks exercise the installed observer/layout pipeline.
+
+All disposable Ghostty windows/processes were removed. The original stock app,
+config and icon/assets retain their preflight hashes. AquaSpace is left installed
+and running as the sole controller. A final quiet minute passed 140 additional
+identity/session checks with every original assignment unchanged. Use its
+**Switch to AeroSpace** menu action
+for an ordered switch to stock; externally starting unmodified stock directly
+retains the documented notification/polling race. Exact nested container weights
+remain subject to the existing cross-manager session format limitation above.
+No remote was created, modified or pushed.
+
+The full scope, diagnostic setup refusals and evidence paths are recorded in
+[the diagnosis](native-tabs-diagnosis.md#installed-continuation-repairs-and-real-daily-use-checks--2026-10-17).

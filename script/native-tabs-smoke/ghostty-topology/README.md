@@ -1,6 +1,17 @@
 # Real Ghostty native merge/detach checks
 
-Latest authorized **v7** validation on **2026-10-15** passed **32 assertions**, including
+The latest authorized daily-use run on **2026-10-17** passed all **32 assertions**
+against installed AquaSpace `0.21.3-aquaspace.20261017.2` (source `47be2afa`).
+Three merges and three detachments passed, original desktop focus was restored,
+and all four pre-existing desktop assignments stayed unchanged. This session had
+no personal Ghostty instance: a separate identity-pinned disposable sentinel was
+the protected baseline. It retained its workspace and native IDs throughout.
+The harness recorded 2,136 sole-manager and 771 baseline-window samples; all
+disposable windows/processes were removed afterward. See the
+[daily-use validation](../../../dev-docs/aquaspace.md#daily-use-continuation-and-renaming-validation--2026-10-17).
+Earlier records below describe their own builds and baselines.
+
+The earlier authorized **v7** validation on **2026-10-15** passed **32 assertions**, including
 all native merge/detach cycles and stable native/model desktop focus restoration.
 All eight baseline assignments were preserved; original Ghostty window 28264
 stayed on its current baseline workspace 1, disposable tabs/processes were removed,

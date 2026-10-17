@@ -1091,3 +1091,62 @@ Additional coverage checks targetless sibling refresh at root and nested levels,
 normal multi-close, normal app termination and continued optional-probe behavior.
 The final discovery suite passes 119 methods. Evidence is in
 .debug/window-discovery-offline/nested-target-{red,ancestor-red,green,model}.log.
+
+## Installed continuation repairs and real daily-use checks — 2026-10-17
+
+Local release `0.21.3-aquaspace.20261017.2` contains source commit `47be2afa`,
+including required-target retention after successful commands, complete bulk-close
+plans, ancestor/root continuation scopes, optional-probe preservation, the native
+plist compatibility repair and the AquaSpace naming pass. Installed app and CLI
+hashes match the build manifest; active client/server versions agree. Existing
+standard macOS control permission works for the rebuilt product.
+
+The complete v7 harness run `run-20261017-180413` passed all 32 assertions against
+the installed observer/layout pipeline. It exercised three native Ghostty merges,
+three detachments, tab selection across moved groups, independent detached-window
+movement, cleanup and stable exact native/model desktop focus restoration. Its
+2,136 manager inventories saw one unchanged AquaSpace; 771 window inventories
+preserved the entire baseline. There was no pre-existing Ghostty process at this
+session's baseline, so an independently identity-pinned disposable Ghostty window
+served as the protected process. It remained on `native-tab-test-daily-protected`
+with the same tab/terminal IDs throughout; topology work used a different process
+on `native-tab-test-daily-20261017-{a,b}`. All four real pre-existing desktop
+windows retained their workspace/layout/fullscreen assignments. Both disposable
+Ghostty processes were subsequently removed and original focus remained intact.
+
+The separate sentinel cleanup initially refused an incorrect hard-coded tiling
+expectation: the captured sentinel was floating. It then used the actual recorded
+row. An immediate post-close native read refused stale closing-window metadata;
+no termination followed that unreadable reply. A fresh read established empty
+membership before the guarded background termination. No production ownership
+check was changed or bypassed for either diagnostic issue.
+
+The serialized installer passed both installation and a normal running-app
+restart. Across these operations, 7,319 full kernel-backed manager inventories
+recorded no simultaneous manager processes. The replacement restored every
+original assignment and desktop focus. Explicit AquaSpace-to-stock switching and
+normal release stock-to-AquaSpace startup also completed, with 22 phase-aware
+samples and no observer errors. Paired-process samples during the outgoing
+handoff observed AquaSpace yielding with writes disabled; three transition
+observations had an unavailable AquaSpace socket (one outgoing, two incoming).
+Source admission and the final ready status retain
+the requirement that stock exit before AquaSpace claims write control. Sampled
+observations supplement those production boundaries; they do not establish a
+continuous trace of every physical write. Direct, unordered external stock
+launches retain the documented notification/polling race; use the explicit switch.
+
+All 240 Python offline tests pass. The Swift validation comprises 119 discovery/
+continuation methods, 33 ownership/reporting/process methods, 49 native-tab replay
+methods, nine hidden-window handoff methods and two production-model recovery
+methods (212 total); the production library and signed release compile. These
+are timing regressions against controlled fakes plus real runtime topology and
+lifecycle checks, not a live replay of every synthetic suspension. Finder's
+historical real-app coverage remains historical; this run used real Ghostty.
+
+Evidence is local under `.debug/aquaspace/daily-validation/`,
+`.debug/aquaspace/ghostty-topology/run-20261017-180413/`,
+`.debug/window-discovery-offline/` and `.debug/aquaspace/release/build.json`.
+Stock executable, original config and original icon/assets match their preflight
+hashes. A final quiet minute passed 140 additional full identity/session checks
+with sole AquaSpace control and unchanged original assignments. No remote was
+changed or pushed.
