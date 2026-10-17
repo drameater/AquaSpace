@@ -31,6 +31,7 @@ struct MoveNodeToWorkspaceCommand: Command {
 @MainActor
 func moveWindowToWorkspace(_ window: Window, _ targetWorkspace: Workspace, _ io: CmdIo, focusFollowsWindow: Bool, failIfNoop: Bool, index: Int = INDEX_BIND_LAST) -> BinaryExitCode {
     if window.nodeWorkspace == targetWorkspace {
+        WindowManagerHandoff.cancelPendingForUserMutation([window])
         return switch failIfNoop {
             case true: .fail
             case false:

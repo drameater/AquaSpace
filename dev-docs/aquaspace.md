@@ -2316,3 +2316,26 @@ installation or push. These fixes, offline regressions and diagnosis notes are
 included in this local checkpoint. Creating it involved no additional tests,
 builds, installations, app/helper launches or live checks. Installed AquaSpace remains
 `0.21.3-aquaspace.20261016.2` and does not yet contain this repair.
+
+## Offline no-op intent repair — 2026-10-17
+
+The working source fixes the two no-op intent gaps reviewed at `00730108`.
+Repeating floating layout, a current workspace assignment or a fullscreen state
+now supersedes stale initialization through the existing exact-model/provenance
+guard. Floating no-ops affect only the targeted window. Focus records explicit
+intent after target resolution and before reads or boundary no-ops, so a waiting
+automatic focus command cannot override it. Automatic/session no-ops and unrelated
+floating siblings retain their previous behavior.
+
+The new memory-only cases reproduced **37 failed assertions** before repair.
+All **191 offline Swift methods** and **232 Python tests** pass, and the production
+library compiles without an app launch. Existing ownership, identity, ambiguity
+and controller checks remain intact. See the
+[diagnosis and executed coverage](native-tabs-diagnosis.md#explicit-no-op-assignment-and-focus-intent--2026-10-17)
+for the seven new methods / 28 case invocations and evidence.
+
+No app or diagnostic helper was launched, and there was no live testing,
+installation or push. These fixes, offline regressions and diagnosis notes are
+included in this local checkpoint. Creating it involved no additional tests,
+builds, installations, app/helper launches or live checks.
+Installed AquaSpace remains `0.21.3-aquaspace.20261016.2`.

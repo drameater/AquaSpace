@@ -156,6 +156,7 @@ let INDEX_BIND_LAST = 0
     var floatingWindows: [MacWindow] { allLeafWindowsRecursive.filter { $0.isFloating }.sorted { $0.windowId < $1.windowId } }
     var mostRecentWindowRecursive: MacWindow? { allLeafWindowsRecursive.first }
     func focusWorkspace() -> Bool { setFocus(to: ReplayFocus(emptyWorkspace: self)) }
+    func findLeafWindowRecursive(snappedTo: CardinalDirection) -> MacWindow? { rootTilingContainer.allLeafWindowsRecursive.first }
     var workspaceMonitor: ReplayMonitor { ReplayMonitor() }
     var floatingWindowsContainer: ReplayParent { floatingContainer }
     static var registry: [String: Workspace] = [:]
@@ -238,7 +239,10 @@ enum ReplayParentCase {
 struct ReplayMonitor {
     let visibleRectPaddedByOuterGaps = CGRect(x: 0, y: 0, width: 1000, height: 1000)
     @MainActor func setActiveWorkspace(_ workspace: Workspace) -> Bool { true }
+    @MainActor var activeWorkspace: Workspace { Workspace.get(byName: "monitor") }
+    @MainActor func findRelativeMonitor(inDirection: CardinalDirection) -> ([Self], Int)? { ([self], 1) }
 }
+typealias MonitorInfo = ReplayMonitor
 extension CGPoint {
     func coerce(in rect: CGRect) -> Self? { self }
     @MainActor func findWindowRecursively(in parent: ReplayParent, virtual: Bool, fullscreenCoversAll: Bool) -> MacWindow? { Simulation.geometryTarget }
@@ -248,6 +252,7 @@ extension Array {
     func sortedBy<T: Comparable>(_ key: (Element) -> T) -> Self { sorted { key($0) < key($1) } }
     func filterIsInstance<T>(of: T.Type) -> [T] { compactMap { $0 as? T } }
     func getOrNil(atIndex index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+    func get(wrappingIndex index: Int) -> Element? { isEmpty ? nil : self[(index % count + count) % count] }
 }
 typealias TilingContainer = ReplayParent
 typealias MacApp = ReplayAquaApp
@@ -371,14 +376,15 @@ struct FocusCmdArgs {
     enum Target { case direction(CardinalDirection), windowId(UInt32), dfsIndex(Int), dfsRelative(NextPrev) }
     enum NextPrev { case dfsNext, dfsPrev }
     enum BoundariesAction { case stop, fail, wrapAroundTheWorkspace, wrapAroundAllMonitors }
+    enum Boundaries { case workspace, allMonitorsOuterFrame }
     var target: Target = .direction(.right)
     var failIfFullscreen = false
     var failIfMacosNativeFullscreen = false
     var floatingAsTiling = false
     var boundariesAction: BoundariesAction = .stop
+    var boundaries: Boundaries = .workspace
     @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
 }
-@MainActor func hitWorkspaceBoundaries(_ target: LiveFocus, _ io: CmdIo, _ args: FocusCmdArgs, _ direction: CardinalDirection) -> BinaryExitCode { .fail }
 @MainActor enum ConventionalWindowParentCases {
     case tilingContainer(ReplayParent), floatingWindowsContainer(ReplayParent)
     var tilingContainerOrNil: ReplayParent? { if case .tilingContainer(let p) = self { return p }; return nil }

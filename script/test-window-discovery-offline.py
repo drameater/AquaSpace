@@ -133,9 +133,9 @@ BODY
     move_start = '@MainActor\nfunc moveWindowToWorkspace('
     if move.count(move_start) != 1:
         raise RuntimeError('Move command extraction boundary changed.')
-    (source / 'MoveWindow.swift').write_text(move[move.index(move_start):])
+    (source / 'MoveWindow.swift').write_text(move[move.index(move_start):].replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
     focus_command = (production / 'command/impl/FocusCommand.swift').read_text()
-    focus_end = '\n@MainActor private func hitWorkspaceBoundaries('
+    focus_end = '\n@MainActor private func makeFloatingWindowsSeenAsTiling('
     if focus_command.count(focus_end) != 1:
         raise RuntimeError('Focus command boundary changed.')
     (source / 'FocusCommand.swift').write_text(focus_command[:focus_command.index(focus_end)]
@@ -222,6 +222,7 @@ BODY
     (tests / 'DeferredRestorationTest.swift').write_text((fixture_root / 'DeferredRestorationTest.swift').read_text())
     (tests / 'CallbackCommandContinuationTest.swift').write_text((fixture_root / 'CallbackCommandContinuationTest.swift').read_text())
     (tests / 'CallbackSafetyTest.swift').write_text((fixture_root / 'CallbackSafetyTest.swift').read_text())
+    (tests / 'NoOpIntentTest.swift').write_text((fixture_root / 'NoOpIntentTest.swift').read_text())
     fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
     (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')

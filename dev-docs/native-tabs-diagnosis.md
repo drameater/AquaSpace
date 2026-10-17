@@ -831,3 +831,59 @@ installed or pushed. These fixes, offline regressions and diagnosis notes are
 included in this local checkpoint. Creating it involved no additional tests,
 builds, installations, app/helper launches or live checks. Installed AquaSpace remains
 `0.21.3-aquaspace.20261016.2`.
+
+## Explicit no-op assignment and focus intent — 2026-10-17
+
+Offline review of `00730108` found two early-return gaps in the preceding repair.
+Repeating `layout floating` for an already floating window, assigning its current
+workspace, or repeating its fullscreen state returned before invalidating a
+waiting automatic initialization. The delayed rule could therefore override the
+newer explicit choice. Focus at a workspace, DFS or monitor boundary could also
+succeed with `stop` without calling the central focus setter; its intent token
+never advanced. An explicit focus command's initial native read exposed the same
+gap before it reached that setter.
+
+The in-memory replay now includes the actual production workspace/monitor
+boundary and wrapping functions, rather than its former unused boundary stub.
+Monitors, tree storage, native reads and writes remain memory substitutes. Seven
+new test methods (28 case invocations) exercise the real layout/fullscreen/focus
+commands and movement helper through the production shell/callback loop. Before
+repair they reproduced **37 failed assertions**: stale assignments/focus won,
+tokens stayed unchanged and saved pending assignments remained eligible.
+
+The floating-layout no-op now invalidates only its exact targeted window,
+preserving other floating windows in the same container. Same-workspace movement
+records the targeted window's intent before returning; this shared helper also
+covers moves to a monitor's already-current workspace. Fullscreen records intent
+before comparing its requested state. Existing success/failure results, including
+`--fail-if-noop`, are unchanged. These explicit requests invalidate stale intent
+even when that flag selects a failure result, matching the existing tiling-layout
+policy. Every invalidation still uses the exact registered-model check and the
+existing user/session provenance guard.
+
+Focus records accepted explicit intent immediately after resolving its target,
+before any fullscreen/geometry read or boundary return. Invalid targets do not
+advance intent. Automatic and session commands retain their previous provenance;
+their no-ops neither cancel the initialization nor claim user focus. The tests
+also resume an older callback while a newer explicit focus command is still
+awaiting its native read, asserting that focus never changes temporarily. A newer
+focus no-op blocks old automatic focus while allowing background placement and
+preserving unrelated pending assignments.
+
+All **102 discovery/deferred**, **29 ownership/process**, **49 native-tab** and
+**9 hidden-window** methods pass. Two additional simulated real-model recovery
+tests pass as well: **191 offline Swift methods** in total. All **232 Python
+tests** pass. The full production `AppBundle` library compiles against cached
+dependencies and the macOS 26.5 SDK; its source hashes match the checkout and
+staging. Existing compiler warnings are unchanged. Controller admission,
+physical-write authority, native ownership, process identity, root continuity
+and ambiguity checks were not weakened.
+
+Evidence is under `.debug/window-discovery-offline/no-op-intent-*`: `red.log`,
+`green.log`, `ownership.log`, `tabs.log`, `hidden.log`, `python.log`, `library.log`,
+`tab-model.log` and `source-record.json`. No app entrypoint, diagnostic helper,
+installed CLI, native desktop reader, live inventory or live harness was launched.
+Nothing was installed or pushed. These fixes, regressions and diagnosis notes are
+included in this local checkpoint. Creating it involved no additional tests,
+builds, installations, app/helper launches or live checks. Installed AquaSpace
+remains `0.21.3-aquaspace.20261016.2`.

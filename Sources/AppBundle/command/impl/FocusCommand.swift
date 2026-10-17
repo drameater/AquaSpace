@@ -8,6 +8,9 @@ struct FocusCommand: Command {
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
         guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return .fail }
         guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
+        // Accepted explicit focus intent supersedes older automatic focus even
+        // when native reads suspend or a workspace boundary leaves focus as-is.
+        WindowDiscoveryInitialization.recordUserFocus()
         let continuation = target.windowOrNil.map { WindowCommandContinuation($0) }
         if let window = target.windowOrNil, await shouldFailBecauseFullscreen_nonCancellable(
             window: window,

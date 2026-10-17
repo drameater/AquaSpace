@@ -15,6 +15,7 @@ struct FullscreenCommand: Command {
             case .off: false
             case .toggle: !window.isFullscreen
         }
+        WindowManagerHandoff.cancelPendingForUserMutation([window])
         if newState == window.isFullscreen {
             switch args.failIfNoop {
                 case true: return .fail
@@ -25,7 +26,6 @@ struct FullscreenCommand: Command {
                     return .succ(io.err(msg))
             }
         }
-        WindowManagerHandoff.cancelPendingForUserMutation([window])
         window.isFullscreen = newState
         window.noOuterGapsInFullscreen = args.noOuterGaps
 
