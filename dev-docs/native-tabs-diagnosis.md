@@ -1042,3 +1042,29 @@ after a completed close. Normal multi-close and optional probe behavior pass.
 The discovery suite now passes 115 methods; the real-model library build and two
 simulated recovery tests also pass. Evidence is in
 `.debug/window-discovery-offline/required-target-{red,green,model}.log`.
+
+## macOS 27 native plist inventory compatibility — 2026-10-17
+
+Live preflight found two environmental launch blockers before any manager launch.
+An orphaned browser_crashpad_handler (PID 15691, parent 1) retained a deleted Codex
+Sparkle-cache executable. Its running signature did not satisfy the immutable
+widget exception; no exception was added. Read-only kernel mappings, process
+birth/exec identity, exact running code-signature proof and a native empty-window
+inventory pinned the orphan. One guarded SIGTERM removed it. No manager or user
+window was stopped, and the normal full process scan remained mandatory.
+
+The next full scan exposed NeptuneOneWallpaper.appex's macOS 27 Info.plist:
+NSHumanReadableCopyright contains XML control byte 0x03. Apple's plutil accepts
+it, but Python Expat raises outside the updater's previous error wrapper.
+The updater now canonicalizes the exact captured XML bytes through /usr/bin/plutil
+on ExpatError, parses the binary result, and requires dictionary metadata with
+string identity fields. It never strips invalid bytes or guesses identities.
+Conversion errors retain PID/executable context and refuse admission. Foundation's
+native controller parser already uses Apple's plist semantics.
+
+Three new offline methods reproduced the failures using injected converter
+results and blocked native APIs. All 240 Python tests pass. Live read-only full
+inventory now succeeds and reports zero window managers; none was launched during
+this diagnosis. Evidence: .debug/aquaspace/daily-validation/plist-{red,green}.log
+and the pinned orphan cleanup script. A manager may launch only after this full
+inventory succeeds through the ordinary unchanged controller admission path.

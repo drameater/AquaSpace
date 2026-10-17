@@ -22,6 +22,7 @@ import sys
 import time
 from dataclasses import dataclass
 import uuid
+from xml.parsers.expat import ExpatError
 
 MANAGER_IDS = frozenset(('local.aquaspace', 'local.aquaspace.debug',
                          'bobko.aerospace', 'bobko.aerospace.debug', 'unidentified.window-manager'))
@@ -33,6 +34,28 @@ PHASES = TERMINAL_PHASES | frozenset(('staging', 'prepared', 'stop_requested', '
 
 class UpdateError(RuntimeError):
     pass
+
+
+def read_bundle_metadata(path):
+    """Use macOS's plist semantics for XML accepted by Foundation, not Expat.
+
+    macOS 27 ships an Apple extension with a control character in an unrelated
+    copyright field. Canonicalize the exact captured bytes, never sanitize or
+    guess identity fields. Conversion errors retain fail-closed admission.
+    """
+    raw = path.read_bytes()
+    try:
+        metadata = plistlib.loads(raw)
+    except ExpatError:
+        canonical = subprocess.run(['/usr/bin/plutil', '-convert', 'binary1', '-o', '-', '-'],
+                                   input=raw, capture_output=True, check=True, timeout=2)
+        metadata = plistlib.loads(canonical.stdout)
+    if not isinstance(metadata, dict):
+        raise ValueError('Bundle metadata must be a dictionary.')
+    for key in ('CFBundleIdentifier', 'CFBundleExecutable'):
+        if key in metadata and not isinstance(metadata[key], str):
+            raise ValueError('Bundle identity fields must be strings.')
+    return metadata
 
 
 @dataclass(frozen=True)
@@ -184,12 +207,12 @@ class DarwinProcesses:
         identifier = ''
         if executable.parent.name == 'MacOS' and executable.parent.parent.name == 'Contents':
             try:
-                info = plistlib.loads((executable.parent.parent / 'Info.plist').read_bytes())
+                info = read_bundle_metadata(executable.parent.parent / 'Info.plist')
                 # Embedded CLIs/helpers belong to the bundle but are not its manager.
                 if info.get('CFBundleExecutable') == executable.name:
                     identifier = info.get('CFBundleIdentifier', '')
-            except (OSError, ValueError, plistlib.InvalidFileException) as error:
-                raise UpdateError(f'Cannot classify application process {pid}.') from error
+            except (OSError, ValueError, plistlib.InvalidFileException, ExpatError, subprocess.SubprocessError) as error:
+                raise UpdateError(f'Cannot classify application process {pid} ({executable}): {error}') from error
         if identifier not in MANAGER_IDS and executable.name in MANAGER_EXECUTABLES:
             # SwiftPM/debug executables need not live inside a bundle. Treat an
             # unclassified known manager as a blocker, never as an absent peer.
@@ -233,8 +256,8 @@ class DarwinProcesses:
 def bundle_metadata(app):
     if app.is_symlink(): raise UpdateError('An application bundle must not be a symlink.')
     try:
-        info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-    except (OSError, ValueError, plistlib.InvalidFileException) as error:
+        info = read_bundle_metadata(app / 'Contents/Info.plist')
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError, subprocess.SubprocessError) as error:
         raise UpdateError(f'Invalid AquaSpace bundle: {app}') from error
     if info.get('CFBundleIdentifier') != 'local.aquaspace' or info.get('CFBundleExecutable') != 'AquaSpace':
         raise UpdateError(f'Refusing to replace an application other than AquaSpace: {app}')

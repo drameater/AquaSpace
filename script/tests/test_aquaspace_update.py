@@ -8,6 +8,7 @@ import plistlib
 import signal
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -449,6 +450,41 @@ class ProcessInspectionTests(unittest.TestCase):
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0].executable, self.app / 'Contents/MacOS/AquaSpace')
             self.assertEqual(result[0].identity, (1234, 123, 456, os.getuid()))
+
+    def macos_xml(self):
+        info = self.app / 'Contents/Info.plist'
+        metadata = plistlib.loads(info.read_bytes())
+        raw = info.read_bytes().replace(b'</dict>', b'<key>NSHumanReadableCopyright</key><string>\x03Apple</string></dict>')
+        info.write_bytes(raw)
+        return raw, metadata
+
+    def test_macos_xml_conversion_preserves_manager_identity_and_exact_input(self):
+        raw, metadata = self.macos_xml()
+        with patch.object(update.subprocess, 'run', return_value=SimpleNamespace(
+                stdout=plistlib.dumps(metadata, fmt=plistlib.FMT_BINARY))) as convert:
+            managers = self.inspector.managers()
+        self.assertEqual(len(managers), 1)
+        self.assertEqual(managers[0].bundle_id, 'local.aquaspace')
+        self.assertEqual(convert.call_args.args[0], ['/usr/bin/plutil', '-convert', 'binary1', '-o', '-', '-'])
+        self.assertEqual(convert.call_args.kwargs['input'], raw)
+        self.assertTrue(convert.call_args.kwargs['check'])
+        self.assertEqual(convert.call_args.kwargs['timeout'], 2)
+
+    def test_failed_macos_xml_conversion_remains_a_contextual_admission_failure(self):
+        self.macos_xml()
+        with patch.object(update.subprocess, 'run', side_effect=update.subprocess.CalledProcessError(1, 'plutil')):
+            with self.assertRaisesRegex(update.UpdateError, '1234'):
+                self.inspector.managers()
+
+    def test_native_conversion_cannot_admit_ambiguous_or_malformed_identity(self):
+        self.macos_xml()
+        for converted in [[], {'CFBundleIdentifier': ['local.aquaspace'], 'CFBundleExecutable': 'AquaSpace'},
+                          {'CFBundleIdentifier': 'local.aquaspace', 'CFBundleExecutable': ['AquaSpace']}]:
+            with self.subTest(converted=converted):
+                with patch.object(update.subprocess, 'run', return_value=SimpleNamespace(
+                        stdout=plistlib.dumps(converted, fmt=plistlib.FMT_BINARY))):
+                    with self.assertRaises(update.UpdateError):
+                        self.inspector.managers()
 
     def test_inaccessible_process_information_fails_closed(self):
         self.lib.path_error = errno.EPERM
