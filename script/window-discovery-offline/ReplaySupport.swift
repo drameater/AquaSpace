@@ -80,7 +80,11 @@ extension AXUIElement {
 @MainActor enum Simulation {
     static var owners: [UInt32: Set<Int32>]? = [:]
     static var processes: [Int32: WindowRestorationOwner] = [:]
-    static var controls = true
+    static var permission = WindowControlPermission()
+    static var controls: Bool {
+        get { permission.permitsWrites }
+        set { if newValue { permission.claim() } else { permission.freeze() } }
+    }
     static var peers: [Int] = []
     static var inventoryError = false
     static var yields = 0
@@ -100,6 +104,7 @@ extension AXUIElement {
     static var awaitCenter: ((MacWindow) async throws -> CGPoint?)?
     static var geometryTarget: MacWindow?
     static var mruWrites: [UInt32] = []
+    static var normalizeOrientation = false
 }
 @MainActor func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? { Simulation.owners }
 @MainActor func getWindowLevel(for id: UInt32) -> MacOsWindowLevel? { .normalWindow }
@@ -113,9 +118,14 @@ extension AXUIElement {
         return Simulation.peers
     }
 }
-@MainActor struct ReplayFocus {
+@MainActor struct ReplayFocus: @MainActor Equatable {
     var windowOrNil: MacWindow?
-    var workspace: Workspace { windowOrNil?.nodeWorkspace ?? Workspace.get(byName: "current") }
+    var emptyWorkspace: Workspace?
+    var workspace: Workspace { windowOrNil?.nodeWorkspace ?? emptyWorkspace ?? Workspace.get(byName: "current") }
+    var frozen: Self { self }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.windowOrNil === rhs.windowOrNil && lhs.workspace === rhs.workspace
+    }
 }
 @MainActor var focus = ReplayFocus()
 let WEIGHT_AUTO: CGFloat = 0
@@ -125,12 +135,15 @@ let INDEX_BIND_LAST = 0
     let floating: Bool
     var isAttached = true
     var nodeWorkspace: Workspace? { isAttached ? workspace : nil }
-    var children: [MacWindow] { MacWindow.allWindows.filter { $0.parent === self } }
+    var children: [MacWindow] { MacWindow.allWindows.filter { $0.parent === self }.sorted { $0.windowId < $1.windowId } }
+    var parent: ReplayParent?
+    var parentsWithSelf: [ReplayParent] { [self] + (parent?.parentsWithSelf ?? []) }
+    var allLeafWindowsRecursive: [MacWindow] { MacWindow.allWindows.filter { $0.parent?.parentsWithSelf.contains { $0 === self } == true } }
     enum Layout { case tiles, accordion }
-    enum Orientation { case h, v }
+    enum Orientation { case h, v; var opposite: Self { self == .h ? .v : .h } }
     var layout: Layout = .tiles
-    var orientation: Orientation = .h
-    func changeOrientation(_ orientation: Orientation) { self.orientation = orientation }
+    var _orientation: Orientation = .h
+    var orientation: Orientation { _orientation }
     init(_ workspace: Workspace, floating: Bool) { self.workspace = workspace; self.floating = floating }
 }
 @MainActor final class Workspace: Equatable {
@@ -142,6 +155,7 @@ let INDEX_BIND_LAST = 0
     var allLeafWindowsRecursive: [MacWindow] { MacWindow.allWindows.filter { $0.nodeWorkspace === self } }
     var floatingWindows: [MacWindow] { allLeafWindowsRecursive.filter { $0.isFloating }.sorted { $0.windowId < $1.windowId } }
     var mostRecentWindowRecursive: MacWindow? { allLeafWindowsRecursive.first }
+    func focusWorkspace() -> Bool { setFocus(to: ReplayFocus(emptyWorkspace: self)) }
     var workspaceMonitor: ReplayMonitor { ReplayMonitor() }
     var floatingWindowsContainer: ReplayParent { floatingContainer }
     static var registry: [String: Workspace] = [:]
@@ -161,7 +175,8 @@ enum ReplayParentCase {
     case macosMinimizedWindowsContainer,
          macosFullscreenWindowsContainer, macosHiddenAppsWindowsContainer, macosPopupWindowsContainer, unbound
 }
-@MainActor final class MacWindow {
+@MainActor final class MacWindow: Equatable {
+    nonisolated static func == (lhs: MacWindow, rhs: MacWindow) -> Bool { lhs === rhs }
     static var allWindowsMap: [UInt32: MacWindow] = [:]
     static var allWindows: [MacWindow] { Array(allWindowsMap.values) }
     static func get(byId id: UInt32) -> MacWindow? { allWindowsMap[id] }
@@ -209,13 +224,21 @@ enum ReplayParentCase {
         Simulation.unbinds.append(windowId); parent = nil
         return data
     }
-    func focusWindow() -> Bool { focus.windowOrNil = self; return true }
+    func focusWindow() -> Bool { setFocus(to: ReplayFocus(windowOrNil: self)) }
+    func closestParent(hasChildrenInDirection direction: CardinalDirection, withLayout: Layout?) -> (ReplayParent, Int)? {
+        guard let parent, let index = ownIndex, index + direction.focusOffset < parent.children.count else { return nil }
+        return (parent, index)
+    }
+    func findLeafWindowRecursive(snappedTo: CardinalDirection) -> Self? { self }
     func markAsMostRecentChild() { Simulation.mruWrites.append(windowId) }
     func getCenter(_ cm: CancellationMode) async throws -> CGPoint? { try await Simulation.awaitCenter?(self) ?? CGPoint(x: Double(windowId), y: 0) }
     var ownIndex: Int? { parent?.children.firstIndex { $0 === self } }
 }
 
-struct ReplayMonitor { let visibleRectPaddedByOuterGaps = CGRect(x: 0, y: 0, width: 1000, height: 1000) }
+struct ReplayMonitor {
+    let visibleRectPaddedByOuterGaps = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+    @MainActor func setActiveWorkspace(_ workspace: Workspace) -> Bool { true }
+}
 extension CGPoint {
     func coerce(in rect: CGRect) -> Self? { self }
     @MainActor func findWindowRecursively(in parent: ReplayParent, virtual: Bool, fullscreenCoversAll: Bool) -> MacWindow? { Simulation.geometryTarget }
@@ -223,6 +246,8 @@ extension CGPoint {
 }
 extension Array {
     func sortedBy<T: Comparable>(_ key: (Element) -> T) -> Self { sorted { key($0) < key($1) } }
+    func filterIsInstance<T>(of: T.Type) -> [T] { compactMap { $0 as? T } }
+    func getOrNil(atIndex index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 typealias TilingContainer = ReplayParent
 typealias MacApp = ReplayAquaApp
@@ -294,6 +319,7 @@ indirect enum Shell<T> {
     func matches(_ window: Window) async -> Bool { await match(window) }
 }
 @MainActor struct ReplayConfig {
+    var enableNormalizationOppositeOrientationForNestedContainers: Bool { Simulation.normalizeOrientation }
     var onWindowDetected: [WindowDetectedCallback] {
         Simulation.callbacks ?? [WindowDetectedCallback(match: { window in
             await Simulation.detectedRule?(window); return true
@@ -332,14 +358,27 @@ struct LayoutCmdArgs {
     init(rawArgs: [String], toggleBetween: [LayoutDescription]) { self.toggleBetween = ReplayValue(val: toggleBetween) }
     @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
 }
-@MainActor struct ReplayTarget {
-    let windowOrNil: MacWindow?
-    var workspace: Workspace { windowOrNil!.nodeWorkspace! }
+typealias LiveFocus = ReplayFocus
+typealias ReplayTarget = ReplayFocus
+extension ReplayFocus {
     static func resolve(_ env: CmdEnv) -> Self? {
         guard let id = env.windowId, let window = MacWindow.allWindowsMap[id] else { return nil }
         return Self(windowOrNil: window)
     }
 }
+enum CardinalDirection { case right; var focusOffset: Int { 1 }; var opposite: Self { self } }
+struct FocusCmdArgs {
+    enum Target { case direction(CardinalDirection), windowId(UInt32), dfsIndex(Int), dfsRelative(NextPrev) }
+    enum NextPrev { case dfsNext, dfsPrev }
+    enum BoundariesAction { case stop, fail, wrapAroundTheWorkspace, wrapAroundAllMonitors }
+    var target: Target = .direction(.right)
+    var failIfFullscreen = false
+    var failIfMacosNativeFullscreen = false
+    var floatingAsTiling = false
+    var boundariesAction: BoundariesAction = .stop
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
+}
+@MainActor func hitWorkspaceBoundaries(_ target: LiveFocus, _ io: CmdIo, _ args: FocusCmdArgs, _ direction: CardinalDirection) -> BinaryExitCode { .fail }
 @MainActor enum ConventionalWindowParentCases {
     case tilingContainer(ReplayParent), floatingWindowsContainer(ReplayParent)
     var tilingContainerOrNil: ReplayParent? { if case .tilingContainer(let p) = self { return p }; return nil }
@@ -363,6 +402,7 @@ enum CmdStdin { case emptyStdin }
 extension Array { func singleOrNil() -> Element? { count == 1 ? first : nil }; func orDie() -> Self { self } }
 extension Optional { func orDie() -> Wrapped { self! } }
 @MainActor func bugPrompt() -> String { "replay error" }
+@MainActor func bugPrompt(_ message: String) -> String { message }
 @MainActor func windowIsntPartOfTree(_ window: Window) -> String { "unbound" }
 enum ReplayLayoutReason { case standard, macos(prevParentKind: ReplayParentCase) }
 @MainActor let macosPopupWindowsContainer = ReplayParent(Workspace("popup"), floating: false)

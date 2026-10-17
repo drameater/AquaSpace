@@ -37,10 +37,12 @@ extension TilingContainer {
             parentsWithSelf
                 .filterIsInstance(of: TilingContainer.self)
                 .forEach {
+                    WindowManagerHandoff.cancelPendingForUserMutation($0.allLeafWindowsRecursive)
                     $0._orientation = orientation
                     orientation = orientation.opposite
                 }
         } else {
+            WindowManagerHandoff.cancelPendingForUserMutation(allLeafWindowsRecursive)
             _orientation = targetOrientation
         }
     }

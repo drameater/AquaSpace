@@ -762,3 +762,72 @@ this continuation follow-up, their offline regressions and diagnosis notes are
 included in this local checkpoint. Creating it involved no additional tests,
 builds, installations, app/helper launches or live checks. Installed AquaSpace
 is still `0.21.3-aquaspace.20261016.2` and does not include these repairs.
+
+## Frozen admission, container choices and focus continuations — 2026-10-17
+
+Offline review of `76c70eaa` found three remaining gaps. A callback dispatched
+after peer detection froze writes captured `hadWindowControl = false`, which
+looked like initial startup to the continuation guard. Before the watcher marked
+ownership yielding, `close --quit-if-last-window` could therefore call
+`NSRunningApplication.terminate()` outside the physical AX adapter. An inventory
+error exposed the same interval. Second, explicit container layout/orientation
+changes did not invoke the window-mutation hook, allowing a waiting automatic
+rule to overwrite them. Third, newer focus/workspace choices did not invalidate
+an awaiting automatic focus command.
+
+The replay now extracts the complete production focus command, its fullscreen
+check, the central focus setter and the container orientation method, alongside
+the existing real callback/shell/layout/close bodies. All native reads, writes,
+application termination, process inventory and tree storage in this replay are
+memory substitutes. The initial eight new regression methods reproduced **25
+failed assertions** against the checkpoint, covering both freeze causes,
+container choices, and focus changes during matching and command reads.
+
+`WindowControlPermission` distinguishes initial model preparation from frozen
+control. Each freeze disables initialization and physical writes synchronously
+and changes a generation captured by discovery lifetimes and continuations.
+Even a subsequent successful claim cannot revive a lifetime from before the
+freeze. The only runtime grant remains after successful admission/lock/peer
+checks. Close also checks current native-write authority immediately before its
+quit/close branch, including explicit commands and pre-claim startup callbacks.
+Read-only model preparation remains possible without acquiring native-write
+authority. No process, owner, ambiguity, native-root or controller-lock check was
+relaxed.
+
+Explicit layout choices invalidate the exact registered descendants of their
+container, including no-op tiling/layout choices. Orientation normalization also
+invalidates the descendants of every ancestor whose orientation it assigns.
+Automatic rules and session restoration retain their existing provenance and do
+not become user mutations.
+
+Focus has a separate intent token captured at the start of initialization.
+Explicit focus choices, including repeated window focus, and changed focus from
+non-command paths supersede automatic focus. Session restore and automatic focus
+do not advance that token. The central setter rejects stale automatic focus;
+the focus command and floating preparation recheck it after reads, before tree
+preparation, and before restoring MRU. Background workspace/layout assignment
+can still complete after unrelated focus input. The workspace command's no-op
+fast path records explicit focus intent too; that small path is compile/audit
+checked, while the setter/command races are executed by the replay.
+
+The final replay has **95 discovery/deferred methods**, including **10 new
+methods / 19 case invocations**. All pass, together with **29 ownership/process**,
+**49 native-tab**, **9 hidden-window** and **232 Python tests**: **182 offline
+Swift methods** across those suites. Two additional real-model workspace recovery
+tests also pass using simulated applications/monitors: **184 Swift methods** in
+total. The production `AppBundle` library also
+passes a compile-only check using cached dependencies and the macOS 26.5 SDK.
+The Python wiring assertion now checks that the permission object's grant follows
+successful admission, replacing its former literal-Boolean assignment check.
+
+Evidence is under `.debug/window-discovery-offline/callback-safety-*`: `red.log`,
+`green.log`, `ownership.log`, `tabs.log`, `hidden.log`, `python.log`, `library.log`
+and `source-record.json`, plus `tab-model-cached.log`. The first optional real-model run had an empty package
+cache; dependency fetch attempts failed under the network restriction. It did
+not execute tests or download dependencies. The successful rerun used the
+existing local cache. No app entrypoint, diagnostic helper, installed CLI,
+native desktop reader, live inventory or live harness was launched. Nothing was
+installed or pushed. These fixes, offline regressions and diagnosis notes are
+included in this local checkpoint. Creating it involved no additional tests,
+builds, installations, app/helper launches or live checks. Installed AquaSpace remains
+`0.21.3-aquaspace.20261016.2`.

@@ -14,6 +14,9 @@ struct CloseCommand: Command {
         let continuation = WindowCommandContinuation(window)
         let quit = await args.quitIfLastWindow.andAsync({ @MainActor @Sendable in (try? await window.macAppUnsafe.getAxWindowsCount(.nonCancellable)) == 1 })
         guard continuation.mayContinue else { return .fail }
+        // Termination is a native effect outside the AX write adapter. Startup
+        // model initialization is not authority to quit another application.
+        guard WindowManagerHandoff.canControlWindows else { return .fail }
         if quit {
             let app = window.macAppUnsafe
             if app.nsApp.terminate() {

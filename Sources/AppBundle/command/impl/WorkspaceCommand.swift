@@ -28,6 +28,7 @@ struct WorkspaceCommand: Command {
                 }
         }
         if focusedWs.name == workspaceName {
+            WindowDiscoveryInitialization.recordUserFocus()
             return switch args.failIfNoop {
                 case true: .fail
                 case false:

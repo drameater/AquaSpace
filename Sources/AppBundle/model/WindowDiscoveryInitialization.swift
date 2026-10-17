@@ -7,6 +7,9 @@ final class WindowDiscoveryInitialization {
     private weak var window: Window?
     private(set) var isInProgress = true
     private var superseded = false
+    private let controlGeneration = WindowManagerHandoff.controlGeneration
+    private let focusToken = WindowDiscoveryInitialization.userFocusToken
+    @MainActor private static var userFocusToken = UUID()
 
     init(_ window: Window) {
         self.window = window
@@ -15,7 +18,9 @@ final class WindowDiscoveryInitialization {
 
     var mayContinue: Bool {
         guard isInProgress, !superseded, let window else { return false }
-        return window.isBound && window.discoveryInitialization === self &&
+        return WindowManagerHandoff.canInitializeWindows &&
+            controlGeneration == WindowManagerHandoff.controlGeneration &&
+            window.isBound && window.discoveryInitialization === self &&
             Window.get(byId: window.windowId) === window
     }
 
@@ -25,6 +30,19 @@ final class WindowDiscoveryInitialization {
     static var mayRunAutomaticCommand: Bool {
         !WindowRestorationMutation.isAutomaticDiscovery ||
             WindowRestorationMutation.discoveryInitialization?.mayContinue == true
+    }
+
+    /// Focus intent is separate from window assignment: a user's workspace
+    /// change must stop delayed focus without canceling background placement.
+    static var mayRunAutomaticFocus: Bool {
+        !WindowRestorationMutation.isAutomaticDiscovery ||
+            (mayRunAutomaticCommand && WindowRestorationMutation.discoveryInitialization?.focusToken == userFocusToken)
+    }
+
+    static func recordUserFocus(changed: Bool = false) {
+        guard !WindowRestorationMutation.isAutomaticDiscovery, !WindowRestorationMutation.isSessionRestore,
+              WindowRestorationMutation.isUserCommand || changed else { return }
+        userFocusToken = UUID()
     }
 
     /// Registration owns the outer lifetime, including its first awaited reads.
@@ -54,6 +72,7 @@ struct WindowCommandContinuation {
     private let initialization: WindowDiscoveryInitialization?
     private let automatic: Bool
     private let hadWindowControl: Bool
+    private let controlGeneration: UUID
 
     init(_ window: Window) {
         self.window = window
@@ -61,6 +80,7 @@ struct WindowCommandContinuation {
         initialization = WindowRestorationMutation.discoveryInitialization
         automatic = WindowRestorationMutation.isAutomaticDiscovery
         hadWindowControl = WindowManagerHandoff.canControlWindows
+        controlGeneration = WindowManagerHandoff.controlGeneration
     }
 
     var targetIsUnchanged: Bool {
@@ -70,6 +90,7 @@ struct WindowCommandContinuation {
 
     var mayContinue: Bool {
         !automatic || (initialization?.mayContinue == true && targetIsUnchanged &&
+            WindowManagerHandoff.canInitializeWindows && controlGeneration == WindowManagerHandoff.controlGeneration &&
             !WindowManagerHandoff.isYielding && (!hadWindowControl || WindowManagerHandoff.canControlWindows))
     }
 }

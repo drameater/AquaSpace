@@ -66,12 +66,16 @@ enum WindowManagerHandoff {
     private static var restoringPending = false
     private static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
     private static var applicationWatch: Task<(), Never>?
-    nonisolated private static let writePermission = OSAllocatedUnfairLock(initialState: false)
-    nonisolated static var permitsAXWrites: Bool { writePermission.withLock { $0 } }
-    nonisolated static func freezeAXWrites() { writePermission.withLock { $0 = false } }
+    nonisolated private static let writePermission = OSAllocatedUnfairLock(initialState: WindowControlPermission())
+    nonisolated static var permitsAXWrites: Bool { writePermission.withLock { $0.permitsWrites } }
+    nonisolated static var controlGeneration: UUID { writePermission.withLock { $0.generation } }
+    nonisolated static func freezeAXWrites() { writePermission.withLock { $0.freeze() } }
     static var isYielding: Bool { admission.ownership == .yielding }
     static var canControlWindows: Bool {
         !serverArgs.isReadOnly && (isUnitTest || permitsAXWrites)
+    }
+    static var canInitializeWindows: Bool {
+        !isYielding && writePermission.withLock { $0.permitsInitialization }
     }
     static var canHandoff: Bool { !serverArgs.isReadOnly && !isYielding }
     static var status: String {
@@ -166,7 +170,7 @@ enum WindowManagerHandoff {
         guard !serverArgs.isReadOnly else { return }
         do {
             try admission.claim()
-            writePermission.withLock { $0 = true }
+            writePermission.withLock { $0.claim() }
             watchForOriginal()
         } catch {
             await stopForUncertainOwnership(error)

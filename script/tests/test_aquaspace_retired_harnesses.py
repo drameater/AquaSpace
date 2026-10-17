@@ -52,7 +52,7 @@ class RetiredHarnessTests(unittest.TestCase):
         self.assertIn('admission.prepare(build: isDebug ? .debug : .release', handoff)
         claim = handoff[handoff.index('static func finishStartup()'):handoff.index('static func restoreStartupSession()')]
         self.assertNotIn('isDebug', claim)
-        self.assertLess(claim.index('try admission.claim()'), claim.index('$0 = true'))
+        self.assertLess(claim.index('try admission.claim()'), claim.index('writePermission.withLock { $0.claim() }'))
         watch = handoff[handoff.index('static func watchForOriginal()'):handoff.index('static func prepareForStartup()')]
         self.assertNotIn('isDebug', watch)
         self.assertIn('admission.observedPeers(freeze: freezeAXWrites)', watch)

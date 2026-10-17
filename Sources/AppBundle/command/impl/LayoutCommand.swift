@@ -40,6 +40,9 @@ struct LayoutCommand: Command {
         let targetDescription = args.toggleBetween.val.first(where: { !node.matchesDescription($0) })
             ?? args.toggleBetween.val.first.orDie()
         if node.matchesDescription(targetDescription) {
+            if case .tilingContainer(let parent) = node {
+                WindowManagerHandoff.cancelPendingForUserMutation(parent.allLeafWindowsRecursive)
+            }
             switch args.failIfNoop {
                 case true: return .fail
                 case false:
@@ -107,6 +110,7 @@ struct LayoutCommand: Command {
         case .tilingContainer(let parent):
             let targetOrientation = targetOrientation ?? parent.orientation
             let targetLayout = targetLayout ?? parent.layout
+            WindowManagerHandoff.cancelPendingForUserMutation(parent.allLeafWindowsRecursive)
             parent.layout = targetLayout
             parent.changeOrientation(targetOrientation)
             return .succ

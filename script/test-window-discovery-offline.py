@@ -79,6 +79,12 @@ BODY
     (source / 'DictionaryEx.swift').write_text(dictionary[:dictionary.index(boundary)])
     (source / 'PendingWindowRestoration.swift').write_text((production / 'model/PendingWindowRestoration.swift').read_text())
     handoff = (production / 'WindowManagerHandoff.swift').read_text()
+    admission_source = (production / 'model/WindowManagerAdmission.swift').read_text()
+    permission_start, permission_stop = 'struct WindowControlPermission:', '\nenum WindowManagerOwnership:'
+    if any(admission_source.count(marker) != 1 for marker in (permission_start, permission_stop)):
+        raise RuntimeError('Controller permission boundaries changed.')
+    (source / 'WindowControlPermission.swift').write_text('import Foundation\n' + admission_source[
+        admission_source.index(permission_start):admission_source.index(permission_stop)])
     begin, end = 'struct WindowManagerSession:', '\n@MainActor\nenum WindowManagerHandoff'
     restore, switch = '    static func restoreStartupSession() async {', '\n    static func switchToOriginal('
     if any(handoff.count(marker) != 1 for marker in (begin, end, restore, switch)):
@@ -105,9 +111,11 @@ BODY
     static var restoringPending = false
     static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
     static var canControlWindows: Bool { Simulation.controls }
+    static var canInitializeWindows: Bool { !isYielding && Simulation.permission.permitsInitialization }
+    static var controlGeneration: UUID { Simulation.permission.generation }
     static var isYielding: Bool { Simulation.yields > 0 || Simulation.stops > 0 }
     static let admission = ReplayAdmission()
-    static func freezeAXWrites() { Simulation.controls = false }
+    static func freezeAXWrites() { Simulation.permission.freeze() }
     static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
     static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
     enum HandoffError: Error { case message(String) }
@@ -127,6 +135,28 @@ BODY
         raise RuntimeError('Move command extraction boundary changed.')
     (source / 'MoveWindow.swift').write_text(move[move.index(move_start):])
     focus_command = (production / 'command/impl/FocusCommand.swift').read_text()
+    focus_end = '\n@MainActor private func hitWorkspaceBoundaries('
+    if focus_command.count(focus_end) != 1:
+        raise RuntimeError('Focus command boundary changed.')
+    (source / 'FocusCommand.swift').write_text(focus_command[:focus_command.index(focus_end)]
+        .replace('import AppKit\n', '').replace('import Common\n', ''))
+    focus_source = (production / 'focus.swift').read_text()
+    focus_start, focus_stop = '@MainActor func setFocus(', '\nextension Window {'
+    if focus_source.count(focus_start) != 1 or focus_source.count(focus_stop) != 1:
+        raise RuntimeError('Focus effect boundary changed.')
+    (source / 'FocusEffect.swift').write_text(focus_source[
+        focus_source.index(focus_start):focus_source.index(focus_stop)].replace('_focus', 'focus'))
+    check_start = 'func shouldFailBecauseFullscreen_nonCancellable('
+    move_command = (production / 'command/impl/MoveCommand.swift').read_text()
+    if move_command.count(check_start) != 1:
+        raise RuntimeError('Fullscreen focus check boundary changed.')
+    (source / 'FocusFullscreenCheck.swift').write_text('@MainActor\n' + move_command[move_command.index(check_start):])
+    tiling = (production / 'tree/TilingContainer.swift').read_text()
+    orientation_start, orientation_stop = '    @MainActor\n    func changeOrientation(', '\n    func normalizeOppositeOrientationForNestedContainers('
+    if any(tiling.count(marker) != 1 for marker in (orientation_start, orientation_stop)):
+        raise RuntimeError('Orientation mutation boundaries changed.')
+    (source / 'OrientationEffect.swift').write_text('extension ReplayParent {\n' + tiling[
+        tiling.index(orientation_start):tiling.index(orientation_stop)].replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n')
     focus_helpers_start, focus_helpers_end = '@MainActor private func makeFloatingWindowsSeenAsTiling(', '\nextension TreeNode {'
     if focus_command.count(focus_helpers_start) != 1 or focus_command.count(focus_helpers_end) != 1:
         raise RuntimeError('Floating focus preparation boundaries changed.')
@@ -137,7 +167,8 @@ BODY
         .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
     for name in ('LayoutCommand', 'CloseCommand', 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
         body = (production / ('command/impl/' + name + '.swift')).read_text()
-        (source / (name + '.swift')).write_text(body.replace('import AppKit\n', 'import Foundation\n').replace('import Common\n', ''))
+        (source / (name + '.swift')).write_text(body.replace('import AppKit\n', 'import Foundation\n').replace('import Common\n', '')
+            .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
     mac_window = (production / 'tree/MacWindow.swift').read_text()
     detected_start = '@MainActor\nfunc runOnWindowDetected('
     detected_end = '@MainActor\nfunc onWindowDetected('
@@ -190,6 +221,7 @@ BODY
     (tests / 'WindowDiscoveryTest.swift').write_text((fixture_root / 'WindowDiscoveryTest.swift').read_text())
     (tests / 'DeferredRestorationTest.swift').write_text((fixture_root / 'DeferredRestorationTest.swift').read_text())
     (tests / 'CallbackCommandContinuationTest.swift').write_text((fixture_root / 'CallbackCommandContinuationTest.swift').read_text())
+    (tests / 'CallbackSafetyTest.swift').write_text((fixture_root / 'CallbackSafetyTest.swift').read_text())
     fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
     (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')

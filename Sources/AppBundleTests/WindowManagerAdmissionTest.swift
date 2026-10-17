@@ -3,6 +3,42 @@ import Foundation
 import Testing
 
 struct WindowManagerAdmissionTest {
+    @Test func modelPreparationNeverGrantsNativeWritesAndFreezeRevokesBoth() {
+        var permission = WindowControlPermission()
+        #expect(permission.permitsInitialization)
+        #expect(!permission.permitsWrites)
+        let initial = permission.generation
+        permission.freeze()
+        #expect(!permission.permitsInitialization)
+        #expect(!permission.permitsWrites)
+        #expect(permission.generation != initial)
+        let frozen = permission.generation
+        permission.freeze()
+        #expect(permission.generation != frozen)
+    }
+
+    @Test func peerAndUncertainInventoryFreezeCannotLookLikeInitialPreparation() throws {
+        for failure in [false, true] {
+            try withLock { lock, _ in
+                var monitor = false
+                var permission = WindowControlPermission()
+                let admission = WindowManagerAdmission(lock: lock, inventory: {
+                    if !monitor { return [] }
+                    if failure { throw WindowManagerAdmissionError.uncertainInventory }
+                    return [peer("bobko.aerospace")]
+                })
+                _ = try admission.prepare(build: .release, readOnly: false)
+                try admission.claim(); permission.claim()
+                let active = permission.generation
+                monitor = true
+                _ = try? admission.observedPeers { permission.freeze() }
+                #expect(admission.ownership == .controlling)
+                #expect(!permission.permitsWrites && !permission.permitsInitialization)
+                #expect(permission.generation != active)
+            }
+        }
+    }
+
     private func peer(_ bundle: String?, name: String = "AeroSpace", pid: Int32 = 42) -> WindowManagerProcess {
         WindowManagerProcess(pid: pid, startedSeconds: 1, startedMicroseconds: 2,
                              executable: "/some other directory/\(name)", bundleId: bundle)

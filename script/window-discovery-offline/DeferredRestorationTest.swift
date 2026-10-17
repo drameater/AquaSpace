@@ -124,6 +124,7 @@ extension OfflineWindowDiscoveryTests {
 @Suite(.serialized) @MainActor struct DeferredRestorationAdapterTest {
     func setup() -> (ReplayAquaApp, MacWindow, AXUIElement) {
         Simulation.owners = [42: [9]]; Simulation.processes = [9: owner()]
+        Simulation.permission = WindowControlPermission()
         Simulation.controls = true; Simulation.peers = []; Simulation.inventoryError = false
         Simulation.yields = 0; Simulation.stops = 0; Simulation.mutations = []; Simulation.foreground = 99
         Simulation.detectedRule = nil; Simulation.callbacks = nil; Simulation.beforeDetection = nil
@@ -131,6 +132,7 @@ extension OfflineWindowDiscoveryTests {
         Simulation.awaitMinimized = nil; Simulation.awaitWindowCount = nil
         Simulation.nativeWrites = []; Simulation.unbinds = []; Simulation.awaitCenter = nil
         Simulation.geometryTarget = nil; Simulation.mruWrites = []
+        Simulation.normalizeOrientation = false
         global_layoutForNextDetectedWindow = nil
         TrayMenuModel.shared.isEnabled = true; focus.windowOrNil = nil; Workspace.registry = [:]
         ReplayCoordinator.pendingRestoration = pending()

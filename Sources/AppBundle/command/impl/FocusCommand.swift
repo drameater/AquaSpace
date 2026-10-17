@@ -6,6 +6,7 @@ struct FocusCommand: Command {
     /*conforms*/ let shouldResetClosedWindowsCache = false
 
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
+        guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return .fail }
         guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
         let continuation = target.windowOrNil.map { WindowCommandContinuation($0) }
         if let window = target.windowOrNil, await shouldFailBecauseFullscreen_nonCancellable(
@@ -15,7 +16,7 @@ struct FocusCommand: Command {
         ) {
             return .fail
         }
-        guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
+        guard WindowDiscoveryInitialization.mayRunAutomaticFocus,
               continuation?.mayContinue != false else { return .fail }
         // todo bug: floating windows break mru
         let floatingWindows = args.floatingAsTiling ? await makeFloatingWindowsSeenAsTiling(workspace: target.workspace) : []
@@ -25,7 +26,7 @@ struct FocusCommand: Command {
             }
         }
 
-        guard WindowDiscoveryInitialization.mayRunAutomaticCommand,
+        guard WindowDiscoveryInitialization.mayRunAutomaticFocus,
               continuation?.mayContinue != false else { return .fail }
         switch args.target {
             case .direction(let direction):
@@ -131,7 +132,7 @@ struct FocusCommand: Command {
     let mruBefore = workspace.mostRecentWindowRecursive
     let mruContinuation = mruBefore.map { WindowCommandContinuation($0) }
     defer {
-        if WindowDiscoveryInitialization.mayRunAutomaticCommand, mruContinuation?.mayContinue != false {
+        if WindowDiscoveryInitialization.mayRunAutomaticFocus, mruContinuation?.mayContinue != false {
             mruBefore?.markAsMostRecentChild()
         }
     }
@@ -140,7 +141,7 @@ struct FocusCommand: Command {
         let continuation = WindowCommandContinuation(window)
         // todo bug: we shouldn't access ax api here. What if the window was moved but it wasn't committed to ax yet?
         guard let center = try? await window.getCenter(.nonCancellable) else { continue }
-        guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+        guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return [] }
         guard continuation.mayContinue, window.isFloating, window.nodeWorkspace === workspace else { continue }
 
         let tilingParent: TilingContainer
@@ -150,7 +151,7 @@ struct FocusCommand: Command {
         {
             let targetContinuation = WindowCommandContinuation(target)
             guard let targetCenter = try? await target.getCenter(.nonCancellable) else { continue }
-            guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+            guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return [] }
             guard continuation.mayContinue, window.isFloating, window.nodeWorkspace === workspace else { continue }
             guard targetContinuation.targetIsUnchanged,
                   let _tilingParent = target.parent as? TilingContainer,
@@ -175,7 +176,7 @@ struct FocusCommand: Command {
     }
     // Complete every read before temporarily unbinding any window. An abort
     // during a later read must not leave earlier candidates outside the tree.
-    guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return [] }
+    guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return [] }
     let valid = candidates.filter { window, _, parent, index, continuation in
         continuation.mayContinue && window.isFloating && window.nodeWorkspace === workspace &&
             parent.nodeWorkspace === workspace && index >= 0 && index <= parent.children.count
@@ -198,7 +199,7 @@ struct FocusCommand: Command {
 @MainActor private func restoreFloatingWindows(floatingWindows: [FloatingWindowData], workspace: Workspace) {
     let mruBefore = workspace.mostRecentWindowRecursive
     defer {
-        mruBefore?.markAsMostRecentChild()
+        if WindowDiscoveryInitialization.mayRunAutomaticFocus { mruBefore?.markAsMostRecentChild() }
     }
     for floating in floatingWindows {
         // Undo only our untouched temporary binding, preserving newer user choices.

@@ -2291,3 +2291,28 @@ are included in this local checkpoint, together with their offline regressions
 and diagnosis notes. Creating the checkpoint involved no additional tests,
 builds, installations, app/helper launches or live checks. Installed
 `0.21.3-aquaspace.20261016.2` is unchanged and does not contain these repairs.
+
+## Offline freeze, container and focus repair — 2026-10-17
+
+The working source fixes the three gaps reviewed at `76c70eaa`. A synchronous
+controller freeze now revokes automatic initialization as well as physical
+writes, with a generation that prevents old callbacks from reviving after a
+later claim. Close requires actual native-write authority before quitting or
+closing an application; initial model preparation cannot grant it. Container
+layout/orientation choices, including no-ops and ancestor normalization,
+supersede affected callbacks. A separate focus-intent token preserves newer
+window/workspace focus without canceling valid background assignments.
+
+The new in-memory cases reproduced 25 failing assertions before repair. All
+**184 offline Swift methods** (including two real-model recovery tests) and
+**232 Python tests** now pass; the production
+library compiles without an app launch. Existing owner, process-identity,
+ambiguity, native-root and exclusive-controller checks remain intact. See the
+[diagnosis and coverage limits](native-tabs-diagnosis.md#frozen-admission-container-choices-and-focus-continuations--2026-10-17)
+for the executed command/setter races, startup boundary checks and evidence.
+
+No app or diagnostic helper was launched, and there was no live testing,
+installation or push. These fixes, offline regressions and diagnosis notes are
+included in this local checkpoint. Creating it involved no additional tests,
+builds, installations, app/helper launches or live checks. Installed AquaSpace remains
+`0.21.3-aquaspace.20261016.2` and does not yet contain this repair.
