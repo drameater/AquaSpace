@@ -7,6 +7,6 @@ source ./script/setup.sh
 ./generate.sh --ignore-xcodeproj --ignore-cmd-help
 swift build --build-tests "$@"
 
-rm -rf .debug && mkdir .debug
-cp -r .build/debug/aerospace .debug
-cp -r .build/debug/AeroSpaceApp .debug
+mkdir -p .debug/aquaspace-debug
+cp .build/debug/aquaspace .debug/aquaspace-debug/aquaspace
+cp .build/debug/AquaSpaceApp .debug/aquaspace-debug/AquaSpaceApp

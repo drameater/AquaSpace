@@ -482,10 +482,11 @@ class ProcessInspectionTests(unittest.TestCase):
         self.assertEqual(self.inspector.managers()[0].bundle_id, 'bobko.aerospace')
 
     def test_unbundled_debug_manager_blocks_updates_instead_of_being_missed(self):
-        self.lib.path = str(Path(self.tmp.name) / 'build/debug/AeroSpaceApp').encode()
-        processes = self.inspector.managers()
-        self.assertEqual(len(processes), 1)
-        self.assertEqual(processes[0].bundle_id, 'unidentified.window-manager')
+        for name in ('AeroSpaceApp', 'AquaSpaceApp'):
+            self.lib.path = str(Path(self.tmp.name) / 'build/debug' / name).encode()
+            processes = self.inspector.managers()
+            self.assertEqual(len(processes), 1)
+            self.assertEqual(processes[0].bundle_id, 'unidentified.window-manager')
 
     def test_embedded_cli_is_not_mistaken_for_a_controlling_manager(self):
         self.lib.path = str(self.app / 'Contents/MacOS/aquaspace-cli').encode()

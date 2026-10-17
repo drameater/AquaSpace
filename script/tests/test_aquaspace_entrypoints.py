@@ -46,4 +46,17 @@ class EntrypointTests(unittest.TestCase):
         self.assertIsNone(args)
 
 
+    def test_release_entrypoint_builds_without_install_or_restart(self):
+        self.wrapper = self.wrapper.with_name('build-release.sh')
+        result, args = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['script/build-aquaspace.py'])
+
+    def test_release_version_and_sdk_with_spaces_are_forwarded(self):
+        self.wrapper = self.wrapper.with_name('build-release.sh')
+        result, args = self.invoke('--build-version', 'local-test', '--sdk', 'folder with spaces/SDK')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['script/build-aquaspace.py', '--version', 'local-test', '--sdk', 'folder with spaces/SDK'])
+
+
 if __name__ == '__main__': unittest.main()

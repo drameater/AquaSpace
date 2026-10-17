@@ -4,6 +4,13 @@ A local fork of AeroSpace with native macOS tab groups kept together across work
 
 For future local updates, use `./install-from-sources.sh` with the [SDK options documented here](dev-docs/aquaspace.md#updating-aquaspace). The updater confirms the old AquaSpace has exited before starting its replacement; recovery restores files without launching another copy.
 
+The app is **AquaSpace.app**, the command is **aquaspace**, and the Swift app
+product is **AquaSpaceApp**. `build-release.sh` builds a signed local bundle
+without installing or publishing it. `install-from-sources.sh` uses the serialized
+updater. The legacy `aerospace` CLI alias, config paths, callback environment
+variables, and original icon remain compatible. Runtime errors and config
+diagnostics identify AquaSpace; stock AeroSpace remains separately installed.
+
 The upstream AeroSpace documentation and attribution follow below. This fork is maintained locally; no remote has been created or changed.
 
 # AeroSpace Beta [![Build](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/nikitabobko/AeroSpace/actions/workflows/build.yml)

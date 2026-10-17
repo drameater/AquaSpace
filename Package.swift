@@ -18,7 +18,7 @@ let package = Package(
         .executable(name: "aerospace", targets: ["Cli"]),
         .executable(name: "aquaspace", targets: ["Cli"]),
         // Don't use this build for release, use xcode instead
-        .executable(name: "AeroSpaceApp", targets: ["AeroSpaceApp"]),
+        .executable(name: "AquaSpaceApp", targets: ["AquaSpaceApp"]),
         // We only need to expose this as a product for xcode
         .library(name: "AppBundle", targets: ["AppBundle"]),
     ],
@@ -57,7 +57,7 @@ let package = Package(
             swiftSettings: swiftSettings,
         ),
         .executableTarget(
-            name: "AeroSpaceApp",
+            name: "AquaSpaceApp",
             dependencies: [
                 .target(name: "AppBundle"),
             ],

@@ -25,7 +25,7 @@ import uuid
 
 MANAGER_IDS = frozenset(('local.aquaspace', 'local.aquaspace.debug',
                          'bobko.aerospace', 'bobko.aerospace.debug', 'unidentified.window-manager'))
-MANAGER_EXECUTABLES = frozenset(('AquaSpace', 'AeroSpace', 'AeroSpaceApp'))
+MANAGER_EXECUTABLES = frozenset(('AquaSpace', 'AquaSpaceApp', 'AeroSpace', 'AeroSpaceApp'))
 TERMINAL_PHASES = frozenset(('committed', 'recovered', 'aborted'))
 PHASES = TERMINAL_PHASES | frozenset(('staging', 'prepared', 'stop_requested', 'stopped',
                                      'replacing', 'replaced', 'launch_attempted', 'child_started'))

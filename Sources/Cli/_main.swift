@@ -5,7 +5,7 @@ import Network
 
 let usage =
     """
-    USAGE: \(CommandLine.arguments.first ?? "aerospace") [-h|--help] [-v|--version] <subcommand> [<args>...]
+    USAGE: \(CommandLine.arguments.first ?? "aquaspace") [-h|--help] [-v|--version] <subcommand> [<args>...]
 
     SUBCOMMANDS:
     \((subcommandDescriptions + [["  handoff-session", "Export workspace metadata with window owner identities"], ["  management-status", "Show AquaSpace's window-control ownership"], ["  switch-to-aerospace", "Freeze AquaSpace and hand control to AeroSpace"]]).sortedBy { $0[0] }.toPaddingTable(columnSeparator: "   ").joined(separator: "\n"))
@@ -135,8 +135,8 @@ struct Main {
                   - aquaspace CLI client version: \(cliClientVersionAndHash)
                   - Active window manager server version: \(ans.serverVersionAndHash)
                   Possible fixes:
-                  - Restart AeroSpace.app (server restart is required after each update)
-                  - Reinstall and restart AeroSpace (corrupted installation)
+                  - Restart AquaSpace.app (server restart is required after each update)
+                  - Reinstall and restart AquaSpace (corrupted installation)
                 """,
             )
         }

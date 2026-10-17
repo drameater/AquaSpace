@@ -6,6 +6,7 @@ By default this stages a signed app under .debug/aquaspace/release.
 Requires Swift/Command Line Tools and an existing AeroSpace app as the icon/resource donor.
 """
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ def main():
     parser.add_argument("--scratch-path", type=Path, default=root / ".debug/aquaspace/build")
     parser.add_argument("--output", type=Path, default=root / ".debug/aquaspace/release")
     parser.add_argument("--base-app", type=Path, default=Path("/Applications/AeroSpace.app"))
-    parser.add_argument("--version", default="0.21.3-aquaspace.20261014.2")
+    parser.add_argument("--version", default="0.21.3-aquaspace." + datetime.now().strftime("%Y%m%d.%H%M%S"))
     parser.add_argument("--jobs", type=int, default=2, help="Limit compilation workers while using the machine")
     parser.add_argument("--install-and-restart", action="store_true", help="After building, use the serialized installer to replace and restart the sole installed AquaSpace")
     args = parser.parse_args()
@@ -68,7 +69,7 @@ def main():
     macos = app / "Contents/MacOS"
     shutil.rmtree(macos)
     macos.mkdir()
-    shutil.copy2(binaries / "AeroSpaceApp", macos / "AquaSpace")
+    shutil.copy2(binaries / "AquaSpaceApp", macos / "AquaSpace")
     # AquaSpace and aquaspace collide on the default case-insensitive filesystem.
     shutil.copy2(binaries / "aquaspace", macos / "aquaspace-cli")
     helpers = app / "Contents/Helpers"
@@ -82,7 +83,7 @@ def main():
     metadata = plistlib.loads(info.read_bytes())
     metadata.update(CFBundleIdentifier="local.aquaspace", CFBundleExecutable="AquaSpace",
                     CFBundleName="AquaSpace", CFBundleDisplayName="AquaSpace",
-                    CFBundleShortVersionString=args.version, CFBundleVersion="20261014.1")
+                    CFBundleShortVersionString=args.version, CFBundleVersion=datetime.now().strftime("%Y%m%d%H%M%S"))
     info.write_bytes(plistlib.dumps(metadata))
     subprocess.run(["codesign", "--force", "--sign", "-", str(macos / "aquaspace-cli")], check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", "local.aquaspace", str(app)], check=True)

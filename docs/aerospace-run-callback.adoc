@@ -2,7 +2,7 @@
 include::util/man-attributes.adoc[]
 :manname: aerospace-run-callback
 // tag::purpose[]
-:manpurpose: Run AeroSpace config callbacks on demand
+:manpurpose: Run AquaSpace config callbacks on demand
 // end::purpose[]
 
 // =========================================================== Synopsis

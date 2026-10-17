@@ -1,7 +1,7 @@
 # Xcode project configuration. Managed by https://github.com/yonaskolb/XcodeGen
 # Xcode is only used to build the release App Bundle. Debug builds only use Swift Package Manager
 
-name: AeroSpace
+name: AquaSpace
 
 packages:
   AeroSpacePackage:
@@ -24,12 +24,12 @@ settings:
     CODE_SIGN_IDENTITY: ${XCODEGEN_AEROSPACE_CODE_SIGN_IDENTITY}
 
 targets:
-  AeroSpace:
+  AquaSpace:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
     sources:
-      - "../Sources/AeroSpaceApp"
+      - "../Sources/AquaSpaceApp"
       - "../resources"
       - "../docs/config-examples/default-config.toml"
     dependencies:
@@ -39,15 +39,15 @@ targets:
     settings:
       configs:
         Debug:
-          PRODUCT_NAME: AeroSpace-Debug
-          PRODUCT_BUNDLE_IDENTIFIER: bobko.aerospace.debug
+          PRODUCT_NAME: AquaSpace-Debug
+          PRODUCT_BUNDLE_IDENTIFIER: local.aquaspace.debug
         Release:
-          PRODUCT_NAME: AeroSpace
-          PRODUCT_BUNDLE_IDENTIFIER: bobko.aerospace
+          PRODUCT_NAME: AquaSpace
+          PRODUCT_BUNDLE_IDENTIFIER: local.aquaspace
           SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
           GCC_TREAT_WARNINGS_AS_ERRORS: YES
     entitlements:
-      path: ../resources/AeroSpace.entitlements
+      path: ../resources/AquaSpace.entitlements
       properties:
         # Accessibility API doesn't work in sandboxed apps
         com.apple.security.app-sandbox: false

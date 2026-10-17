@@ -2389,3 +2389,20 @@ The continuation fix, offline regressions and diagnosis notes are included in
 this local checkpoint and are not installed. Creating the checkpoint involved
 no additional tests, builds, app/helper launches, installations or live checks.
 Nothing was pushed.
+
+## AquaSpace naming pass — 2026-10-17
+
+The Swift app product/entry point is now AquaSpaceApp. App UI, config/runtime
+reports, CLI guidance and generated command descriptions identify AquaSpace.
+Xcode product identities use local.aquaspace and local.aquaspace.debug, and the
+project/entitlements follow the fork's name. The original icon, config paths,
+legacy CLI alias, callback environment variables and stock handoff stay compatible.
+Both the updater and native controller inventory recognize the renamed unbundled
+AquaSpaceApp as well as older AeroSpace names.
+
+build-release.sh now delegates to the local signed builder without installing,
+publishing or resetting the checkout. Debug builds use a dedicated output folder
+and cannot erase .debug evidence. Local builds generate fresh version metadata.
+The branding changes pass 237 Python tests and 33 ownership/report/process tests,
+including both old and renamed unbundled manager classification and build-only
+wrapper checks. No remote was changed or pushed.

@@ -1,7 +1,7 @@
 = aerospace-subscribe(1)
 include::util/man-attributes.adoc[]
 // tag::purpose[]
-:manpurpose: Subscribe to AeroSpace events and receive notifications via socket
+:manpurpose: Subscribe to AquaSpace events and receive notifications via socket
 // end::purpose[]
 :manname: aerospace-subscribe
 

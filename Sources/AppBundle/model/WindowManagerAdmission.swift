@@ -43,7 +43,7 @@ struct WindowManagerProcess: Hashable, Sendable {
     static let bundleIds: Set<String> = [
         "local.aquaspace", "local.aquaspace.debug", "bobko.aerospace", "bobko.aerospace.debug",
     ]
-    static let executableNames: Set<String> = ["AquaSpace", "AeroSpace", "AeroSpaceApp"]
+    static let executableNames: Set<String> = ["AquaSpace", "AquaSpaceApp", "AeroSpace", "AeroSpaceApp"]
 
     static func isManager(executable: String, bundleId: String?, bundleExecutable: String?) -> Bool {
         let name = URL(filePath: executable).lastPathComponent

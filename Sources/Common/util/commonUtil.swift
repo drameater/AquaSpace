@@ -23,7 +23,8 @@ public func bugPrompt(
     let _message = __message.contains("\n") ? "\n" + __message.prefixLines(with: "    ") : __message
     let thread = Thread.current
     return """
-        Please report to:
+        AquaSpace local diagnostic report. Save this with the local validation notes.
+        Upstream reference (confirm against stock before reporting):
             https://github.com/nikitabobko/AeroSpace/discussions/categories/potential-bugs
             Please describe what you did to trigger this error
 
@@ -59,9 +60,9 @@ public func dieT<T>(
     if !isUnitTest && isServer {
         showMessageInGui(
             filenameIfConsoleApp: recursionDetectorDuringTermination
-                ? "aerospace-runtime-error-recursion.txt"
-                : "aerospace-runtime-error.txt",
-            title: "AeroSpace Runtime Error",
+                ? "aquaspace-runtime-error-recursion.txt"
+                : "aquaspace-runtime-error.txt",
+            title: "AquaSpace Runtime Error",
             message: message,
         )
     }

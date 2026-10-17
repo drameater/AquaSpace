@@ -2,14 +2,14 @@
 include::util/man-attributes.adoc[]
 :manname: aerospace-eval
 // tag::purpose[]
-:manpurpose: Send multiple commands to AeroSpace at once
+:manpurpose: Send multiple commands to AquaSpace at once
 // end::purpose[]
 
 // =========================================================== Synopsis
 == Synopsis
 [verse]
 // tag::synopsis[]
-aerospace eval [-h|--help] [--stdin] [--] <aerospace-shell-expr>
+aerospace eval [-h|--help] [--stdin] [--] <aquaspace-shell-expr>
 
 // end::synopsis[]
 
@@ -25,13 +25,13 @@ include::./util/conditional-options-header.adoc[]
 -h, --help:: Print help
 
 --stdin::
-Capture CLIs stdin and forward it to `<aerospace-shell-expr>`.
+Capture CLIs stdin and forward it to `<aquaspace-shell-expr>`.
 If not supplied, stdin is ignored.
 
 // =========================================================== Arguments
 include::./util/conditional-arguments-header.adoc[]
 
-<aerospace-shell-expr>:: This argument is AeroSpace's shell expression.
+<aquaspace-shell-expr>:: This argument is AeroSpace's shell expression.
 See https://nikitabobko.github.io/AeroSpace/guide#shell for more info.
 
 // =========================================================== Examples

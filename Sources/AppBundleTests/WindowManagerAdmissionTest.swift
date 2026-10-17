@@ -107,7 +107,7 @@ struct WindowManagerAdmissionTest {
 
     @Test func processClassifierUsesKernelExecutableRatherThanArgvOrLocation() {
         for bundle in ["bobko.aerospace", "bobko.aerospace.debug", "local.aquaspace.debug", nil] as [String?] {
-            for name in ["AeroSpace", "AquaSpace", "AeroSpaceApp"] {
+            for name in ["AeroSpace", "AquaSpace", "AquaSpaceApp", "AeroSpaceApp"] {
                 #expect(WindowManagerProcess.isManager(executable: "/arbitrary path/\(name)", bundleId: bundle, bundleExecutable: nil))
             }
         }
