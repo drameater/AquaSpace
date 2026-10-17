@@ -25,12 +25,14 @@ struct CloseCommand: Command {
                         (window as! MacWindow).garbageCollect(skipClosedWindowsCache: true)
                     }
                 }
+                continuation.didDispatchClose()
                 return .succ
             } else {
                 return .fail(io.err("Failed to quit '\(window.app.name ?? "Unknown app")'"))
             }
         } else {
             window.closeAxWindow()
+            continuation.didDispatchClose()
             return .succ
         }
     }

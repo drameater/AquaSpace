@@ -133,7 +133,7 @@ struct FocusCommand: Command {
 
 @MainActor private func makeFloatingWindowsSeenAsTiling(workspace: Workspace) async -> [FloatingWindowData] {
     let mruBefore = workspace.mostRecentWindowRecursive
-    let mruContinuation = mruBefore.map { WindowCommandContinuation($0) }
+    let mruContinuation = mruBefore.map { WindowCommandContinuation($0, optionalProbe: true) }
     defer {
         if WindowDiscoveryInitialization.mayRunAutomaticFocus, mruContinuation?.mayContinue != false {
             mruBefore?.markAsMostRecentChild()
@@ -141,7 +141,7 @@ struct FocusCommand: Command {
     }
     var candidates: [(Window, CGPoint, TilingContainer, Int, WindowCommandContinuation)] = []
     for window in workspace.floatingWindows {
-        let continuation = WindowCommandContinuation(window)
+        let continuation = WindowCommandContinuation(window, optionalProbe: true)
         // todo bug: we shouldn't access ax api here. What if the window was moved but it wasn't committed to ax yet?
         guard let center = try? await window.getCenter(.nonCancellable) else { continue }
         guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return [] }
@@ -152,7 +152,7 @@ struct FocusCommand: Command {
         if let target = center.coerce(in: workspace.workspaceMonitor.visibleRectPaddedByOuterGaps)?
             .findWindowRecursively(in: workspace.rootTilingContainer, virtual: true, fullscreenCoversAll: false)
         {
-            let targetContinuation = WindowCommandContinuation(target)
+            let targetContinuation = WindowCommandContinuation(target, optionalProbe: true)
             guard let targetCenter = try? await target.getCenter(.nonCancellable) else { continue }
             guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return [] }
             guard continuation.mayContinue, window.isFloating, window.nodeWorkspace === workspace else { continue }

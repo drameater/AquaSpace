@@ -168,7 +168,7 @@ BODY
     fullscreen = (production / 'command/impl/FullscreenCommand.swift').read_text()
     (source / 'FullscreenCommand.swift').write_text(fullscreen.replace('import AppKit\n', '').replace('import Common\n', '')
         .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
-    for name in ('LayoutCommand', 'CloseCommand', 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
+    for name in ('LayoutCommand', 'CloseCommand', 'CloseAllWindowsButCurrentCommand', 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
         body = (production / ('command/impl/' + name + '.swift')).read_text()
         (source / (name + '.swift')).write_text(body.replace('import AppKit\n', 'import Foundation\n').replace('import Common\n', '')
             .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))

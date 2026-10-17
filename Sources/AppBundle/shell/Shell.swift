@@ -108,12 +108,12 @@ extension Shell where T == any Command {
                 }
                 // Revoke before refresh or the next shell branch can resume the
                 // callback. Inspect even when a native read threw before its guard.
-                continuations.cancelStaleInitialization(ifFailed: exitCode.rawValue != 0)
+                continuations.cancelStaleInitialization()
                 if command.shouldResetClosedWindowsCache { resetClosedWindowsCache() }
                 await refreshModel_nonCancellable()
                 // Refresh suspends too; newer intent during it must not let a
-                // failed cross-window command fall through to another branch.
-                continuations.cancelStaleInitialization(ifFailed: exitCode.rawValue != 0)
+                // cross-window command fall through to another branch.
+                continuations.cancelStaleInitialization()
                 return exitCode
             case .and(let commands): return await runShellAnd(commands, env, io)
             case .empty: return Int32ExitCode(rawValue: EXIT_CODE_ZERO)

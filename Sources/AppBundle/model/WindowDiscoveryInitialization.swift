@@ -63,10 +63,9 @@ final class WindowDiscoveryInitialization {
     }
 }
 
-/// A failed automatic command must not turn a rejected cross-window continuation
-/// into an ordinary shell failure that a fallback can bypass. Keep this scope
-/// local to one leaf command; optional probes in a successful command may still
-/// skip changed candidates without canceling unrelated automatic placement.
+/// Required targets retain their intent through command execution and refresh,
+/// including successful commands. Optional probes check their own snapshots but
+/// never acquire authority over unrelated placement.
 @MainActor
 final class WindowAutomaticCommandContinuations {
     private var continuations: [WindowCommandContinuation] = []
@@ -75,8 +74,7 @@ final class WindowAutomaticCommandContinuations {
         continuations.append(continuation)
     }
 
-    func cancelStaleInitialization(ifFailed failed: Bool) {
-        guard failed else { return }
+    func cancelStaleInitialization() {
         for continuation in continuations {
             continuation.supersedeStaleAutomaticInitialization()
         }
@@ -86,7 +84,7 @@ final class WindowAutomaticCommandContinuations {
 /// Command entry checks do not cover suspension inside the command. Capture the
 /// affected model too: a callback may explicitly target a different window.
 @MainActor
-struct WindowCommandContinuation {
+final class WindowCommandContinuation {
     /// Accepted assignment intent must supersede discovery before a native read,
     /// even if that read later fails or proves the requested state is a no-op.
     static func beforeMutation(_ window: Window) -> Self {
@@ -100,15 +98,16 @@ struct WindowCommandContinuation {
     private let automatic: Bool
     private let hadWindowControl: Bool
     private let controlGeneration: UUID
+    private var completedClose = false
 
-    init(_ window: Window) {
+    init(_ window: Window, optionalProbe: Bool = false) {
         self.window = window
         userMutationToken = window.userMutationToken
         initialization = WindowRestorationMutation.discoveryInitialization
         automatic = WindowRestorationMutation.isAutomaticDiscovery
         hadWindowControl = WindowManagerHandoff.canControlWindows
         controlGeneration = WindowManagerHandoff.controlGeneration
-        if automatic { WindowRestorationMutation.commandContinuations?.register(self) }
+        if automatic, !optionalProbe { WindowRestorationMutation.commandContinuations?.register(self) }
     }
 
     var targetIsUnchanged: Bool {
@@ -117,12 +116,25 @@ struct WindowCommandContinuation {
     }
 
     var mayContinue: Bool {
+        mayContinue(targetIsUnchanged: targetIsUnchanged)
+    }
+
+    private func mayContinue(targetIsUnchanged: Bool) -> Bool {
         !automatic || (initialization?.mayContinue == true && targetIsUnchanged &&
             WindowManagerHandoff.canInitializeWindows && controlGeneration == WindowManagerHandoff.controlGeneration &&
             !WindowManagerHandoff.isYielding && (!hadWindowControl || WindowManagerHandoff.canControlWindows))
     }
 
+    /// A dispatched close may remove this exact model. That expected absence is
+    /// allowed only when checking the chain: it grants no authority for another
+    /// native effect, a reused ID, or a changed user/control token.
+    func didDispatchClose() { completedClose = true }
+
     fileprivate func supersedeStaleAutomaticInitialization() {
-        if automatic, !mayContinue { initialization?.supersede() }
+        let expectedRemoval = completedClose && Window.get(byId: window.windowId) == nil &&
+            window.userMutationToken == userMutationToken
+        if automatic, !mayContinue(targetIsUnchanged: targetIsUnchanged || expectedRemoval) {
+            initialization?.supersede()
+        }
     }
 }

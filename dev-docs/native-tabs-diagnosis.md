@@ -1020,3 +1020,25 @@ continuation fix, offline regressions and diagnosis notes are included in this
 local checkpoint. Creating it involved no additional tests, builds, app/helper
 launches, installations or live checks. Installed AquaSpace remains
 `0.21.3-aquaspace.20261016.2`.
+
+## Required targets and nested closes — 2026-10-17
+
+Checkpoint `258641a8` only latched failed shell leaves. A successful native
+fullscreen no-op targeting B could suspend in refresh, miss newer B intent, and
+let a later command recapture B. Bulk-close also called individual closes
+outside Shell, allowing the next close before the outer collector ran.
+
+Required command targets now revoke stale initialization regardless of exit
+status, both before and after refresh. Optional focus geometry/MRU candidates
+retain their snapshot checks but do not register as required command targets.
+Bulk-close checks the collector immediately after each nested close. A dispatched
+close can permit its own model's expected absence for chain bookkeeping only;
+this never permits another native write, reused ID, changed user token, or changed
+controller generation. The physical-effect continuation checks remain unchanged.
+
+Four new methods (six cases) reproduced nine failed assertions before repair:
+successful refresh across AND/sequence/pipeline, nested bulk-close, and reused ID
+after a completed close. Normal multi-close and optional probe behavior pass.
+The discovery suite now passes 115 methods; the real-model library build and two
+simulated recovery tests also pass. Evidence is in
+`.debug/window-discovery-offline/required-target-{red,green,model}.log`.

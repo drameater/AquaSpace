@@ -4,6 +4,16 @@ import Testing
 
 extension OfflineWindowDiscoveryTests {
 @Suite(.serialized) @MainActor struct CrossWindowCallbackChainTest {
+    enum SuccessChain: CaseIterable, Sendable {
+        case and, sequence, pipeline
+        func joining(_ first: Shell<any Command>, _ next: Shell<any Command>) -> Shell<any Command> {
+            switch self {
+                case .and: .and([first, next])
+                case .sequence: .seq([first, next])
+                case .pipeline: .pipe([first, next])
+            }
+        }
+    }
     enum Chain: CaseIterable, Sendable {
         case fallback, sequence, pipeline
 
@@ -182,6 +192,89 @@ extension OfflineWindowDiscoveryTests {
         #expect(detected.nodeWorkspace?.name == "rule" && detected.isFloating)
         #expect(other.nodeWorkspace?.name == "user" && other.isFloating)
         #expect(Simulation.nativeWrites.isEmpty)
+    }
+
+    @Test(arguments: SuccessChain.allCases)
+    func successfulRequiredTargetStillRejectsNewIntentDuringRefresh(chain: SuccessChain) async {
+        let (app, detected, _) = DeferredRestorationAdapterTest().setup()
+        let target = MacWindow(43, app: app); MacWindow.allWindowsMap[43] = target
+        target.bindAsFloatingWindow(to: Workspace.get(byName: "before")); Simulation.mutations = []
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: target,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.awaitFullscreen = { false }
+        Simulation.commandRefresh = {
+            guard WindowRestorationMutation.isAutomaticDiscovery else { return }
+            Simulation.commandRefresh = nil; entered.open(); await resume.wait()
+        }
+        var reached = 0
+        let first: Shell<any Command> = .cmd(ReplayRetargetCommand(command: MacosNativeFullscreenCommand(args:
+            MacosNativeFullscreenCmdArgs(toggle: .off)), id: 43))
+        let next: Shell<any Command> = .seq([
+            .cmd(ReplayAwaitCommand { reached += 1 }),
+            .cmd(ReplayRetargetCommand(command: CloseCommand(args: CloseCmdArgs(quitIfLastWindow: false)), id: 43)),
+        ])
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run: chain.joining(first, next))]
+        await runOnWindowDetected(ifConventional: detected); await input.value
+        #expect(reached == 0 && target.nodeWorkspace?.name == "user")
+        #expect(MacWindow.allWindowsMap[43] === target && Simulation.nativeWrites.isEmpty)
+    }
+
+    @Test func bulkCloseStopsBeforeItsNextNestedEffect() async {
+        let (app, detected, _) = DeferredRestorationAdapterTest().setup()
+        for id: UInt32 in [43, 44] { MacWindow.allWindowsMap[id] = MacWindow(id, app: app) }
+        let targets = detected.nodeWorkspace!.allLeafWindowsRecursive.filter { $0 !== detected }
+        let victim = targets[0], untouched = targets[1]
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = await Shell<any Command>.cmd(ReplayMoveCommand(window: victim,
+                workspace: Workspace.get(byName: "user"))).run(CmdEnv(), CmdIo())
+            resume.open()
+        }
+        Simulation.awaitWindowCount = { entered.open(); await resume.wait(); return 2 }
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run:
+            .cmd(CloseAllWindowsButCurrentCommand(args: CloseAllWindowsButCurrentCmdArgs())))]
+        await runOnWindowDetected(ifConventional: detected); await input.value
+        #expect(victim.nodeWorkspace?.name == "user")
+        #expect(MacWindow.allWindowsMap[untouched.windowId] === untouched)
+        #expect(Simulation.nativeWrites.isEmpty)
+    }
+
+    @Test func validBulkCloseContinuesAfterItsOwnCompletedRemovals() async {
+        let (app, detected, _) = DeferredRestorationAdapterTest().setup()
+        for id: UInt32 in [43, 44] { MacWindow.allWindowsMap[id] = MacWindow(id, app: app) }
+        var reached = 0
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run: .seq([
+            .cmd(CloseAllWindowsButCurrentCommand(args: CloseAllWindowsButCurrentCmdArgs(closeArgs: CloseCmdArgs(quitIfLastWindow: false)))),
+            .cmd(ReplayAwaitCommand { reached += 1 }),
+        ]))]
+        await runOnWindowDetected(ifConventional: detected)
+        #expect(MacWindow.allWindowsMap.count == 1 && MacWindow.allWindowsMap[42] === detected)
+        #expect(Simulation.nativeWrites == ["close", "close"] && reached == 1)
+    }
+
+    @Test func completedCloseCannotAuthorizeAReusedWindowID() async {
+        let (app, detected, _) = DeferredRestorationAdapterTest().setup()
+        let target = MacWindow(43, app: app); MacWindow.allWindowsMap[43] = target
+        let replacement = MacWindow(43, app: app)
+        Simulation.commandRefresh = {
+            Simulation.commandRefresh = nil
+            MacWindow.allWindowsMap[43] = replacement
+        }
+        var reached = 0
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run: .seq([
+            .cmd(ReplayRetargetCommand(command: CloseCommand(args: CloseCmdArgs(quitIfLastWindow: false)), id: 43)),
+            .cmd(ReplayAwaitCommand { reached += 1 }),
+            .cmd(ReplayMoveCommand(window: replacement, workspace: Workspace.get(byName: "stale"))),
+        ]))]
+        await runOnWindowDetected(ifConventional: detected)
+        #expect(reached == 0 && replacement.nodeWorkspace?.name == "default")
+        #expect(MacWindow.allWindowsMap[43] === replacement && Simulation.nativeWrites == ["close"])
     }
 }
 }

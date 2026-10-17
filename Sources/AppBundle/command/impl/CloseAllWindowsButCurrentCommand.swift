@@ -17,7 +17,12 @@ struct CloseAllWindowsButCurrentCommand: Command {
         let continuation = WindowCommandContinuation(focused)
         for window in workspace.allLeafWindowsRecursive where window != focused {
             guard continuation.mayContinue else { return .fail }
-            result = await CloseCommand(args: args.closeArgs).run(env.withWindowId(window.windowId), io).and(result)
+            let closed = await CloseCommand(args: args.closeArgs).run(env.withWindowId(window.windowId), io)
+            // These nested commands do not pass through Shell. Revoke rejected
+            // required targets before dispatching another destructive operation.
+            WindowRestorationMutation.commandContinuations?.cancelStaleInitialization()
+            guard WindowDiscoveryInitialization.mayRunAutomaticCommand, continuation.mayContinue else { return .fail }
+            result = closed.and(result)
         }
         return result
     }

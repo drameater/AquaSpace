@@ -289,6 +289,7 @@ struct BinaryExitCode: Sendable {
     static func fail(_ message: String) -> Self { .fail }
     static func succ(_ message: String) -> Self { .succ }
     static func from(bool: Bool) -> Self { bool ? .succ : .fail }
+    func and(_ other: Self) -> Self { rawValue == 0 ? other : self }
 }
 struct Int32ExitCode: Sendable { let rawValue: Int32; static let fail = Self(rawValue: 1); static let succ = Self(rawValue: 0) }
 let EXIT_CODE_ZERO: Int32 = 0
@@ -449,6 +450,10 @@ struct MacosNativeMinimizeCmdArgs {
 }
 struct CloseCmdArgs {
     var quitIfLastWindow = true
+    @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
+}
+struct CloseAllWindowsButCurrentCmdArgs {
+    var closeArgs = CloseCmdArgs()
     @MainActor func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> ReplayTarget? { ReplayTarget.resolve(env) }
 }
 extension Bool {
