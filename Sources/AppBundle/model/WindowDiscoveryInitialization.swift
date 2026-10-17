@@ -28,7 +28,10 @@ final class WindowDiscoveryInitialization {
     func finish() { isInProgress = false }
 
     static var mayRunAutomaticCommand: Bool {
-        !WindowRestorationMutation.isAutomaticDiscovery ||
+        if WindowRestorationMutation.isAutomaticDiscovery {
+            WindowRestorationMutation.commandContinuations?.cancelStaleInitialization()
+        }
+        return !WindowRestorationMutation.isAutomaticDiscovery ||
             WindowRestorationMutation.discoveryInitialization?.mayContinue == true
     }
 
@@ -51,14 +54,18 @@ final class WindowDiscoveryInitialization {
         if let current = window.discoveryInitialization, current.isInProgress {
             guard WindowRestorationMutation.discoveryInitialization === current,
                   current.mayContinue else { return }
-            await body()
+            await WindowRestorationMutation.$commandContinuations.withValue(WindowAutomaticCommandContinuations()) {
+                await body()
+            }
             return
         }
         let initialization = WindowDiscoveryInitialization(window)
         defer { initialization.finish() }
         await WindowRestorationMutation.$discoveryInitialization.withValue(initialization) {
             guard initialization.mayContinue else { return }
-            await body()
+            await WindowRestorationMutation.$commandContinuations.withValue(WindowAutomaticCommandContinuations()) {
+                await body()
+            }
         }
     }
 }
@@ -69,12 +76,21 @@ final class WindowDiscoveryInitialization {
 @MainActor
 final class WindowAutomaticCommandContinuations {
     private var continuations: [WindowCommandContinuation] = []
+    private let parent: WindowAutomaticCommandContinuations?
+
+    init(parent: WindowAutomaticCommandContinuations? = nil) { self.parent = parent }
 
     func register(_ continuation: WindowCommandContinuation) {
         continuations.append(continuation)
+        parent?.register(continuation)
+    }
+
+    var requiredTargetsAreCurrent: Bool {
+        parent?.requiredTargetsAreCurrent != false && continuations.allSatisfy(\.mayContinueChain)
     }
 
     func cancelStaleInitialization() {
+        parent?.cancelStaleInitialization()
         for continuation in continuations {
             continuation.supersedeStaleAutomaticInitialization()
         }
@@ -116,7 +132,8 @@ final class WindowCommandContinuation {
     }
 
     var mayContinue: Bool {
-        mayContinue(targetIsUnchanged: targetIsUnchanged)
+        mayContinue(targetIsUnchanged: targetIsUnchanged) &&
+            WindowRestorationMutation.commandContinuations?.requiredTargetsAreCurrent != false
     }
 
     private func mayContinue(targetIsUnchanged: Bool) -> Bool {
@@ -130,11 +147,15 @@ final class WindowCommandContinuation {
     /// native effect, a reused ID, or a changed user/control token.
     func didDispatchClose() { completedClose = true }
 
+    var isCompletedRemoval: Bool {
+        completedClose && Window.get(byId: window.windowId) == nil && window.userMutationToken == userMutationToken
+    }
+
+    fileprivate var mayContinueChain: Bool {
+        mayContinue(targetIsUnchanged: targetIsUnchanged || isCompletedRemoval)
+    }
+
     fileprivate func supersedeStaleAutomaticInitialization() {
-        let expectedRemoval = completedClose && Window.get(byId: window.windowId) == nil &&
-            window.userMutationToken == userMutationToken
-        if automatic, !mayContinue(targetIsUnchanged: targetIsUnchanged || expectedRemoval) {
-            initialization?.supersede()
-        }
+        if automatic, !mayContinueChain { initialization?.supersede() }
     }
 }

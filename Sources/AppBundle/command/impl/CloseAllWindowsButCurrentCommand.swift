@@ -15,9 +15,23 @@ struct CloseAllWindowsButCurrentCommand: Command {
         }
         var result = BinaryExitCode.succ
         let continuation = WindowCommandContinuation(focused)
-        for window in workspace.allLeafWindowsRecursive where window != focused {
-            guard continuation.mayContinue else { return .fail }
+        // Pin the entire accepted plan before the first native read. A later
+        // victim's newer intent must stop even an earlier app-termination effect.
+        let victims = workspace.allLeafWindowsRecursive.filter { $0 != focused }.map {
+            ($0, WindowCommandContinuation.beforeMutation($0))
+        }
+        for (window, planned) in victims {
+            if planned.isCompletedRemoval { continue }
+            guard continuation.mayContinue, planned.targetIsUnchanged, planned.mayContinue else { return .fail }
             let closed = await CloseCommand(args: args.closeArgs).run(env.withWindowId(window.windowId), io)
+            if closed.rawValue == 0 {
+                planned.didDispatchClose()
+                // Successful termination can remove every planned model owned
+                // by this app. Preserve expected removals, never reused IDs.
+                for (victim, proof) in victims where victim.app.pid == window.app.pid && Window.get(byId: victim.windowId) == nil {
+                    proof.didDispatchClose()
+                }
+            }
             // These nested commands do not pass through Shell. Revoke rejected
             // required targets before dispatching another destructive operation.
             WindowRestorationMutation.commandContinuations?.cancelStaleInitialization()

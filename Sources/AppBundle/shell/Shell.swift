@@ -100,7 +100,7 @@ extension Shell where T == any Command {
         guard WindowDiscoveryInitialization.mayRunAutomaticCommand else { return .fail }
         switch self {
             case .cmd(let command):
-                let continuations = WindowAutomaticCommandContinuations()
+                let continuations = WindowAutomaticCommandContinuations(parent: WindowRestorationMutation.commandContinuations)
                 let exitCode = await WindowRestorationMutation.$commandContinuations.withValue(continuations) {
                     await WindowRestorationMutation.$isUserCommand.withValue(!WindowRestorationMutation.isAutomaticDiscovery) {
                         Int32ExitCode(rawValue: await command.run(env, io).rawValue)

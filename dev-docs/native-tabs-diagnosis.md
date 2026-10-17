@@ -1068,3 +1068,26 @@ inventory now succeeds and reports zero window managers; none was launched durin
 this diagnosis. Evidence: .debug/aquaspace/daily-validation/plist-{red,green}.log
 and the pinned orphan cleanup script. A manager may launch only after this full
 inventory succeeds through the ordinary unchanged controller admission path.
+
+## Nested wrappers and complete bulk-close plans — 2026-10-17
+
+The final daily-use source review found that nested trigger-binding shells lost
+required targets at the enclosing wrapper's final refresh, and bulk-close pinned
+later victims only when reaching them. A later victim could therefore move during
+an earlier native count read, then still be closed or included in app termination.
+
+Each automatic initialization now owns a task-local root collector; leaf scopes
+propagate required snapshots to their ancestors. Entry gates and refresh checks
+inspect ancestor requirements too, preserving intent through targetless sibling
+commands and wrapper refresh. Independent initializations get independent roots.
+Optional geometry/MRU probes retain their local guards without registering as
+required targets. Bulk-close pins all intended victims before any native read,
+and mandatory continuation guards check the complete plan before any effect.
+Successful closes acknowledge only expected removals with unchanged user tokens;
+reused IDs, model changes and controller-generation changes still reject.
+
+The wrapper/later-victim reproductions failed with six assertions before repair.
+Additional coverage checks targetless sibling refresh at root and nested levels,
+normal multi-close, normal app termination and continued optional-probe behavior.
+The final discovery suite passes 119 methods. Evidence is in
+.debug/window-discovery-offline/nested-target-{red,ancestor-red,green,model}.log.
