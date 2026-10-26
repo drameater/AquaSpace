@@ -32,3 +32,10 @@
 # XCode User settings
 xcuserdata/
 xcshareddata/
+
+# Python caches from script/ tests and build helpers
+__pycache__/
+*.pyc
+
+# macOS Finder metadata
+.DS_Store
