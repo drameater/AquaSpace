@@ -15,6 +15,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+from aquaspace_signing import local_identity, sign_app
 
 
 def main():
@@ -26,8 +27,15 @@ def main():
     parser.add_argument("--base-app", type=Path, default=Path("/Applications/AeroSpace.app"))
     parser.add_argument("--version", default="0.21.3-aquaspace." + datetime.now().strftime("%Y%m%d.%H%M%S"))
     parser.add_argument("--jobs", type=int, default=2, help="Limit compilation workers while using the machine")
+    parser.add_argument("--signing-identity", help="Persistent code-signing certificate; defaults to AquaSpace's local identity")
+    parser.add_argument("--signing-keychain", type=Path, help="Keychain containing the explicit signing identity")
     parser.add_argument("--install-and-restart", action="store_true", help="After building, use the serialized installer to replace and restart the sole installed AquaSpace")
     args = parser.parse_args()
+    if args.signing_keychain and not args.signing_identity:
+        parser.error('--signing-keychain requires --signing-identity')
+    if args.signing_identity == '-':
+        parser.error('Ad-hoc signing resets privacy grants; use a persistent signing certificate.')
+    identity, keychain = ((args.signing_identity, args.signing_keychain) if args.signing_identity else local_identity())
     source = root / ".debug/aquaspace/source"
     source.mkdir(parents=True, exist_ok=True)
     for name in ("Package.swift", "Package.resolved"):
@@ -85,12 +93,11 @@ def main():
                     CFBundleName="AquaSpace", CFBundleDisplayName="AquaSpace",
                     CFBundleShortVersionString=args.version, CFBundleVersion=datetime.now().strftime("%Y%m%d%H%M%S"))
     info.write_bytes(plistlib.dumps(metadata))
-    subprocess.run(["codesign", "--force", "--sign", "-", str(macos / "aquaspace-cli")], check=True)
-    subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", "local.aquaspace", str(app)], check=True)
-    subprocess.run(["codesign", "--verify", "--strict", str(app)], check=True)
+    requirement = sign_app(app, identity, keychain)
     (args.output / "build.json").write_text(json.dumps({"version": args.version, "revision": revision,
         "source_sha256": manifest, "app_sha256": hashlib.sha256((macos / "AquaSpace").read_bytes()).hexdigest(),
-        "cli_sha256": hashlib.sha256((macos / "aquaspace-cli").read_bytes()).hexdigest()}, indent=2) + "\n")
+        "cli_sha256": hashlib.sha256((macos / "aquaspace-cli").read_bytes()).hexdigest(),
+        "designated_requirement": requirement}, indent=2) + "\n")
     print(f"Built {app}; CLI: {macos / 'aquaspace-cli'}")
     if args.install_and_restart:
         subprocess.run([sys.executable, str(root / "script/install-aquaspace.py"),

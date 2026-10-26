@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import signal
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -142,7 +143,9 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads((transaction / 'session.json').read_text())['workspace'], 'work')
         self.assertEqual(json.loads((transaction / 'journal.json').read_text())['phase'], 'committed')
         self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
-        self.assertEqual((transaction / 'previous.app/Contents/MacOS/AquaSpace').read_text(), 'old')
+        self.assertFalse((transaction / 'previous.app').exists())
+        with tarfile.open(transaction / 'previous.app.tar.gz') as backup:
+            self.assertEqual(backup.extractfile('previous.app/Contents/MacOS/AquaSpace').read(), b'old')
         self.assert_single_launch()
 
     def test_default_install_refuses_active_manager_without_signaling_it(self):
@@ -157,6 +160,44 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('launch', self.system.events)
         self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
 
+    def test_completed_backup_cleanup_preserves_symlinks_and_skips_pending_recovery(self):
+        transaction = self.installer.install()
+        legacy = bundle(transaction / 'previous.app', 'legacy')
+        (legacy / 'Contents/Helpers').mkdir()
+        (legacy / 'Contents/Helpers/aerospace').symlink_to('../MacOS/aquaspace-cli')
+        (transaction / 'previous.app.tar.gz').unlink()
+        pending = self.target.parent / '.aquaspace-update-pending'
+        pending.mkdir()
+        update.atomic_json(pending / 'journal.json', dict(schema=1, target=str(self.target), phase='replaced'))
+        bundle(pending / 'previous.app', 'pending')
+        self.installer.archive_completed_backups()
+        self.assertFalse(legacy.exists())
+        with tarfile.open(transaction / 'previous.app.tar.gz') as archive:
+            alias = archive.getmember('previous.app/Contents/Helpers/aerospace')
+            self.assertTrue(alias.issym())
+            self.assertEqual(alias.linkname, '../MacOS/aquaspace-cli')
+        self.assertTrue((pending / 'previous.app').is_dir())
+        self.assertNotIn('launch', self.system.events)
+
+    def test_archive_retry_keeps_complete_backup_after_interrupted_removal(self):
+        transaction = self.installer.install()
+        backup = bundle(transaction / 'previous.app', 'original')
+        (transaction / 'previous.app.tar.gz').unlink()
+        with patch.object(update.shutil, 'rmtree', side_effect=OSError('interrupted removal')):
+            with self.assertRaises(OSError): self.installer.archive_completed_backups()
+        (backup / 'Contents/MacOS/AquaSpace').unlink()
+        self.installer.archive_completed_backups()
+        with tarfile.open(transaction / 'previous.app.tar.gz') as archive:
+            self.assertEqual(archive.extractfile('previous.app/Contents/MacOS/AquaSpace').read(), b'original')
+
+    def test_partial_aborted_staging_copy_does_not_block_next_install(self):
+        transaction = self.target.parent / '.aquaspace-update-aborted'
+        (transaction / 'new.app/Contents').mkdir(parents=True)
+        update.atomic_json(transaction / 'journal.json', dict(schema=1, target=str(self.target), phase='aborted'))
+        self.installer.install()
+        self.assertTrue((transaction / 'new.app.tar.gz').is_file())
+        self.assertFalse((transaction / 'new.app').exists())
+
     def test_restart_without_active_manager_launches_once(self):
         self.activate()
         self.assertEqual(len(self.system.launches), 1)
@@ -165,6 +206,25 @@ class InstallerTests(unittest.TestCase):
     def test_stock_aerospace_is_never_stopped_or_launched(self):
         self.system.add(100, 'bobko.aerospace', self.root / 'AeroSpace.app/Contents/MacOS/AeroSpace')
         with self.assertRaises(update.UpdateError): self.activate()
+        self.assertNotIn('stop', self.system.events)
+        self.assertNotIn('launch', self.system.events)
+
+    def test_explicit_file_only_repair_retains_stock_and_never_launches(self):
+        stock = self.system.add(100, 'bobko.aerospace', Path('/Applications/AeroSpace.app/Contents/MacOS/AeroSpace'))
+        self.installer.install(allow_running_stock=True)
+        self.assertEqual(self.system.running, {100: stock})
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.assertNotIn('stop', self.system.events)
+        self.assertNotIn('launch', self.system.events)
+        self.assertNotIn('capture', self.system.events)
+
+    def test_stock_exit_or_peer_arrival_aborts_file_only_repair(self):
+        self.system.add(100, 'bobko.aerospace', Path('/Applications/AeroSpace.app/Contents/MacOS/AeroSpace'))
+        def change(system, event):
+            if event == 'verify' and system.events.count('verify') == 2: system.running.clear()
+        self.system.on_event = change
+        with self.assertRaises(update.UpdateError): self.installer.install(allow_running_stock=True)
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
         self.assertNotIn('stop', self.system.events)
         self.assertNotIn('launch', self.system.events)
 
@@ -534,7 +594,6 @@ class NativeBackendTests(unittest.TestCase):
         ProcessInspectionTests.setUp(self)
         self.native = object.__new__(update.NativeSystem)
         self.native.processes = self.inspector
-        self.native.children = {}
 
     def test_cli_output_preserves_empty_fields_and_title_whitespace(self):
         for stdout in ('123\t1\t456\t\n', '123\t1\t456\t a title \n', '\tleading\t\r\n'):
@@ -543,28 +602,39 @@ class NativeBackendTests(unittest.TestCase):
                 with patch('aquaspace_update.subprocess.run', return_value=reply):
                     self.assertEqual(self.native.run(['fake-cli']), stdout.rstrip('\r\n'))
 
-    def test_native_launch_retains_child_with_restore_session_arguments(self):
+    def test_native_launch_uses_launch_services_with_restore_session_arguments(self):
         session = Path(self.tmp.name) / 'a folder/session.json'
-        child = unittest.mock.Mock(pid=1234)
-        child.poll.return_value = None
-        with patch('aquaspace_update.subprocess.Popen', return_value=child) as launch:
+        child = self.inspector.inspect(1234)
+        with patch.object(self.native, 'run') as launch, patch.object(self.native, 'managers', side_effect=[[], [child]]):
             process = self.native.launch(self.app / 'Contents/MacOS/AquaSpace', session,
                                          Path(self.tmp.name) / 'app.log')
-        self.assertIs(self.native.children[1234], child)
-        self.assertEqual(launch.call_args.args[0],
-                         [str(self.app / 'Contents/MacOS/AquaSpace'), '--restore-session', str(session)])
+        arguments = [str(a) for a in launch.call_args.args[0]]
+        self.assertEqual(arguments[:4], ['/usr/bin/open', '-n', '-g', str(self.app)])
+        self.assertEqual(arguments[-3:], ['--args', '--restore-session', str(session)])
         self.assertEqual(process.pid, 1234)
-        self.assertTrue(launch.call_args.kwargs['close_fds'])
 
-    def test_native_uncertain_launch_keeps_handle_without_launching_fallback(self):
-        child = unittest.mock.Mock(pid=1234)
-        with patch('aquaspace_update.subprocess.Popen', return_value=child) as launch:
-            with patch.object(self.native, 'inspect', return_value=None):
+    def test_native_uncertain_launch_never_launches_fallback(self):
+        with patch.object(self.native, 'run', side_effect=update.UpdateError('uncertain')) as launch:
+            with patch.object(self.native, 'managers', return_value=[]):
                 with self.assertRaises(update.UpdateError):
                     self.native.launch(self.app / 'Contents/MacOS/AquaSpace', None,
                                        Path(self.tmp.name) / 'app.log')
         self.assertEqual(launch.call_count, 1)
-        self.assertIs(self.native.children[1234], child)
+
+    def test_native_launch_refuses_existing_manager_before_open(self):
+        with patch.object(self.native, 'run') as launch, patch.object(self.native, 'managers', return_value=[self.inspector.inspect(1234)]):
+            with self.assertRaises(update.UpdateError):
+                self.native.launch(self.app / 'Contents/MacOS/AquaSpace', None, Path(self.tmp.name) / 'app.log')
+        launch.assert_not_called()
+
+    def test_native_launch_rejects_wrong_bundle_and_times_out_without_retrying_open(self):
+        wrong = update.Process(999, (1, 1), os.getuid(), Path('/other/AquaSpace'), 'local.aquaspace')
+        for inventory in ([wrong], []):
+            with self.subTest(inventory=inventory), patch.object(self.native, 'run') as launch:
+                with patch.object(self.native, 'managers', side_effect=[[], inventory]), patch.object(self.native, 'monotonic', side_effect=[0, 6]):
+                    with self.assertRaises(update.UpdateError):
+                        self.native.launch(self.app / 'Contents/MacOS/AquaSpace', None, Path(self.tmp.name) / 'app.log')
+                self.assertEqual(launch.call_count, 1)
 
     def test_native_stop_rejects_reused_pid_before_sending_any_signal(self):
         old = update.Process(1234, (1, 2), os.getuid(), self.app / 'Contents/MacOS/AquaSpace', 'local.aquaspace')
@@ -577,10 +647,8 @@ class NativeBackendTests(unittest.TestCase):
         with patch('aquaspace_update.os.kill') as signaler: self.native.stop(old)
         signaler.assert_called_once_with(1234, signal.SIGKILL)
 
-    def test_status_uses_child_handle_and_rejects_a_different_start_identity(self):
+    def test_status_rejects_a_different_start_identity(self):
         old = self.inspector.inspect(1234)
-        child = unittest.mock.Mock(); child.poll.return_value = None
-        self.native.children[1234] = child
         self.lib.birth = 999
         with patch.object(self.native, 'run') as cli:
             with self.assertRaises(update.UpdateError): self.native.status(old, 'fake-cli')

@@ -31,9 +31,15 @@ install or launch a window manager.
 
 ## 2. Local signing
 
-The local AquaSpace builder signs the app and CLI ad hoc with the existing
-local.aquaspace identity. No custom signing certificate, sudo, SIP change or
-injection is required. The app uses the normal macOS Accessibility permission.
+Run `python3 script/aquaspace_signing.py --setup` once before building. The local
+builder reuses that certificate for the app and CLI, preserving the
+`local.aquaspace` identity across rebuilds. Ad-hoc signing pins permissions to an
+executable hash and is refused. The private key is non-exportable in a dedicated
+keychain under `~/Library/Application Support/AquaSpace/Signing`; its password
+file and containing directory are accessible only to the current user. Keep this
+directory when cleaning build caches. Setup does not alter system trust settings
+or grant privacy permissions. An existing certificate can instead be selected
+with `--signing-identity` and optionally `--signing-keychain`.
 The resource donor defaults to /Applications/AeroSpace.app, retaining the same
 logo; pass --base-app to use another verified local resource copy.
 
@@ -48,6 +54,10 @@ logo; pass --base-app to use another verified local resource copy.
 - script/install-aquaspace.py installs a staged bundle. Add --restart to capture
   the sole installed AquaSpace's identity-backed session, stop it, verify exit,
   and start the replacement exactly once. Without --restart it launches nothing.
+  Restarts use Launch Services so privacy requests belong to AquaSpace rather
+  than the terminal or agent running the installer. Completed backups are
+  archives rather than discoverable `.app` bundles. `--archive-backups` cleans
+  up older completed transactions without starting or stopping an app.
 - build-debug.sh stages AquaSpaceApp and aquaspace in .debug/aquaspace-debug;
   run-debug.sh and run-cli.sh use those products. Debug admission refuses another
   manager rather than taking over stock. Existing .debug evidence is preserved.

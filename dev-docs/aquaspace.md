@@ -2,16 +2,59 @@
 
 AquaSpace installs as `/Applications/AquaSpace.app` with bundle identifier `local.aquaspace`. AeroSpace remains `/Applications/AeroSpace.app` with its original `bobko.aerospace` identity. AquaSpace uses the same icon and assets, `~/.aerospace.toml` / `${XDG_CONFIG_HOME}/aerospace/aerospace.toml`, bindings, and `AEROSPACE_*` environment variables.
 
-Current installed release: **0.21.3-aquaspace.20261017.2**, built from local
-commit **47be2afa**. The continuation repairs and product naming pass are installed
-and live-validated. AquaSpace is left running as the sole controller; stock
-AeroSpace remains separately installed. See the
-[completed daily-use validation](#daily-use-continuation-and-renaming-validation--2026-10-17)
-for the exact checks, evidence and scope. Older sections below are historical.
+Current installed release: **0.21.3-aquaspace.20261017.4**. The permission identity
+repair is installed and live-validated, including a real executable update with
+no fresh grant. AquaSpace is running as the sole controller; stock AeroSpace
+remains separately installed. See the
+[permission repair validation](#permission-identity-repair-2026-10-17) for the
+checks, evidence and scope. Older sections below are historical.
 
 Open AquaSpace normally to switch from AeroSpace. To switch back, choose **Switch to AeroSpace** in AquaSpace's menu or run `aquaspace switch-to-aerospace`. This freezes and drains AquaSpace's window writes before opening AeroSpace. Opening AeroSpace directly also triggers a one-way exit through launch notifications and process detection, but an unmodified external application can start before that notification is delivered; use the explicit switch for ordered control. AquaSpace stops stock AeroSpace before taking over. Session transfer preserves workspace assignments, root layouts, floating/fullscreen settings, and focus. Nested tiling containers and their exact weights are rebuilt when changing managers.
 
 The original `aerospace` CLI is restored unchanged. AquaSpace adds `/opt/homebrew/bin/aquaspace`, pointing to `AquaSpace.app/Contents/MacOS/aquaspace-cli`. The apps use separate command sockets: the stock CLI controls stock AeroSpace and the fork's CLI controls AquaSpace. AquaSpace prefixes its own callbacks' PATH with a bundled `aerospace` compatibility alias, so relative `aerospace` invocations in the existing config use the fork. The user's shell PATH and original executable remain unchanged; external scripts and absolute CLI paths must explicitly choose the appropriate manager. Only one manager should control windows.
+
+## Permission identity repair (2026-10-17)
+
+The repeated Device Control and Data Access / Accessibility requests came from
+ad-hoc signing. Installed builds had different `cdhash` designated requirements,
+so each rebuild invalidated the previous grant. The updater also renamed the old
+installation to `previous.app` and retained it as a discoverable application.
+Earlier macOS TCC logs attributed requests from directly spawned AquaSpace to
+Codex. These are signing, installation and launch problems; repeatedly granting
+the old builds access could not make the build identity stable. Apple's
+[code signing identity documentation](https://developer.apple.com/library/archive/technotes/tn2206/_index.html)
+explains how designated requirements identify successive versions.
+
+The builder now signs with a persistent local certificate, and the installer
+refuses hash-bound builds. The private key is in a dedicated keychain outside
+build caches; setup never silently replaces existing material. The updater opens
+the exact installed app through Launch Services and verifies its kernel process
+identity and sole ownership. Completed backups become durable `.app.tar.gz`
+archives; incomplete recovery transactions retain their usable bundles.
+
+Release `.3` was installed without disturbing the running stock manager. The
+user granted the new certificate-backed identity once, and normal startup took
+over from stock. TCC logs identified the subject as `local.aquaspace`, without
+the prior Codex responsibility attribution. All six baseline windows kept their
+workspace and fullscreen assignments. Two nested layout descriptors changed to
+`h_tiles` during that initial stock-to-fork handoff; this does not establish exact
+nested-container preservation, which remains the existing handoff limitation.
+
+A second release, `.4`, changed the executable and was installed through the
+production updater. It restarted successfully without another grant. All six
+windows retained their workspace, layout and fullscreen descriptors across this
+update. An independent monitor recorded 26 inventories, a peak of one manager,
+and no inspection errors. The stock executable hash was unchanged, and no live
+backup `.app` bundles remained in any update transaction. The final process
+reported `phase=controlling`, `controlsWindows=true`, `inventoryVerified=true`,
+`readOnly=false`, and no peer managers.
+
+All 251 Python offline checks passed. Additional disposable signing probes
+confirmed that two different executables fail to share the old ad-hoc identity
+but both satisfy the same certificate-bound requirement. No probe was launched.
+Evidence is local under `.debug/aquaspace/permission-repair/`, including
+`signing-validation.json`, `baseline.json`, `after-grant.json`,
+`update-verification.json`, `update-monitor.json`, and build/update logs.
 
 ## Earlier validation on 2026-10-14
 
@@ -128,11 +171,19 @@ These updated live notes are included in a local documentation checkpoint after 
 ## Build locally
 
 ```sh
+python3 script/aquaspace_signing.py --setup
 python3 script/build-aquaspace.py \
   --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 ```
 
 The SDK argument is optional when the default SDK builds the project. On this machine, the macOS 27 Command Line Tools SDK lacks the SwiftUI State macro plugin, so macOS 26.5 is used. The script builds an optimized arm64 app and matching CLI, copies the icon/resources from the installed AeroSpace app, signs locally, and stages `.debug/aquaspace/release/AquaSpace.app`. It installs and restarts only with the explicit `--install-and-restart` option. `--base-app`, `--scratch-path`, `--output`, and `--version` customize the build. `build.json` records the source and executable hashes. Full upstream XCTest requires Xcode; the local Swift Testing harness covers the tab-group and handoff session logic.
+
+Signing uses the persistent local certificate configured by the one-time setup,
+or an explicit `--signing-identity` / `--signing-keychain`. Keep the signing
+directory under `~/Library/Application Support/AquaSpace/Signing`. Ad-hoc builds
+are refused: their designated requirement changes with every executable hash,
+invalidating the previous privacy grant. `build.json` also records the designated
+requirement. Migrating from the old ad-hoc builds requires a fresh grant once.
 
 The Xcode project also uses AquaSpace's app name and bundle identities. Internal Swift module names and upstream command documentation retain their existing names to keep the fork small. The repository's original remote is unchanged, and no changes have been pushed.
 
@@ -149,7 +200,7 @@ It builds AquaSpace, then calls `script/install-aquaspace.py --restart`. To inst
 
 The installer uses public Darwin process APIs to identify the executable, bundle, PID, and process start time. Startup arguments and spaces in paths do not change that identity. Known unbundled/debug manager executables block an update too. A running process can be replaced only when it is the sole AquaSpace from the installation being updated, and its own CLI confirms ownership. Stock AeroSpace and other running copies cause the update to stop before signaling anything.
 
-One persistent per-user file lock serializes updates across destinations. The app and CLI are staged and verified before stopping the old process. The updater saves session metadata, rechecks process identity, terminates the old AquaSpace without quit-time recentering, and waits for confirmed exit before replacing files or starting the new app. It retains the exact child handle and checks that child's ownership. There is one launch site and no automatic recovery launch, watchdog, pause, or resume path.
+One persistent per-user file lock serializes updates across destinations. The app and CLI are staged and verified before stopping the old process. The updater saves session metadata, rechecks process identity, terminates the old AquaSpace without quit-time recentering, and waits for confirmed exit before replacing files or starting the new app. It opens the exact installed bundle through Launch Services, then binds readiness checks to its kernel PID and birth identity. This keeps permission attribution with AquaSpace rather than its installer. There is one launch site and no automatic recovery launch, watchdog, pause, or resume path.
 
 Each update keeps a backup, session metadata, and an atomic journal under `/Applications/.aquaspace-update-<id>/`. Launch intent is recorded before starting the child. An interrupted or uncertain update blocks another install attempt rather than guessing which copy should run. If startup or verification fails, the updater leaves the replacement alone and reports the journal path; it never launches an old copy alongside it.
 
@@ -160,7 +211,18 @@ python3 script/install-aquaspace.py \
   --recover /Applications/.aquaspace-update-<id>
 ```
 
-The plain installer without `--restart` also requires stopped managers and never launches an application. Backups are retained for review. If a failure happened before any process was signaled, the unused staging transaction is marked aborted and can be retried normally.
+The plain installer without `--restart` requires stopped managers and never
+launches an application. For a file-only repair of inactive AquaSpace,
+`--allow-running-stock` permits the sole canonical stock AeroSpace to keep
+running; the installer verifies that its identity stays unchanged and never
+signals it. This option cannot be combined with a restart or recovery.
+
+Completed backups are retained as `.app.tar.gz` archives, avoiding live
+`previous.app` bundles that macOS can track in Privacy settings. Run
+`python3 script/install-aquaspace.py --archive-backups` to archive older completed
+transactions without process actions. Pending recovery bundles remain intact.
+If a failure happened before any process was signaled, the unused staging
+transaction is marked aborted and can be retried normally.
 
 The installer changes passed 47 offline tests before live validation. The transaction tests use fake kernel/process APIs and temporary bundles, and block real subprocess calls, signals, CLI calls, and native-library loading. Four shell-wrapper checks run Bash with a fake Python executable, including macOS Bash 3.2 empty-argument handling:
 

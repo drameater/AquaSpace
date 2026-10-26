@@ -19,10 +19,12 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 from dataclasses import dataclass
 import uuid
 from xml.parsers.expat import ExpatError
+from aquaspace_signing import designated_requirement, SigningError
 
 MANAGER_IDS = frozenset(('local.aquaspace', 'local.aquaspace.debug',
                          'bobko.aerospace', 'bobko.aerospace.debug', 'unidentified.window-manager'))
@@ -295,6 +297,25 @@ def replace_directory(source, target):
     if source.parent != target.parent: sync_directory(source.parent)
 
 
+def archive_bundle(bundle):
+    """Keep recovery evidence without leaving another discoverable application.
+
+    Finish and sync the archive before removing the bundle. A retry after an
+    interrupted removal reuses the complete archive, never a partial directory.
+    Only terminal transactions may call this; pending recovery stays unchanged.
+    """
+    archive = bundle.with_name(bundle.name + '.tar.gz')
+    if not archive.exists():
+        temporary = archive.with_name(archive.name + '.tmp')
+        with tarfile.open(temporary, 'w:gz') as stream:
+            stream.add(bundle, arcname=bundle.name)
+        with temporary.open('rb') as stream: os.fsync(stream.fileno())
+        temporary.replace(archive)
+        sync_directory(bundle.parent)
+    shutil.rmtree(bundle)
+    sync_directory(bundle.parent)
+
+
 class InstallLock:
     def __init__(self, parent):
         self.path, self.fd = parent / f'.aquaspace-install-{os.getuid()}.lock', None
@@ -357,7 +378,6 @@ def validate_identity_session(session, uid):
 class NativeSystem:
     def __init__(self):
         self.processes = DarwinProcesses()
-        self.children = {}  # Retain Popen handles; discovery is never the child handle.
 
     def managers(self): return self.processes.managers()
     def inspect(self, pid): return self.processes.inspect(pid)
@@ -376,6 +396,12 @@ class NativeSystem:
     def verify_bundle(self, path):
         self.run(['codesign', '--verify', '--strict', path], timeout=15)
         self.run(['codesign', '--verify', '--strict', path / 'Contents/MacOS/aquaspace-cli'], timeout=15)
+        try:
+            requirement = designated_requirement(path)
+        except SigningError as error:
+            raise UpdateError(str(error)) from error
+        if 'cdhash' in requirement or 'certificate' not in requirement:
+            raise UpdateError('This build uses an unstable signing identity. Rebuild with AquaSpace persistent signing before installing.')
 
     def capture_session(self, old, cli):
         def query(*args): return self.run([cli, *args])
@@ -423,21 +449,30 @@ class NativeSystem:
         except ProcessLookupError: pass
 
     def launch(self, executable, session, log):
-        arguments = [str(executable)]
-        if session: arguments += ['--restore-session', str(session)]
-        with log.open('wb') as stream:
-            child = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=stream,
-                                     stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
-        self.children[child.pid] = child
-        process = self.inspect(child.pid)
-        if process is None or process.executable != executable or process.bundle_id != 'local.aquaspace':
-            raise UpdateError('Launch outcome is uncertain; no recovery application will be started.')
-        return process
+        if self.managers():
+            raise UpdateError('A window manager appeared before launch; refusing to open another.')
+        # Direct Popen inherits the terminal/agent's TCC responsibility. Open the
+        # exact bundle through Launch Services so grants belong to AquaSpace.
+        arguments = ['/usr/bin/open', '-n', '-g', executable.parents[2],
+                     '--stdin', '/dev/null', '--stdout', log, '--stderr', log]
+        if session: arguments += ['--args', '--restore-session', session]
+        self.run(arguments, timeout=10)
+        deadline = self.monotonic() + 5
+        while True:
+            processes = self.managers()
+            if processes:
+                if (len(processes) == 1 and processes[0].executable == executable
+                        and processes[0].bundle_id == 'local.aquaspace'):
+                    return processes[0]
+                raise UpdateError('Unexpected manager after launch; no recovery application will be started.')
+            if self.monotonic() >= deadline:
+                raise UpdateError('Launch outcome is uncertain; no recovery application will be started.')
+            self.sleep(.05)
 
     def status(self, child, cli):
-        handle = self.children[child.pid]
         current = self.inspect(child.pid)
-        if handle.poll() is not None or current is None or current.identity != child.identity:
+        if (current is None or current.identity != child.identity
+                or current.executable != child.executable or current.bundle_id != child.bundle_id):
             raise UpdateError('The replacement AquaSpace exited during startup.')
         return json.loads(self.run([cli, 'management-status'], timeout=.5))
 
@@ -464,6 +499,25 @@ class Installer:
         return [p for p in sorted(self.target.parent.glob('.aquaspace-update-*'))
                 if self.journal(p)['phase'] not in TERMINAL_PHASES]
 
+    def _archive_completed_backups(self):
+        for transaction in sorted(self.target.parent.glob('.aquaspace-update-*')):
+            if self.journal(transaction)['phase'] in TERMINAL_PHASES:
+                for name in ('previous.app', 'unconfirmed.app', 'new.app'):
+                    bundle = transaction / name
+                    if bundle.exists():
+                        if bundle.is_symlink():
+                            raise UpdateError('A backup bundle must not be a symlink.')
+                        # Removal may have been interrupted after the durable
+                        # archive was published. An aborted staging copy may
+                        # also be incomplete and is evidence, not an install.
+                        if name != 'new.app' and not bundle.with_name(bundle.name + '.tar.gz').is_file():
+                            bundle_metadata(bundle)
+                        archive_bundle(bundle)
+
+    def archive_completed_backups(self):
+        with InstallLock(self.lock_parent):
+            self._archive_completed_backups()
+
     def _expect(self, expected):
         actual = self.system.managers()
         if sorted(p.identity for p in actual) != sorted(p.identity for p in expected):
@@ -474,18 +528,24 @@ class Installer:
         atomic_json(transaction / 'journal.json', state)
         self.checkpoint(phase)
 
-    def install(self, restart=False):
+    def install(self, restart=False, allow_running_stock=False):
+        if restart and allow_running_stock:
+            raise UpdateError('Installing beside running stock AeroSpace must be file-only.')
         with InstallLock(self.lock_parent):
             pending = self.pending_transactions()
             if pending:
                 raise UpdateError(f'An unfinished update blocks new launches. Review or recover: {pending[0]}')
+            self._archive_completed_backups()
             metadata = bundle_metadata(self.source)
             if self.target == self.source or self.target in self.source.parents or self.source in self.target.parents:
                 raise UpdateError('Build and installation paths must be separate.')
             self.system.verify_bundle(self.source)
             existing = self.system.managers()
             old = existing[0] if len(existing) == 1 else None
-            if existing and (not restart or old is None or old.bundle_id != 'local.aquaspace' or
+            retained = existing if (allow_running_stock and old is not None and old.bundle_id == 'bobko.aerospace'
+                                    and old.executable == Path('/Applications/AeroSpace.app/Contents/MacOS/AeroSpace')) else []
+            if retained: old = None
+            if existing and not retained and (not restart or old is None or old.bundle_id != 'local.aquaspace' or
                              old.executable != self.target / 'Contents/MacOS/AquaSpace'):
                 raise UpdateError('Close other window managers first. --restart can replace only the sole installed AquaSpace.')
             had_target = self.target.exists() or self.target.is_symlink()
@@ -525,9 +585,9 @@ class Installer:
                         if self.system.monotonic() >= deadline:
                             raise UpdateError('The old AquaSpace did not exit. No replacement was launched.')
                         self.system.sleep(.02)
-                self._expect([])
+                self._expect(retained)
                 self._phase(transaction, state, 'stopped')
-                self._expect([])
+                self._expect(retained)
                 self._phase(transaction, state, 'replacing')
                 if had_target: replace_directory(self.target, transaction / 'previous.app')
                 replace_directory(staged, self.target)
@@ -550,11 +610,12 @@ class Installer:
                         self.system.sleep(.05)
                     self._expect([child])
                 self._phase(transaction, state, 'committed')
+                if had_target: archive_bundle(transaction / 'previous.app')
                 return transaction
             except Exception as error:
                 # Prepared files are unused by any app. After a stop/spawn attempt,
                 # retain the journal and leave all processes alone, even on false
-                # negatives, timeouts, or a Popen exception with an uncertain outcome.
+                # negatives, timeouts, or an uncertain Launch Services outcome.
                 if state.get('phase') in ('staging', 'prepared'):
                     self._phase(transaction, state, 'aborted')
                 raise UpdateError(f'{error}\nUpdate record: {transaction}\nNo recovery app was launched.') from error
@@ -589,13 +650,22 @@ def main(argv=None):
     parser.add_argument('--target', type=Path, default=Path('/Applications/AquaSpace.app'))
     parser.add_argument('--restart', action='store_true', help='Save the sole installed AquaSpace session, stop it, wait for exit, then launch the replacement once')
     parser.add_argument('--recover', type=Path, metavar='UPDATE_DIRECTORY', help='Restore files from an unfinished update with all managers stopped; never launches an app')
+    parser.add_argument('--archive-backups', action='store_true', help='Archive bundles from completed updates without starting or stopping apps')
+    parser.add_argument('--allow-running-stock', action='store_true', help='File-only repair of inactive AquaSpace while the sole stock AeroSpace remains running')
     args = parser.parse_args(argv)
-    if args.restart and args.recover: parser.error('--restart and --recover cannot be combined')
+    if sum(bool(x) for x in (args.restart, args.recover, args.archive_backups)) > 1:
+        parser.error('--restart, --recover and --archive-backups cannot be combined')
+    if args.allow_running_stock and (args.restart or args.recover or args.archive_backups):
+        parser.error('--allow-running-stock is only available for file-only installation')
     try:
         # All CLI invocations for this user share one lock, even with different
         # --target directories or spellings. Tests inject a temporary lock root.
         installer = Installer(args.source, args.target, NativeSystem(), lock_parent=Path('/tmp'))
-        transaction = installer.recover(args.recover) if args.recover else installer.install(restart=args.restart)
+        if args.archive_backups:
+            installer.archive_completed_backups()
+            print('Completed update backups archived; no app launched or stopped.')
+            return 0
+        transaction = installer.recover(args.recover) if args.recover else installer.install(restart=args.restart, allow_running_stock=args.allow_running_stock)
         print(('Recovered files; no app launched.' if args.recover else 'Installed AquaSpace' + (' and verified sole ownership.' if args.restart else '; no app launched.')) + f'\nUpdate record and backup: {transaction}')
         return 0
     except (UpdateError, OSError, ValueError, subprocess.TimeoutExpired) as error:

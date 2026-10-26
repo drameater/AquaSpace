@@ -35,10 +35,16 @@ application identity. `--base-app` can select another local resource donor.
 ```sh
 git clone https://github.com/drameater/AquaSpace.git
 cd AquaSpace
+python3 script/aquaspace_signing.py --setup
 ./build-release.sh
 ```
 
-This stages an ad hoc signed bundle at
+The one-time signing setup creates a persistent local certificate in a dedicated
+private keychain. Reusing that certificate lets macOS remember AquaSpace's
+permissions across builds. Keep `~/Library/Application Support/AquaSpace/Signing`;
+the builder refuses to silently replace a missing identity or sign ad hoc.
+
+This stages a certificate-signed bundle at
 `.debug/aquaspace/release/AquaSpace.app` without installing or launching it.
 If you need a specific SDK, pass `--sdk /path/to/MacOSX.sdk`; see the
 [SDK and build options](dev-docs/aquaspace.md#build-locally).
