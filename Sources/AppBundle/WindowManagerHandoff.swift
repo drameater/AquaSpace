@@ -77,7 +77,6 @@ enum WindowManagerHandoff {
     static var canInitializeWindows: Bool {
         !isYielding && writePermission.withLock { $0.permitsInitialization }
     }
-    static var canHandoff: Bool { !serverArgs.isReadOnly && !isYielding }
     static var status: String {
         let inventory = try? WindowManagerProcesses.peers()
         let peers = inventory?.map(\.pid) ?? []
@@ -93,29 +92,30 @@ enum WindowManagerHandoff {
         applicationWatch = Task.startUnstructured { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
-                do {
-                    let peers = try admission.observedPeers(freeze: freezeAXWrites)
-                    if !peers.isEmpty {
-                        await yieldToPeers(peers)
-                        return
-                    }
-                } catch {
-                    await stopForUncertainOwnership(error)
-                    return
-                }
+                // A failed scan is retried on the next tick; only a detected peer stops control.
+                guard let peers = try? admission.observedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
+                await yieldToPeers(peers)
+                return
             }
         }
     }
 
     /// Notifications freeze synchronously; polling also catches unbundled peers.
+    /// The launch notification already froze writes. Yield only to a confirmed peer.
+    /// Otherwise resume control; polling still catches a peer that appears later.
     static func observedPeerLaunch() async {
-        do { await yieldToPeers(try admission.observedPeers(freeze: freezeAXWrites)) }
-        catch { await stopForUncertainOwnership(error) }
+        if let peers = try? admission.observedPeers(freeze: freezeAXWrites), !peers.isEmpty {
+            await yieldToPeers(peers)
+        } else if admission.ownership == .controlling {
+            writePermission.withLock { $0.claim() }
+        } else {
+            await stopForUncertainOwnership(WindowManagerAdmissionError.uncertainInventory)
+        }
     }
 
     private static func yieldToPeers(_ peers: [WindowManagerProcess]) async {
         if peers.count == 1 && peers[0].isStockRelease {
-            await switchToOriginal(launch: false)
+            await switchToOriginal()
         } else {
             await stopForUncertainOwnership(WindowManagerAdmissionError.competingManager)
         }
@@ -210,7 +210,8 @@ enum WindowManagerHandoff {
         }
     }
 
-    static func switchToOriginal(launch: Bool) async {
+    /// Hands the session to a stock AeroSpace that was started while AquaSpace ran.
+    static func switchToOriginal() async {
         guard !serverArgs.isReadOnly, !isYielding else { return }
         admission.yield()
         freezeAXWrites()
@@ -223,13 +224,8 @@ enum WindowManagerHandoff {
             restorationAnchors.removeAll()
             restorationRootTokens.removeAll()
             await activateMode_nonCancellable(nil)
-            // Drain canceled AX work before launching another controller.
+            // Drain canceled AX work before AeroSpace restores the session.
             for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
-            if launch {
-                guard NSWorkspace.shared.open(URL(filePath: "/Applications/AeroSpace.app")) else {
-                    throw HandoffError.message("Could not open /Applications/AeroSpace.app")
-                }
-            }
             var available: Set<String>?
             for _ in 0 ..< 80 {
                 if let answer = try? await remoteAnswer(["list-windows", "--all", "--format", "%{window-id}"]),
@@ -390,14 +386,10 @@ enum WindowManagerHandoff {
             // A fresh native read may suspend. Revalidate model, native ownership,
             // process generation and exclusive controller admission afterwards.
             guard canControlWindows, TrayMenuModel.shared.isEnabled else { return }
-            do {
-                let peers = try admission.observedPeers(freeze: freezeAXWrites)
-                if !peers.isEmpty {
-                    await yieldToPeers(peers)
-                    return
-                }
-            } catch {
-                await stopForUncertainOwnership(error)
+            // An unverified scan keeps the assignment pending for a later attempt.
+            guard let peers = try? admission.observedPeers(freeze: freezeAXWrites) else { return }
+            if !peers.isEmpty {
+                await yieldToPeers(peers)
                 return
             }
             // Initialization may have begun while the fresh native proofs awaited.

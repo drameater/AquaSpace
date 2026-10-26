@@ -231,7 +231,7 @@ extension OfflineWindowDiscoveryTests {
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
     }
-    @Test func competitorAndUncertainManagerInventoryFreezeBeforeAnyCommit() async {
+    @Test func competitorFreezesAndUncertainInventoryRetriesBeforeAnyCommit() async {
         let (app, _, _) = setup(); app.thread?.afterRead = { Simulation.peers = [123] }
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
@@ -240,7 +240,8 @@ extension OfflineWindowDiscoveryTests {
         let (next, _, _) = setup(); next.thread?.afterRead = { Simulation.inventoryError = true }
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
-        #expect(Simulation.stops == 1)
+        #expect(Simulation.stops == 0) // A failed scan is retried; it does not stop AquaSpace.
+        #expect(!ReplayCoordinator.pendingRestoration.assignments.isEmpty)
     }
     @Test func disabledControllerAndModelReplacementCannotCommit() async {
         _ = setup(); TrayMenuModel.shared.isEnabled = false
@@ -517,7 +518,7 @@ extension OfflineWindowDiscoveryTests {
                 _ = try await ReplayCoordinator.sessionForUpdate()
                 Issue.record("Changed controller admission must reject export")
             } catch {}
-            #expect(!Simulation.controls)
+            #expect(Simulation.controls == unreadable) // A failed scan alone does not freeze control.
             #expect(Simulation.mutations.isEmpty)
         }
     }

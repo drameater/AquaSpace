@@ -135,13 +135,16 @@ extension OfflineWindowDiscoveryTests {
             Simulation.inventoryError = inventoryFailure
             Simulation.peers = inventoryFailure ? [] : [123]
             do { _ = try await ReplayCoordinator.sessionForUpdate(); Issue.record("Capture must fail closed") } catch {}
-            #expect(!ReplayCoordinator.canControlWindows)
+            // Only a detected peer freezes; a failed scan rejects the export but keeps control.
+            #expect(ReplayCoordinator.canControlWindows == inventoryFailure)
             #expect(!ReplayCoordinator.isYielding) // precisely the pre-watcher interval
             return true
         }, run: .cmd(CloseCommand(args: CloseCmdArgs())))]
         await runOnWindowDetected(ifConventional: window)
-        #expect(Simulation.nativeWrites.isEmpty)
-        #expect(MacWindow.allWindowsMap[42] === window)
+        if !inventoryFailure {
+            #expect(Simulation.nativeWrites.isEmpty)
+            #expect(MacWindow.allWindowsMap[42] === window)
+        }
     }
 
     @Test func explicitCloseCannotBypassFrozenAuthority() async {

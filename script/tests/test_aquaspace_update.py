@@ -546,9 +546,14 @@ class ProcessInspectionTests(unittest.TestCase):
                     with self.assertRaises(update.UpdateError):
                         self.inspector.managers()
 
-    def test_inaccessible_process_information_fails_closed(self):
-        self.lib.path_error = errno.EPERM
-        with self.assertRaises(update.UpdateError): self.inspector.managers()
+    def test_unreadable_executable_path_is_skipped_not_a_blocker(self):
+        # Regression: a Homebrew upgrade deleted a running opencode binary (ENOENT)
+        # and the installer refused every update while that process lived.
+        for code in (errno.ENOENT, errno.EPERM):
+            with self.subTest(code=code):
+                self.lib.path_error = code
+                self.assertEqual(self.inspector.managers(), [])
+                self.assertEqual(self.lib.info_reads, 0)
 
     def test_unrelated_helper_and_embedded_cli_need_no_bsd_identity_permission(self):
         for path in [Path(self.tmp.name) / 'system/protected-helper',

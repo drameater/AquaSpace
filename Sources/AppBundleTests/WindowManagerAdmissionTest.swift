@@ -17,25 +17,21 @@ struct WindowManagerAdmissionTest {
         #expect(permission.generation != frozen)
     }
 
-    @Test func peerAndUncertainInventoryFreezeCannotLookLikeInitialPreparation() throws {
-        for failure in [false, true] {
-            try withLock { lock, _ in
-                var monitor = false
-                var permission = WindowControlPermission()
-                let admission = WindowManagerAdmission(lock: lock, inventory: {
-                    if !monitor { return [] }
-                    if failure { throw WindowManagerAdmissionError.uncertainInventory }
-                    return [peer("bobko.aerospace")]
-                })
-                _ = try admission.prepare(build: .release, readOnly: false)
-                try admission.claim(); permission.claim()
-                let active = permission.generation
-                monitor = true
-                _ = try? admission.observedPeers { permission.freeze() }
-                #expect(admission.ownership == .controlling)
-                #expect(!permission.permitsWrites && !permission.permitsInitialization)
-                #expect(permission.generation != active)
-            }
+    @Test func peerFreezeCannotLookLikeInitialPreparation() throws {
+        try withLock { lock, _ in
+            var monitor = false
+            var permission = WindowControlPermission()
+            let admission = WindowManagerAdmission(lock: lock, inventory: {
+                monitor ? [peer("bobko.aerospace")] : []
+            })
+            _ = try admission.prepare(build: .release, readOnly: false)
+            try admission.claim(); permission.claim()
+            let active = permission.generation
+            monitor = true
+            _ = try? admission.observedPeers { permission.freeze() }
+            #expect(admission.ownership == .controlling)
+            #expect(!permission.permitsWrites && !permission.permitsInitialization)
+            #expect(permission.generation != active)
         }
     }
 
@@ -165,7 +161,8 @@ struct WindowManagerAdmissionTest {
         }
     }
 
-    @Test func failedMonitoringFreezesWritesBeforeReportingError() throws {
+    // A failed scan is not evidence of a peer; callers retry with writes still enabled.
+    @Test func failedMonitoringReportsErrorWithoutFreezingWrites() throws {
         try withLock { lock, _ in
             var fail = false
             var writesAllowed = true
@@ -179,7 +176,8 @@ struct WindowManagerAdmissionTest {
             #expect(throws: (any Error).self) {
                 try admission.observedPeers { writesAllowed = false }
             }
-            #expect(!writesAllowed)
+            #expect(writesAllowed)
+            #expect(admission.ownership == .controlling)
         }
     }
 

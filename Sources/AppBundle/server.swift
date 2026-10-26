@@ -61,15 +61,6 @@ private func newConnection(_ connection: NWConnection) async { // todo add exit 
             }
             continue
         }
-        if request.args == ["switch-to-aerospace"] {
-            guard await WindowManagerHandoff.canHandoff else {
-                await answerToClient(exitCode: EXIT_CODE_TWO, stderr: "This instance cannot start a handoff.")
-                continue
-            }
-            await answerToClient(exitCode: EXIT_CODE_ZERO, stdout: "Switching to AeroSpace")
-            await WindowManagerHandoff.switchToOriginal(launch: true)
-            return
-        }
         // Handle subscribe before parseCommand (subscribe doesn't have a Command impl)
         if request.args.first == "subscribe" {
             switch parseSubscribeCmdArgs(request.args.slice(1...).orDie()) {

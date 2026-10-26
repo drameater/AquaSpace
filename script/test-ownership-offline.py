@@ -23,7 +23,7 @@ def main():
     for path in ['model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift', 'model/PendingWindowRestoration.swift',
                  'model/WindowManagerFailureReport.swift']:
         shutil.copy2(root / 'Sources/AppBundle' / path, source / Path(path).name)
-    # Only process/signing declarations, no AppKit/AX or app entrypoint in this test.
+    # Only process declarations, no AppKit/AX or app entrypoint in this test.
     shutil.copy2(root / 'Sources/PrivateApi/include/process_inventory.h', headers / 'process_inventory.h')
     (headers / 'process.h').write_text('#include <libproc.h>\n#include <sys/proc_info.h>\n#include "process_inventory.h"\n')
     (headers.parent / 'process.c').write_text('''#include "process.h"
@@ -32,7 +32,6 @@ def main():
 int proc_listpids(uint32_t kind, uint32_t uid, void *buf, int size) { abort(); }
 int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buf, int size) { abort(); }
 int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
-int csops_audittoken(pid_t pid, unsigned int op, void *buf, size_t size, void *token) { abort(); }
 ''')
     for name in ['WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift', 'WindowRestorationProcessTest.swift',
                  'WindowManagerFailureReportTest.swift']:

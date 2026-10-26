@@ -100,18 +100,11 @@ useful for the shared configuration and command syntax.
 
 ## Switching managers
 
-Open **AquaSpace** normally to take over from stock AeroSpace. To switch back,
-choose **Switch to AeroSpace** in AquaSpace's menu or run:
-
-```sh
-aquaspace switch-to-aerospace
-```
-
-Use this explicit switch so AquaSpace freezes and drains its window writes before
-stock starts. Directly launching unmodified stock while AquaSpace is running has
-a notification/polling race. Session transfer preserves workspace, root-layout,
-floating/fullscreen and focus state; exact nested container structure and weights
-are rebuilt across managers.
+Open **AquaSpace** normally to take over from stock AeroSpace. AquaSpace has no
+switch back. If you start stock AeroSpace while AquaSpace runs, AquaSpace gives
+its session to AeroSpace and quits. Session transfer preserves workspace,
+root-layout, floating/fullscreen and focus state; exact nested container
+structure and weights are rebuilt across managers.
 
 Startup failures report a readable reason at
 `~/Library/Logs/AquaSpace/last-failure.txt`, with stderr and Console fallbacks.

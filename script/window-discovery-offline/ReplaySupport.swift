@@ -114,7 +114,7 @@ extension AXUIElement {
 }
 @MainActor final class ReplayAdmission {
     func observedPeers(freeze: () -> Void) throws -> [Int] {
-        if Simulation.inventoryError { freeze(); throw CancellationError() }
+        if Simulation.inventoryError { throw CancellationError() } // Production retries without freezing.
         if !Simulation.peers.isEmpty { freeze() }
         return Simulation.peers
     }

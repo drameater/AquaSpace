@@ -20,44 +20,6 @@ struct WindowManagerExecGeneration: Equatable {
     let version: Int32
 }
 
-struct WindowManagerSignedImage: Equatable {
-    var flags: UInt32
-    var category: UInt32
-    var identifier: String
-    var team: String
-    var cdhash: [UInt8]
-
-    var isKnownNonManager: Bool {
-        let required: UInt32 = 0x20011101 // SIGNED, RUNTIME, ENFORCEMENT, HARD, VALID
-        let forbidden: UInt32 = 0x11000026 // DEBUGGED, KILLED, INVALID_ALLOWED, GET_TASK_ALLOW, ADHOC
-        return flags & required == required && flags & forbidden == 0 && flags & 0x2010 != 0 &&
-            category == 6 && // Kernel-validated Developer ID; a team string alone is insufficient.
-            team == "UBF8T346G9" &&
-            ["com.microsoft.Word.widgetextension", "com.microsoft.Excel.widgetextension"].contains(identifier) &&
-            cdhash.count == 20 && cdhash.contains { $0 != 0 }
-    }
-}
-
-enum WindowManagerMissingExecutable {
-    static func resolve(code: Int32, identity: () throws -> WindowManagerProcessBirth?,
-                        generation: () throws -> WindowManagerExecGeneration,
-                        signature: (WindowManagerExecGeneration) throws -> WindowManagerSignedImage,
-                        userId: UInt32) throws -> Bool {
-        guard code == ENOENT else { return false }
-        guard let before = try identity() else { return true } // Kernel-confirmed exit/zombie.
-        let firstGeneration = try generation()
-        guard before.uid == userId, firstGeneration.uniqueId != 0, firstGeneration.version > 0,
-              firstGeneration.uuid.count == 16, firstGeneration.uuid.contains(where: { $0 != 0 })
-        else { throw WindowManagerAdmissionError.uncertainInventory }
-        let first = try signature(firstGeneration)
-        guard first.isKnownNonManager else { throw WindowManagerAdmissionError.uncertainInventory }
-        let second = try signature(firstGeneration)
-        guard let after = try identity(), before == after, try generation() == firstGeneration, first == second
-        else { throw WindowManagerAdmissionError.uncertainInventory }
-        return true
-    }
-}
-
 protocol WindowManagerProcessAPI {
     var userId: UInt32 { get }
     var ownPid: Int32 { get }
@@ -76,6 +38,9 @@ protocol WindowRestorationProcessAPI {
 
 /// Classify kernel executable paths before requesting BSD identity. macOS can
 /// deny BSD records for unrelated helpers; those records are irrelevant to control.
+/// A process whose path or bundle cannot be read (for example, an app replaced on
+/// disk while it runs, or a process exiting mid-scan) is not a known manager. It is
+/// skipped, so one unrelated process can never stop AquaSpace from controlling windows.
 enum WindowManagerProcesses {
     static func peers() throws -> [WindowManagerProcess] { try peers(using: NativeWindowManagerProcessAPI()) }
 
@@ -103,8 +68,8 @@ enum WindowManagerProcesses {
     static func peers(using api: any WindowManagerProcessAPI) throws -> [WindowManagerProcess] {
         var result: [WindowManagerProcess] = []
         for pid in Set(try api.pids()) where pid > 0 && pid != api.ownPid {
-            guard let path = try api.executable(pid) else { continue }
-            let metadata = try api.metadata(path)
+            guard let path = try? api.executable(pid) else { continue }
+            let metadata = (try? api.metadata(path)) ?? WindowManagerBundleMetadata()
             guard WindowManagerProcess.isManager(executable: path, bundleId: metadata.identifier,
                                                   bundleExecutable: metadata.executable)
             else { continue }
@@ -169,16 +134,6 @@ private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRes
         let code = errno
         guard count > 0 else {
             if code == ESRCH { return nil }
-            do {
-                if try WindowManagerMissingExecutable.resolve(code: code, identity: { try identity(pid) },
-                    generation: { try generation(pid) }, signature: { try signature(pid, generation: $0) }, userId: userId) {
-                    return nil // Positively identified immutable nonmanager, not an unexamined process.
-                }
-            } catch {
-                let context = scanError("pid-path-proof", pid: pid, count: count, code: code)
-                throw NSError(domain: context.domain, code: context.code,
-                    userInfo: [NSLocalizedDescriptionKey: context.localizedDescription, NSUnderlyingErrorKey: error])
-            }
             throw scanError("pid-path", pid: pid, count: count, code: code)
         }
         return String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
@@ -190,35 +145,6 @@ private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRes
         guard count == 56 else { throw scanError("exec-generation", pid: pid, count: count, code: errno) }
         let uuid = withUnsafeBytes(of: value.uuid) { unsafe Array($0) }
         return WindowManagerExecGeneration(uuid: uuid, uniqueId: value.uniqueid, version: value.idversion)
-    }
-
-    private func signature(_ pid: Int32, generation: WindowManagerExecGeneration) throws -> WindowManagerSignedImage {
-        // csops_audittoken verifies PID and exec version for every signing read.
-        var token: [UInt32] = [0, 0, 0, 0, 0, UInt32(pid), 0, UInt32(generation.version)]
-        func read(_ operation: UInt32, _ size: Int) throws -> [UInt8] {
-            var data = [UInt8](repeating: 0, count: size)
-            let result = unsafe token.withUnsafeMutableBytes { tokenBytes in
-                unsafe data.withUnsafeMutableBytes { bytes in
-                    unsafe csops_audittoken(pid, operation, bytes.baseAddress, size, tokenBytes.baseAddress)
-                }
-            }
-            guard result == 0 else { throw scanError("running-signature", pid: pid, code: errno) }
-            return data
-        }
-        func number(_ operation: UInt32) throws -> UInt32 {
-            let bytes = try read(operation, 4)
-            return bytes.enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << (8 * $1.offset) }
-        }
-        func string(_ operation: UInt32) throws -> String {
-            let data = try read(operation, 1024)
-            let length = data[4 ..< 8].reduce(0) { ($0 << 8) | Int($1) }
-            guard data.prefix(4).allSatisfy({ $0 == 0 }), (10 ... data.count).contains(length),
-                  data[length - 1] == 0, data[8 ..< length - 1].allSatisfy({ $0 > 0 && $0 < 128 })
-            else { throw scanError("signature-encoding", pid: pid) }
-            return String(decoding: data[8 ..< length - 1], as: UTF8.self)
-        }
-        return try WindowManagerSignedImage(flags: number(0), category: number(17),
-            identifier: string(11), team: string(14), cdhash: read(5, 20))
     }
 
     func metadata(_ executable: String) throws -> WindowManagerBundleMetadata {

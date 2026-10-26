@@ -9,7 +9,7 @@ remains separately installed. See the
 [permission repair validation](#permission-identity-repair-2026-10-17) for the
 checks, evidence and scope. Older sections below are historical.
 
-Open AquaSpace normally to switch from AeroSpace. To switch back, choose **Switch to AeroSpace** in AquaSpace's menu or run `aquaspace switch-to-aerospace`. This freezes and drains AquaSpace's window writes before opening AeroSpace. Opening AeroSpace directly also triggers a one-way exit through launch notifications and process detection, but an unmodified external application can start before that notification is delivered; use the explicit switch for ordered control. AquaSpace stops stock AeroSpace before taking over. Session transfer preserves workspace assignments, root layouts, floating/fullscreen settings, and focus. Nested tiling containers and their exact weights are rebuilt when changing managers.
+Open AquaSpace normally to switch from AeroSpace. AquaSpace has no command or menu action to switch back; it is a separate fork, not a companion to stock. Opening AeroSpace directly triggers a one-way exit through launch notifications and process detection. A launch notification without a confirmed peer process resumes control. AquaSpace stops stock AeroSpace before taking over. Session transfer preserves workspace assignments, root layouts, floating/fullscreen settings, and focus. Nested tiling containers and their exact weights are rebuilt when changing managers.
 
 The original `aerospace` CLI is restored unchanged. AquaSpace adds `/opt/homebrew/bin/aquaspace`, pointing to `AquaSpace.app/Contents/MacOS/aquaspace-cli`. The apps use separate command sockets: the stock CLI controls stock AeroSpace and the fork's CLI controls AquaSpace. AquaSpace prefixes its own callbacks' PATH with a bundled `aerospace` compatibility alias, so relative `aerospace` invocations in the existing config use the fork. The user's shell PATH and original executable remain unchanged; external scripts and absolute CLI paths must explicitly choose the appropriate manager. Only one manager should control windows.
 
@@ -2527,3 +2527,29 @@ No remote was created, modified or pushed.
 
 The full scope, diagnostic setup refusals and evidence paths are recorded in
 [the diagnosis](native-tabs-diagnosis.md#installed-continuation-repairs-and-real-daily-use-checks--2026-10-17).
+
+## Process-scan resilience (2026-10-25)
+
+AquaSpace stopped by itself after some time and then refused to start again. The
+saved failure report showed `pid-path-proof ... errno 2`. One unrelated process
+had an executable path that the kernel could not return (`ENOENT`). This happens
+when an app is replaced on disk while it runs or when a process exits during a
+scan. The scanner accepted such a process only if it was a Microsoft Word or
+Excel widget. Any other case refused control at startup. During monitoring the
+200 ms poll exited AquaSpace.
+
+The scanner now skips a process whose executable path or bundle `Info.plist` it
+cannot read; such a process is not a known manager. Manager candidates keep the
+before/after kernel identity checks. A failed scan during monitoring, peer-launch
+notifications or deferred restoration is retried instead of stopping AquaSpace.
+A launch notification without a confirmed peer resumes window writes. The Word
+and Excel widget proof and its `csops_audittoken` reader were removed.
+
+The installer (`script/aquaspace_update.py`) had the same scanner and refused
+updates for the same reason: a running `opencode` whose binary Homebrew had
+replaced. It now skips a process with an unreadable executable path, and an
+unrelated app with an unreadable `Info.plist`. A manager-named executable with
+an unreadable bundle still blocks the update.
+
+The **Switch to AeroSpace** menu action and `switch-to-aerospace` command were
+removed. Older sections that mention them are historical.

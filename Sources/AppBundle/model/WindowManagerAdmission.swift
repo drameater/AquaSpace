@@ -124,15 +124,12 @@ final class WindowManagerAdmission {
         }
     }
 
+    /// A failed scan is not evidence of a peer. Callers retry instead of
+    /// freezing, so one transient read cannot stop a running controller.
     func observedPeers(freeze: () -> Void) throws -> [WindowManagerProcess] {
-        do {
-            let peers = try inventory()
-            if !peers.isEmpty { freeze() }
-            return peers
-        } catch {
-            freeze()
-            throw error
-        }
+        let peers = try inventory()
+        if !peers.isEmpty { freeze() }
+        return peers
     }
 
     func yield() { ownership.yield() }

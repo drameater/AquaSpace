@@ -16,10 +16,8 @@ enum GlobalObserver {
              notification.name == NSWorkspace.didLaunchApplicationNotification || notification.name == NSWorkspace.didActivateApplicationNotification)
         if peerWasOpened { WindowManagerHandoff.freezeAXWrites() }
         Task.startUnstructured { @MainActor in
-            if peerWasOpened {
-                await WindowManagerHandoff.observedPeerLaunch()
-                return
-            }
+            // Returns only when no peer took control; then refresh to apply writes the freeze skipped.
+            if peerWasOpened { await WindowManagerHandoff.observedPeerLaunch() }
             if !TrayMenuModel.shared.isEnabled { return }
             if notifName == NSWorkspace.activeSpaceDidChangeNotification.rawValue {
                 // AXWindows changes membership on native Space switches too. Do not match
