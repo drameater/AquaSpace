@@ -18,8 +18,11 @@ def main():
     for directory in (source, tests):
         directory.mkdir(parents=True, exist_ok=True)
     production = root / 'Sources/AppBundle'
+    # The level cache coalesces concurrent cold reads with the production latch.
     for relative in ('windowLevelCache.swift', 'model/KnownBundleId.swift',
-                     'model/AxUiElementWindowType.swift', 'util/AxUiElementMock.swift'):
+                     'model/AxUiElementWindowType.swift', 'util/AxUiElementMock.swift',
+                     'util/AwaitableOneTimeBroadcastLatch.swift', 'util/UniqueToken.swift',
+                     '../Common/util/Nullable.swift', '../Common/util/TaskEx.swift'):
         text = (production / relative).read_text()
         text = text.replace('import CoreGraphics\n', '').replace('import AppKit\n', '').replace('import Common\n', '')
         if relative == 'windowLevelCache.swift':

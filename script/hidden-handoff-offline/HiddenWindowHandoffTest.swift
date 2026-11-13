@@ -17,14 +17,14 @@ struct HiddenWindowHandoffTest {
         return result
     }
 
-    @Test func hiddenZenRemainsAWorkspaceWindowAtHandoffStartup() {
+    @Test func hiddenZenRemainsAWorkspaceWindowAtHandoffStartup() async throws {
         // IDs and the hidden-app layout come from the saved failed handoff.
         ReplayServer.reset([
             ReplayWindow(id: 27918, pid: 3456, layer: 0, onScreen: true),
             ReplayWindow(id: 28122, pid: 15654, layer: 0, onScreen: false),
         ])
         let zen = window(28122)
-        let type = zen.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, getWindowLevel(for: 28122))
+        let type = zen.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 28122, .cancellable))
         #expect(type == .window)
         let session = WindowManagerSession(
             windows: "28122\t1\tmacos_native_window_of_hidden_app\tfalse\n27918\t1\tv_tiles\tfalse",
@@ -35,54 +35,68 @@ struct HiddenWindowHandoffTest {
         #expect(!commands.contains(["focus", "--window-id", "28122"]))
     }
 
-    @Test func hiddenDialogSubroleIsStillManagedWithoutPretendingItIsStandard() {
+    @Test func hiddenDialogSubroleIsStillManagedWithoutPretendingItIsStandard() async throws {
         ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: 0, onScreen: false)])
         let hidden = window(12, subrole: kAXDialogSubrole)
-        #expect(hidden.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, getWindowLevel(for: 12)) == .dialog)
+        #expect(hidden.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 12, .cancellable)) == .dialog)
     }
 
-    @Test func coldCacheDiscoversHiddenAndVisibleWindowsTogether() {
+    @Test func coldCacheDiscoversHiddenAndVisibleWindowsTogether() async throws {
         ReplayServer.reset([
             ReplayWindow(id: 10, pid: 7, layer: 0, onScreen: true),
             ReplayWindow(id: 11, pid: 7, layer: 0, onScreen: false),
         ])
-        #expect(getWindowLevel(for: 10) == .normalWindow)
-        #expect(getWindowLevel(for: 11) == .normalWindow)
+        #expect(try await getWindowLevel(for: 10, .cancellable) == .normalWindow)
+        #expect(try await getWindowLevel(for: 11, .cancellable) == .normalWindow)
         #expect(ReplayServer.queries.count == 1)
     }
 
-    @Test func hiddenHighLayerWindowsRemainPopups() {
+    // Regression for upstream 0d498deb: a second cold reader waits on the first
+    // read instead of starting another, and is woken when it completes.
+    @Test func concurrentColdReadersShareOneQueryAndAllComplete() async throws {
+        ReplayServer.reset([
+            ReplayWindow(id: 10, pid: 7, layer: 0, onScreen: true),
+            ReplayWindow(id: 11, pid: 7, layer: 3, onScreen: false),
+        ])
+        async let first = getWindowLevel(for: 10, .nonCancellable)
+        async let second = getWindowLevel(for: 11, .nonCancellable)
+        let levels = try await [first, second]
+        #expect(levels == [.normalWindow, .alwaysOnTopWindow])
+        #expect(ReplayServer.queries.count == 1)
+    }
+
+    @Test func hiddenHighLayerWindowsRemainPopups() async throws {
         for layer in [3, 8, 25] {
             ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: layer, onScreen: false)])
-            #expect(getWindowLevel(for: 12) == .new(windowLevel: layer))
-            #expect(window(12).getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, getWindowLevel(for: 12)) == .popup)
+            #expect(try await getWindowLevel(for: 12, .cancellable) == .new(windowLevel: layer))
+            #expect(window(12).getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 12, .cancellable)) == .popup)
         }
     }
 
-    @Test func unreadableOrAbsentMetadataDoesNotBecomeNormalWindow() {
+    @Test func unreadableOrAbsentMetadataDoesNotBecomeNormalWindow() async throws {
         for available in [false, true] {
             ReplayServer.reset([])
             ReplayServer.available = available
-            #expect(getWindowLevel(for: 12) == nil)
-            #expect(window(12).getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, getWindowLevel(for: 12)) == .popup)
+            #expect(try await getWindowLevel(for: 12, .cancellable) == nil)
+            #expect(window(12).getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 12, .cancellable)) == .popup)
         }
     }
 
-    @Test func normalLayerDoesNotTurnButtonlessTooltipIntoWindow() {
+    @Test func normalLayerDoesNotTurnButtonlessTooltipIntoWindow() async throws {
         ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: 0, onScreen: false)])
         let tooltip = AXUIElement(12)
         tooltip.put(Ax.subroleAttr, "AXUnknown")
         tooltip.put(Ax.titleAttr, "Hover tooltip")
         tooltip.put(Ax.isFocused, false)
         tooltip.put(Ax.isMainAttr, false)
-        #expect(tooltip.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, getWindowLevel(for: 12)) == .popup)
+        #expect(tooltip.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 12, .cancellable)) == .popup)
     }
 
-    @Test func discoveryDoesNotDependOnWhichNativeSpaceIsVisible() {
+    @Test func discoveryDoesNotDependOnWhichNativeSpaceIsVisible() async throws {
         for onScreen in [true, false] {
             ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: 0, onScreen: onScreen)])
             for app: KnownBundleId in [.zenBrowser, .mozillaFirefox, .mozillaFirefoxDeveloperEdition, .mozillaFirefoxNightly, .chrome] {
-                #expect(window(12).getWindowType(axApp: AXUIElement(), app, .regular, getWindowLevel(for: 12)) == .window)
+                #expect(window(12).getWindowType(axApp: AXUIElement(), app, .regular, try await getWindowLevel(for: 12, .cancellable)) == .window)
             }
         }
     }

@@ -108,7 +108,7 @@ extension AXUIElement {
     static var normalizeOrientation = false
 }
 @MainActor func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? { Simulation.owners }
-@MainActor func getWindowLevel(for id: UInt32) -> MacOsWindowLevel? { .normalWindow }
+@MainActor func getWindowLevel(for id: UInt32, _ cm: CancellationMode) async throws -> MacOsWindowLevel? { .normalWindow }
 @MainActor enum WindowManagerProcesses {
     static func restorationOwner(_ pid: Int32) -> WindowRestorationOwner? { Simulation.processes[pid] }
 }

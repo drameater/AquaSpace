@@ -23,26 +23,50 @@ struct ReplayWindow: Sendable {
     var layer: Int
     var onScreen: Bool
 }
+// The production level cache reads WindowServer off the main actor, so the
+// synthetic server state is lock-protected rather than main-actor isolated.
+final class ReplayServerState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [ReplayWindow] = []
+    private var available = true
+    private var queries: [CGWindowListOption] = []
+    func with<T>(_ body: (inout [ReplayWindow], inout Bool, inout [CGWindowListOption]) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&rows, &available, &queries)
+    }
+}
+let replayServerState = ReplayServerState()
 @MainActor enum ReplayServer {
-    static var rows: [ReplayWindow] = []
-    static var available = true
-    static var queries: [CGWindowListOption] = []
+    static var available: Bool {
+        get { replayServerState.with { _, available, _ in available } }
+        set { replayServerState.with { _, available, _ in available = newValue } }
+    }
+    static var queries: [CGWindowListOption] { replayServerState.with { _, _, queries in queries } }
     static func reset(_ rows: [ReplayWindow]) {
-        self.rows = rows
-        available = true
-        queries = []
+        replayServerState.with { storedRows, available, queries in
+            storedRows = rows
+            available = true
+            queries = []
+        }
         resetReplayCache()
     }
 }
-// Both production readers are main-actor consumers in this replay. The original
-// ID reader has no actor annotation, so its stub may only run on that executor.
 func CGWindowListCopyWindowInfo(_ options: CGWindowListOption, _ relative: CGWindowID) -> Any? {
-    let rows: [ReplayWindow]? = MainActor.assumeIsolated {
-        ReplayServer.queries.append(options)
-        guard ReplayServer.available else { return nil }
-        return ReplayServer.rows.filter { !options.contains(.optionOnScreenOnly) || $0.onScreen }
+    let rows: [ReplayWindow]? = replayServerState.with { rows, available, queries in
+        queries.append(options)
+        guard available else { return nil }
+        return rows.filter { !options.contains(.optionOnScreenOnly) || $0.onScreen }
     }
     return rows?.map { [kCGWindowLayer: $0.layer, kCGWindowNumber: $0.id, kCGWindowOwnerPID: $0.pid] as [String: Any] }
+}
+
+enum CancellationMode: Equatable, Sendable { case cancellable, nonCancellable }
+func checkCancellation(_ cm: CancellationMode = .cancellable) throws(CancellationError) {
+    if cm == .cancellable && Task.isCancelled { throw CancellationError() }
+}
+func check(_ condition: Bool, _ message: @autoclosure () -> String = "") {
+    if !condition { fatalError(message()) }
 }
 
 enum Json {
