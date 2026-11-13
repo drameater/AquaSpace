@@ -27,3 +27,14 @@ extension TilingContainer {
         WindowManagerHandoff.cancelPendingForUserMutation(flipped.flatMap(\.allLeafWindowsRecursive))
     }
 }
+
+extension ConventionalWindowParentCases {
+    /// The windows whose saved intent a layout command supersedes, also when the
+    /// command changes nothing: every window of a tiling container, or the target window.
+    @MainActor func windowsOfLayoutCommand(_ target: Window?) -> [Window] {
+        switch self {
+            case .tilingContainer(let parent): parent.allLeafWindowsRecursive
+            case .floatingWindowsContainer: target.map { [$0] } ?? []
+        }
+    }
+}
