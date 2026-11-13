@@ -8,6 +8,7 @@ iconutil, lipo and codesign. No other installed app is used.
 """
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -16,12 +17,14 @@ import platform
 import plistlib
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import time
 from aquaspace_signing import SigningError, local_identity, sign_app
+from aquaspace_update import ExchangeUnsupported, exchange_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 # Used only when no upstream release tag (v<major>.<minor>.<patch>...) is reachable from HEAD.
@@ -44,6 +47,7 @@ ICON_SIZES = (16, 32, 128, 256, 512)
 ICONSET_MEMBERS = {f"icon_{points}x{points}{suffix}.png": points * scale
                    for points in ICON_SIZES for scale, suffix in ((1, ""), (2, "@2x"))}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+LOCK_NAME = ".aquaspace-build.lock"
 UNSIGNED_LAYOUT = frozenset((
     "Contents",
     "Contents/Info.plist",
@@ -271,17 +275,71 @@ def validate_signature(app, requirement):
 
 
 def publish(staged, app):
-    """Move staged to app; the previous bundle stays in place until the new one is complete."""
-    previous = None
-    if app.exists() or app.is_symlink():
-        previous = staged.parent / "previous.app"
-        os.rename(app, previous)
-    try:
+    """Put staged at app. At no moment is app absent, unless the volume cannot exchange paths.
+
+    After an exchange, staged holds the previous bundle; the caller removes it.
+    Without exchange support, two renames are used: an interruption restores the
+    previous bundle, and after a crash the next build restores it.
+    """
+    if not (app.exists() or app.is_symlink()):
         os.rename(staged, app)
-    except OSError:
-        if previous:
+        return
+    try:
+        exchange_paths(staged, app)
+        return
+    except ExchangeUnsupported:
+        pass
+    previous = staged.parent / "previous.app"
+    try:
+        os.rename(app, previous)
+        os.rename(staged, app)
+    except BaseException:
+        if not (app.exists() or app.is_symlink()) and previous.is_dir():
             os.rename(previous, app)
         raise
+
+
+def restore_stranded_build(output):
+    """Put back a previous build that a crash left between the two renames of publish."""
+    app = output / "AquaSpace.app"
+    if app.exists() or app.is_symlink():
+        return
+    stranded = [p for p in output.glob(".staging-*/previous.app") if p.is_dir() and not p.is_symlink()]
+    if len(stranded) > 1:
+        raise BuildError(f"{app} is missing and several earlier builds are left in {output}: "
+                         + ", ".join(map(str, stranded)) + ". Move one of them to " + str(app) + ", then try again.")
+    if stranded:
+        os.rename(stranded[0], app)
+        print(f"Restored the previous build that an interrupted build left at {stranded[0]}.", file=sys.stderr)
+
+
+class BuildLock:
+    """A flock on a file that is never unlinked, so that two builds cannot overlap."""
+
+    def __init__(self, directory, name=LOCK_NAME):
+        self.path, self.fd = Path(directory) / name, None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            info = os.fstat(self.fd)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+                raise BuildError(f"The build lock {self.path} has an unexpected owner or file type.")
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BuildError) as error:
+            self.__exit__()
+            if isinstance(error, BuildError):
+                raise
+            raise BuildError(f"Another AquaSpace build is using {self.path.parent}. "
+                             "Wait for it to finish, then try again.") from error
+        return self
+
+    def __exit__(self, *args):
+        # Never unlink the lock file: a new inode would let a second build in.
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
 
 def build(args, root):
@@ -289,14 +347,20 @@ def build(args, root):
     if missing:
         raise BuildError("Missing required tools: " + ", ".join(missing))
     identity, keychain = ((args.signing_identity, args.signing_keychain) if args.signing_identity else local_identity())
-    version = derive_version(root, args.version)
     source = root / ".debug/aquaspace/source"
+    # Builds share the staged source copy, and builds into one output share its staging.
+    with BuildLock(source.parent, ".aquaspace-source.lock"), BuildLock(args.output):
+        return build_locked(args, root, identity, keychain, source)
+
+
+def build_locked(args, root, identity, keychain, source):
+    version = derive_version(root, args.version)
     manifest, digest = stage_sources(root, source)
     git_hash = write_legacy_version_sources(source / "Sources/Common", version.short, version.revision, digest)
-    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
-    args.output.mkdir(parents=True, exist_ok=True)
+    restore_stranded_build(args.output)
     for leftover in args.output.glob(".staging-*"):
-        shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build.
+        shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build; this build holds the lock.
+    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
     work = Path(tempfile.mkdtemp(prefix=".staging-", dir=args.output))
     try:
         staged = work / "AquaSpace.app"

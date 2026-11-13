@@ -1,6 +1,7 @@
 """Offline builder checks: fake git, swift, macOS tools and signer; no compile, keychain or app."""
 import contextlib
 from datetime import datetime, timezone
+import fcntl
 import importlib.util
 import io
 import json
@@ -395,6 +396,10 @@ class SourceStagingTests(BuilderTest):
 
 
 
+class Crash(BaseException):
+    """Simulated power loss: no handler or cleanup runs after it."""
+
+
 class IconTests(FailureTests):
     """Finding 7: a missing or partial icon fails the build with a precise message."""
     ICON = 'resources/Assets.xcassets/AppIcon.appiconset/icon.png'
@@ -434,6 +439,89 @@ class IconTests(FailureTests):
         self.tools(['/usr/bin/iconutil', '-c', 'iconset', self.app / 'Contents/Resources/AppIcon.icns', '-o', check])
         self.assertEqual({p.name: png_size(p) for p in check.iterdir()},
                          {name: (pixels, pixels) for name, pixels in ICONSET_MEMBERS.items()})
+
+
+class PublishTests(FailureTests):
+    """Finding 8: no crash leaves the output without a complete build; builds never overlap."""
+
+    def test_publish_replaces_the_previous_build_and_leaves_no_staging(self):
+        self.stage_previous_build()
+        self.main()
+        self.assertEqual(layout(self.app), EXPECTED_LAYOUT)
+        self.assertEqual(list(self.output.glob('.staging-*')), [])
+
+    def without_exchange_and_crashing_between_renames(self, crash):
+        """Force the two-rename path and stop after the first rename."""
+        real = os.rename
+        calls = self.renames = []
+        def rename(source, target):
+            if calls and isinstance(crash, Crash): raise Crash('the builder is gone')
+            real(source, target); calls.append(target)
+            if len(calls) == 1 and Path(target).name == 'previous.app': raise crash
+        unsupported = lambda first, second: (_ for _ in ()).throw(build.ExchangeUnsupported(45, 'unsupported'))
+        return (patch.object(build, 'exchange_paths', side_effect=unsupported, create=True),
+                patch.object(build.os, 'rename', side_effect=rename))
+
+    def test_interrupt_between_the_two_renames_keeps_a_build_in_place(self):
+        self.stage_previous_build()
+        no_exchange, rename = self.without_exchange_and_crashing_between_renames(KeyboardInterrupt())
+        with no_exchange, rename, self.assertRaises(KeyboardInterrupt):
+            with contextlib.redirect_stdout(io.StringIO()):
+                build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
+        self.assertTrue((self.app / 'Contents').is_dir(), 'The output has no AquaSpace.app')
+
+    def test_next_build_restores_a_previous_build_stranded_by_a_crash(self):
+        self.stage_previous_build()
+        no_exchange, rename = self.without_exchange_and_crashing_between_renames(Crash())
+        real_rmtree = shutil.rmtree
+        def frozen(*args, **kwargs):
+            if self.renames: raise Crash('the builder is gone')  # No cleanup runs after a power loss.
+            return real_rmtree(*args, **kwargs)
+        with no_exchange, rename, patch.object(build.shutil, 'rmtree', side_effect=frozen):
+            with self.assertRaises(Crash), contextlib.redirect_stdout(io.StringIO()):
+                build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
+        self.assertFalse(self.app.exists())
+        # The next build fails before publishing; the previous build must be back in place.
+        def failing_compile(package):
+            raise build.BuildError('swift build failed with exit code 1')
+        self.tools.compile = failing_compile
+        self.assert_stops('swift build failed')
+        self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
+        self.assertEqual(list(self.output.glob('.staging-*')), [])
+
+    def test_a_running_build_blocks_a_second_build_of_the_same_output(self):
+        self.stage_previous_build()
+        lock = self.output / '.aquaspace-build.lock'
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        leftover = self.output / '.staging-other-build'
+        (leftover / 'AquaSpace.app').mkdir(parents=True)
+        self.assert_stops('Another AquaSpace build')
+        self.assertFalse(any(Path(c[0]).name == 'swift' for c in self.tools.calls))
+        self.assertTrue(leftover.is_dir(), "The other build's staging directory was deleted")
+        self.assert_previous_build_kept_except(leftover)
+
+    def test_a_running_build_blocks_a_second_build_that_shares_the_source_copy(self):
+        lock = self.root / '.debug/aquaspace/.aquaspace-source.lock'
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.output = self.root / 'other-output'
+        self.assert_stops('Another AquaSpace build')
+        self.assertFalse(any(Path(c[0]).name == 'swift' for c in self.tools.calls))
+
+    def test_build_lock_file_is_kept_after_the_build(self):
+        self.main()
+        lock = self.output / '.aquaspace-build.lock'
+        inode = lock.stat().st_ino
+        self.main()
+        self.assertEqual(lock.stat().st_ino, inode)
+
+    def assert_previous_build_kept_except(self, leftover):
+        self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
+        self.assertEqual((self.output / 'build.json').read_text(), 'previous manifest')
 
 
 if __name__ == '__main__':
