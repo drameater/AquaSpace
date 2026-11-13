@@ -33,13 +33,20 @@ from aquaspace_signing import designated_requirement, SigningError
 MANAGER_IDS = frozenset(('local.aquaspace', 'local.aquaspace.debug',
                          'bobko.aerospace', 'bobko.aerospace.debug', 'unidentified.window-manager'))
 MANAGER_EXECUTABLES = frozenset(('AquaSpace', 'AquaSpaceApp', 'AeroSpace', 'AeroSpaceApp'))
+# The journal format that this updater writes and reads. A record with a higher
+# number, or with a phase this updater does not know, was written by a newer updater.
+SCHEMA = 1
 TERMINAL_PHASES = frozenset(('committed', 'recovered', 'aborted'))
 # A record in these phases proves that no process was stopped and no file was replaced.
 PRE_STOP_PHASES = frozenset(('staging', 'prepared'))
+# --recover writes 'recovering' before its first file change. From then on, only --recover continues.
 PHASES = TERMINAL_PHASES | PRE_STOP_PHASES | frozenset((
-    'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started'))
+    'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started', 'recovering'))
 # In these phases the new bundle is in place, so a running AquaSpace can be confirmed.
 CONFIRMABLE_PHASES = frozenset(('replaced', 'launch_attempted', 'child_started'))
+# script/build-aquaspace.py creates this lock in its output folder and never removes it.
+# Every builder that creates it also writes build.json beside the app.
+BUILD_LOCK_NAME = '.aquaspace-build.lock'
 RECORD_PREFIX = '.aquaspace-update-'
 # A record is created under this name and renamed after its first journal write.
 NEW_RECORD_PREFIX = '.aquaspace-new-update-'
@@ -420,6 +427,14 @@ class InstallLock:
         except OSError as error:
             self.__exit__()
             raise UpdateError('Another installer is running, or the install lock cannot be acquired.') from error
+        try:
+            self._lock_legacy()
+        except BaseException:
+            self.__exit__()  # The with statement does not call __exit__ when __enter__ fails.
+            raise
+        return self
+
+    def _lock_legacy(self):
         primary = os.fstat(self.fd)
         for path, create in self.legacy:
             if not create and not os.path.lexists(path): continue
@@ -434,7 +449,10 @@ class InstallLock:
                 continue
             self.fds.append(fd)
             os.set_inheritable(fd, False)
-            info = os.fstat(fd)
+            try:
+                info = os.fstat(fd)
+            except OSError as error:
+                raise UpdateError(f'Cannot check the old install lock {path}: {error.strerror or error}') from error
             if info.st_uid != os.getuid():
                 self._skip(path, 'it belongs to another account'); continue
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -443,10 +461,8 @@ class InstallLock:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
-                self.__exit__()
                 raise UpdateError(f'An older AquaSpace installer is running (it holds {path}). '
                                   'Wait for it to finish, then try again.') from error
-        return self
 
     def _skip(self, path, reason):
         self.report(f'Note: the old install lock {path} cannot be used ({reason}). An older AquaSpace installer '
@@ -650,6 +666,12 @@ class Installer:
         if phase in PRE_STOP_PHASES:
             return ('No process was stopped and no file was replaced. Close this record, then run the update again:\n  '
                     + recover)
+        if phase == 'recovering':
+            return self._recover_only(transaction, state, 'A recovery of this update started but did not finish.')
+        if phase in CONFIRMABLE_PHASES and not self._target_holds_new(transaction, state):
+            return self._recover_only(transaction, state, f'{self.target} does not hold the new bundle from this update '
+                                      '(for example, a recovery was interrupted), so the update cannot be resumed '
+                                      'or confirmed.')
         restore = self._restore_hint(transaction, state)
         if not self._restart_requested(state):
             return ('This update was file-only: it starts no app. To finish it (no app is started), run:\n  ' + resume +
@@ -677,6 +699,18 @@ class Installer:
         return ('The new AquaSpace was not started. When no window manager is running, finish the update '
                 'and start the new AquaSpace once:\n  ' + resume + started + '\n' + restore)
 
+    def _recover_only(self, transaction, state, why):
+        """Guidance for a record that only --recover can continue."""
+        recover = self.command('--recover', transaction)
+        kept = ('' if self._restart_requested(state) or not state.get('retained')
+                else ' (a stock AeroSpace that the update kept running can stay)')
+        if state.get('had_target'):
+            return (f'{why} Only --recover can continue it. To finish putting the previous version back (files only; '
+                    f'no app is started), quit every window manager{kept}, then run:\n  ' + recover +
+                    '\nThen start AquaSpace yourself:\n  ' + shlex.join(['open', str(self.target)]))
+        return (f'{why} Only --recover can continue it. To close this record (no app is started), quit every window '
+                f'manager{kept}, then run:\n  ' + recover)
+
     def _restore_hint(self, transaction, state):
         recover = self.command('--recover', transaction)
         if state.get('had_target'):
@@ -698,26 +732,38 @@ class Installer:
 
     @staticmethod
     def _read_record(record):
-        """Return (journal, None) for a readable record of any target, or (None, why it is unreadable)."""
-        if record.is_symlink(): return None, 'the record is a symbolic link'
-        if not record.is_dir(): return None, 'the record is not a directory'
+        """Return (journal, None, False) for a readable record of any target. Otherwise return
+        (None, why it is unreadable, whether a newer updater wrote it)."""
+        if record.is_symlink(): return None, 'the record is a symbolic link', False
+        if not record.is_dir(): return None, 'the record is not a directory', False
         try:
             fd = os.open(record / 'journal.json', os.O_RDONLY | os.O_NOFOLLOW)
         except OSError as error:
             return None, ('its journal is a symbolic link' if error.errno == errno.ELOOP
-                          else f'its journal cannot be read: {error.strerror}')
+                          else f'its journal cannot be read: {error.strerror}'), False
         try:
             with os.fdopen(fd) as stream: data = json.load(stream)
         except (OSError, ValueError) as error:
-            return None, f'its journal is not valid JSON ({error})'
-        if (not isinstance(data, dict) or data.get('schema') != 1 or data.get('phase') not in PHASES
-                or not isinstance(data.get('target'), str)):
-            return None, 'its journal has an unknown format'
-        return data, None
+            return None, f'its journal is not valid JSON ({error})', False
+        schema = data.get('schema') if isinstance(data, dict) else None
+        if type(schema) is int and schema > SCHEMA:
+            return None, f'its journal has format {schema}; this updater knows format {SCHEMA}', True
+        if schema != SCHEMA or type(schema) is not int or not isinstance(data.get('target'), str):
+            return None, 'its journal has an unknown format', False
+        if isinstance(data.get('phase'), str) and data['phase'] not in PHASES:
+            return None, f'its journal has the phase {data["phase"]!r}, which this updater does not know', True
+        if data.get('phase') not in PHASES:
+            return None, 'its journal has an unknown format', False
+        return data, None, False
 
     def _for_target(self, target):
         """The same updater for another installation in this directory, for its guidance."""
         return Installer(self.source, target, self.system, self.timeout, self.lock_parent, self.ready_timeout)
+
+    @staticmethod
+    def _newer_record_hint():
+        return ('Finish or recover it with the updater version that wrote it (for example, a newer checkout of '
+                'AquaSpace). This updater changes nothing in it: it can hold the only copy of the previous AquaSpace.')
 
     def _set_aside_hint(self, record):
         return ('If no update of AquaSpace is running, set this record aside. It is renamed in the same '
@@ -726,7 +772,10 @@ class Installer:
     def journal(self, transaction):
         if transaction.parent != self.target.parent or not transaction.name.startswith(RECORD_PREFIX):
             raise UpdateError('Recovery record is outside this installation directory.')
-        data, reason = self._read_record(transaction)
+        data, reason, newer = self._read_record(transaction)
+        if newer:
+            raise UpdateError(f'This update record was written by a newer AquaSpace updater ({reason}). '
+                              f'No process actions taken: {transaction}\n' + self._newer_record_hint())
         if data is None:
             raise UpdateError(f'Unreadable update record ({reason}); no process actions taken: {transaction}\n'
                               + self._set_aside_hint(transaction))
@@ -744,18 +793,21 @@ class Installer:
                 and not journal.exists() and not journal.is_symlink())
 
     def _scan(self):
-        """Every record in this directory as (record, journal or None, why it is unreadable)."""
+        """Every record in this directory as (record, journal or None, why it is unreadable, newer)."""
         for record in sorted(self.target.parent.glob(RECORD_PREFIX + '*')):
             if self._abandoned(record): continue
             yield (record, *self._read_record(record))
 
     def pending_transactions(self):
-        return [record for record, state, _ in self._scan()
+        return [record for record, state, _, _ in self._scan()
                 if state and state['target'] == str(self.target) and state['phase'] not in TERMINAL_PHASES]
 
     def _refuse_blocking_records(self):
         """An unreadable record, or an unfinished one of any target here, blocks a new install."""
-        for record, state, reason in self._scan():
+        for record, state, reason, newer in self._scan():
+            if newer:
+                raise UpdateError(f'An update record from a newer AquaSpace updater blocks new installs ({reason}): '
+                                  f'{record}\n' + self._newer_record_hint())
             if state is None:
                 raise UpdateError(f'An unreadable update record blocks new installs ({reason}): {record}\n'
                                   + self._set_aside_hint(record))
@@ -806,7 +858,7 @@ class Installer:
                 if _owned_directory(record) and set(os.listdir(record)) <= {'journal.json.tmp'}:
                     shutil.rmtree(record)
                 continue
-            state, _ = self._read_record(record)
+            state = self._read_record(record)[0]
             # Unreadable records block installs elsewhere; another target's records are its own.
             if state is None or state['target'] != str(self.target): continue
             if state['phase'] in PRE_STOP_PHASES:
@@ -833,17 +885,16 @@ class Installer:
         for record in terminal[:-KEEP_COMPLETED_RECORDS]:
             if _owned_directory(record): shutil.rmtree(record)
 
-    @staticmethod
-    def _holds_other_bundle(staged, state):
-        """True if new.app is a complete bundle that is not this update's staged copy."""
+    def _holds_other_bundle(self, staged, state):
+        """True if new.app is a complete bundle that is not provably this update's staged copy."""
         executable = staged / 'Contents/MacOS/AquaSpace'
         if staged.is_symlink() or not executable.is_file() or not state.get('main_sha256'):
             return False
         try:
             bundle_metadata(staged)
-            return sha256(executable) != state['main_sha256']
-        except (UpdateError, OSError):
+        except UpdateError:
             return False
+        return not self._matches(staged, state['main_sha256'], state.get('requirement'))
 
     def archive_completed_backups(self):
         with self._lock():
@@ -896,6 +947,13 @@ class Installer:
             raise UpdateError(f'The update record {transaction} holds more bundles than one update can leave. '
                               'The updater cannot tell which one is the previous AquaSpace; no files were changed.')
         if len(new) == 2:
+            # Only the signature binds the other files to the main executable. If both seals
+            # verify, both bundles hold the same build, and the order above decides.
+            for path in new:
+                if not self._matches(path, state.get('main_sha256'), state.get('requirement')):
+                    raise UpdateError(f'{new[0]} and {new[1]} have the same main executable, and the signature of '
+                                      f'{path} does not verify. The updater cannot tell which one is the previous '
+                                      'AquaSpace, so it does not guess. No files were changed.')
             return new[0], (new[1] if state.get('had_target') else None)
         return (new[0] if new else None), (old[0] if old else None)
 
@@ -920,10 +978,29 @@ class Installer:
             self.checkpoint('upgraded')
 
     def _check_new(self, path, state):
+        self._verify_recorded(path, state.get('main_sha256'), state.get('requirement'), 'The bundle from this update')
+
+    def _verify_recorded(self, path, digest, requirement, what):
+        """Raise unless path holds the recorded bundle.
+
+        The main executable's hash alone is not proof: two bundles can share it and differ
+        in other files, which only the code signature binds to it. So the signature must
+        verify, and its designated requirement must equal the recorded one if there is one.
+        """
         bundle_metadata(path)
-        if sha256(path / 'Contents/MacOS/AquaSpace') != state.get('main_sha256'):
-            raise UpdateError(f'The bundle from this update changed on disk; refusing to use it: {path}')
-        self.system.verify_bundle(path)
+        if sha256(path / 'Contents/MacOS/AquaSpace') != digest:
+            raise UpdateError(f'{what} changed on disk; refusing to use it: {path}\nNo files were changed.')
+        actual = self.system.verify_bundle(path)
+        if requirement is not None and actual != requirement:
+            raise UpdateError(f'{what} is signed by another identity than the one this update recorded; refusing '
+                              f'to use it: {path}\nRecorded: {requirement}\nFound: {actual}\nNo files were changed.')
+
+    def _matches(self, path, digest, requirement):
+        try:
+            self._verify_recorded(path, digest, requirement, 'The bundle')
+        except (UpdateError, OSError, subprocess.SubprocessError):
+            return False
+        return True
 
     def _swap_into_target(self, incoming, outgoing):
         """Move `incoming` to the target and the target's bundle to `outgoing`."""
@@ -963,6 +1040,8 @@ class Installer:
         self._phase(transaction, state, 'replaced', replaced_at=self.system.time())
 
     def _restore_previous(self, transaction, state):
+        """Put the previous bundle at the target. Every check runs before the first file
+        change, and the journal records that a recovery began before that change."""
         unconfirmed = transaction / 'unconfirmed.app'
         new, old = self._locate(transaction, state)
         target_present = self.target.exists() or self.target.is_symlink()
@@ -972,31 +1051,30 @@ class Installer:
             return  # A first installation has no old bundle; leave its files available.
         if old == self.target:
             if new is not None and new != transaction / 'new.app' and new != unconfirmed:
+                self._begin_recovery(transaction, state)
                 replace_directory(new, unconfirmed)
             return
-        bundle_metadata(old)
-        if sha256(old / 'Contents/MacOS/AquaSpace') != state.get('old_sha256'):
-            raise UpdateError(f'The previous AquaSpace bundle in this record changed on disk: {old}\n'
-                              'No files were changed.')
-        self.system.verify_bundle(old)
+        self._verify_recorded(old, state.get('old_sha256'), state.get('old_requirement'),
+                              'The previous AquaSpace bundle in this record')
+        if target_present and new != self.target:
+            raise UpdateError('The installation changed after this update; refusing to overwrite it.')
+        self._begin_recovery(transaction, state)
         if not target_present:
             replace_directory(old, self.target)
-        elif new == self.target:
-            self._swap_into_target(old, unconfirmed)
         else:
-            raise UpdateError('The installation changed after this update; refusing to overwrite it.')
+            self._swap_into_target(old, unconfirmed)
+
+    def _begin_recovery(self, transaction, state):
+        """After this journal write, every command knows that the target may hold either bundle."""
+        if state['phase'] != 'recovering':
+            self._phase(transaction, state, 'recovering', recovering_from=state['phase'])
 
     def _check_restored(self, transaction, state):
-        """Prove by content that the target holds the previous bundle before reporting it."""
+        """Prove by content and signature that the target holds the previous bundle before reporting it."""
         if not state.get('had_target'): return
-        executable = self.target / 'Contents/MacOS/AquaSpace'
-        try:
-            restored = (not self.target.is_symlink() and executable.is_file()
-                        and sha256(executable) == state.get('old_sha256'))
-        except OSError:
-            restored = False
-        if not restored:
-            raise UpdateError(f'{self.target} does not hold the previous AquaSpace from this update. '
+        if not self._matches(self.target, state.get('old_sha256'), state.get('old_requirement')):
+            raise UpdateError(f'{self.target} does not hold the previous AquaSpace from this update: its main '
+                              'executable, its code signature or its signing identity differs. '
                               f'The record stays open: {transaction}')
 
     # Processes -------------------------------------------------------------
@@ -1029,15 +1107,25 @@ class Installer:
             if isinstance(state.get(key), (int, float)): return state[key]
         return self._journal_time(transaction)
 
+    def _target_holds_new(self, transaction, state):
+        """Whether the target is this update's new bundle: the same directory and main executable."""
+        try:
+            new, _ = self._locate(transaction, state)
+            return new == self.target and sha256(self.target / 'Contents/MacOS/AquaSpace') == state.get('main_sha256')
+        except (UpdateError, OSError):
+            return False
+
     def _runs_installed_update(self, process, transaction, state):
         """True for the recorded child, or for any instance of the target that started
-        after the new bundle was in place (for example, after a restart of the Mac)."""
+        after the new bundle was in place (for example, after a restart of the Mac).
+        Never while a recovery runs, or while the target holds another bundle."""
         if (process.bundle_id != 'local.aquaspace' or process.uid != os.getuid()
                 or process.executable != self.target / 'Contents/MacOS/AquaSpace'):
             return False
+        if state['phase'] not in CONFIRMABLE_PHASES or not self._target_holds_new(transaction, state):
+            return False
         if state.get('child') and self._same_process(process, state['child']):
             return True
-        if state['phase'] not in CONFIRMABLE_PHASES: return False
         # The kernel's start time and time.time() read the same clock.
         return process.started[0] + process.started[1] / 1e6 >= self._installed_since(transaction, state)
 
@@ -1129,8 +1217,18 @@ class Installer:
         failure.__cause__ = error
         return failure
 
-    def _check_identity(self, requirement, retry):
-        installed = self.system.requirement(self.target)
+    def _check_manifest_present(self):
+        """A build output of script/build-aquaspace.py must have its manifest; other sources may lack one."""
+        manifest = self.source.parent / 'build.json'
+        if manifest.exists(): return
+        if (self.source.parent / BUILD_LOCK_NAME).exists():
+            raise UpdateError(f'{self.source.parent} is an output folder of the AquaSpace builder, but it has no '
+                              f'build manifest ({manifest.name}). The builder writes the manifest before the app, so '
+                              'a build was interrupted or the manifest was removed. Build again, then install again. '
+                              'Nothing was changed.')
+        self.report(f'Note: {manifest} does not exist, so the build manifest check was skipped.')
+
+    def _check_identity(self, requirement, installed, retry):
         if installed == requirement:
             return False
         if retry is None:
@@ -1158,6 +1256,7 @@ class Installer:
             metadata = bundle_metadata(self.source)
             if self.target == self.source or self.target in self.source.parents or self.source in self.target.parents:
                 raise UpdateError('Build and installation paths must be separate.')
+            self._check_manifest_present()
             requirement = self.system.verify_bundle(self.source)
             existing = self.system.managers()
             old = existing[0] if len(existing) == 1 else None
@@ -1171,17 +1270,19 @@ class Installer:
             if had_target: bundle_metadata(self.target)
             if old and not had_target: raise UpdateError('The running installation disappeared.')
             identity_changed = False
+            old_requirement = self.system.requirement(self.target) if had_target else None
             if had_target:
                 retry = None if allow_identity_change else shlex.join(
                     ['python3', str(INSTALLER_SCRIPT), '--source', str(self.source), '--target', str(self.target),
                      *(['--restart'] if restart else []), *(['--allow-running-stock'] if allow_running_stock else []),
                      *(['--ready-timeout', repr(float(self.ready_timeout))] if restart and self.ready_timeout != READY_TIMEOUT else []),
                      '--allow-identity-change'])
-                identity_changed = self._check_identity(requirement, retry)
-            state = dict(schema=1, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),
+                identity_changed = self._check_identity(requirement, old_requirement, retry)
+            state = dict(schema=SCHEMA, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),
                          had_target=had_target, old=old.record() if old else None, requirement=requirement,
                          identity_changed=identity_changed, old_bundle=_inode(self.target) if had_target else None,
                          old_sha256=sha256(self.target / 'Contents/MacOS/AquaSpace') if had_target else None,
+                         old_requirement=old_requirement,
                          restart=restart, retained=[p.record() for p in retained])
             transaction = self._begin(state)
             signaled = False
@@ -1199,7 +1300,9 @@ class Installer:
                     if (manifest.get('app_sha256') != main_hash or manifest.get('version') != state['version'] or
                             ('cli_sha256' in manifest and manifest['cli_sha256'] != cli_hash) or
                             ('designated_requirement' in manifest and manifest['designated_requirement'] != requirement)):
-                        raise UpdateError('The staged app/CLI does not match its build manifest.')
+                        raise UpdateError(f'The staged app/CLI does not match its build manifest {manifest_path}. '
+                                          'An interrupted build can leave them unmatched. Build again (the builder '
+                                          'writes the app and its manifest as a pair), then install again.')
                     atomic_json(transaction / 'build.json', manifest)
                 self._phase(transaction, state, 'prepared', main_sha256=main_hash, cli_sha256=cli_hash,
                             new_bundle=_inode(staged))
@@ -1249,6 +1352,9 @@ class Installer:
                 self.summary = (self._close_unchanged(transaction, state) + '\nThere was nothing to resume. '
                                 f'The record is closed: {transaction}\nRun the update again.')
                 return transaction
+            if phase == 'recovering' or (phase in CONFIRMABLE_PHASES and not self._target_holds_new(transaction, state)):
+                raise UpdateError('This update cannot be resumed; nothing was changed.\n'
+                                  + self.next_steps(transaction, state))
             restart = self._restart_requested(state)
             retained = self._allowed_managers(transaction, state, 'resume',
                                               'start the new AquaSpace' if restart else 'finish the update')
@@ -1290,12 +1396,17 @@ class Installer:
             phase = state['phase']
             if phase in TERMINAL_PHASES:
                 raise UpdateError('This update is already complete; there is nothing to confirm.')
+            if phase == 'recovering':
+                raise UpdateError('This update cannot be confirmed; nothing was changed.\n'
+                                  + self.next_steps(transaction, state))
             if phase not in CONFIRMABLE_PHASES:
                 raise UpdateError('This update has not finished replacing the files, so there is nothing to confirm.\n'
                                   + self.next_steps(transaction, state))
-            new, _ = self._locate(transaction, state)
-            if new != self.target or sha256(self.target / 'Contents/MacOS/AquaSpace') != state.get('main_sha256'):
-                raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm.')
+            if not (self._target_holds_new(transaction, state)
+                    and self._matches(self.target, state.get('main_sha256'), state.get('requirement'))):
+                raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm. '
+                                  'Nothing was changed.\n' + self._recover_only(
+                                      transaction, state, f'{self.target} does not hold the new bundle from this update.'))
             managers = self.system.managers()
             if len(managers) != 1 or not self._runs_installed_update(managers[0], transaction, state):
                 raise UpdateError(self._confirm_refusal(transaction, state, managers))
@@ -1333,14 +1444,15 @@ class Installer:
             step = f'Quit it, then {finish} with:\n  {resume}'
         return f'{reason} Nothing was confirmed.\n{step}\n' + self._restore_hint(transaction, state)
 
-    def set_aside(self, record):
+    def set_aside(self, record, allow_newer=False):
         """Rename an unreadable record in its folder so that it stops blocking installs.
 
         Nothing is deleted, and no process is started or stopped. It refuses when the
-        record could still matter: it is readable (use the commands it names), it
-        changed in the last LAUNCH_SETTLE_SECONDS (an updater or a launch may still
-        be in progress), or it holds a bundle while the installation is missing or
-        damaged (it may hold the only copy).
+        record could still matter: it is readable (use the commands it names), a newer
+        updater wrote it (unless allow_newer), it changed in the last
+        LAUNCH_SETTLE_SECONDS (an updater or a launch may still be in progress), or it
+        holds a bundle while the installation is missing or damaged (it may hold the
+        only copy).
         """
         record = canonical(record)
         with self._lock():
@@ -1348,11 +1460,16 @@ class Installer:
                 raise UpdateError('Only an update record in the installation folder can be set aside.')
             if not os.path.lexists(record):
                 raise UpdateError(f'No update record at {record}.')
-            state, _ = self._read_record(record)
+            state, reason, newer = self._read_record(record)
             if state is not None:
                 guide = self.next_steps if state['target'] == str(self.target) else self._for_target(state['target']).next_steps
                 raise UpdateError('This update record is readable, so it is not set aside. Use the commands for its state:\n'
                                   + guide(record, state))
+            if newer and not allow_newer:
+                raise UpdateError(f'This update record was written by a newer AquaSpace updater ({reason}), so it '
+                                  f'is not set aside: {record}\n' + self._newer_record_hint() +
+                                  '\nOnly if that updater is no longer available and no update is running, add '
+                                  '--allow-newer-record to this command to set the record aside anyway.')
             info = os.lstat(record)
             if info.st_uid != os.getuid():
                 raise UpdateError(f'{record} belongs to another account. Ask an administrator to move it.')
@@ -1375,10 +1492,13 @@ class Installer:
             while os.path.lexists(aside): aside = aside.with_name(aside.name + '-1')
             os.rename(record, aside)
             sync_directory(self.target.parent)
-            self.summary = (f'Set the unreadable update record aside: {aside}\n'
+            kind = 'update record from a newer updater' if newer else 'unreadable update record'
+            self.summary = (f'Set the {kind} aside: {aside}\n'
                             'Nothing was deleted, and no app was started or stopped.')
             if bundles:
-                self.summary += f'\nIt still holds {", ".join(bundles)}. Remove it yourself when you no longer need it.'
+                self.summary += (f'\nThe record holds {", ".join(bundles)}. Any of them can be the previous version '
+                                 f'of AquaSpace. They stay in {aside} until you remove them yourself; '
+                                 'the updater never reads or removes them.')
             return aside
 
     def recover(self, transaction):
@@ -1394,10 +1514,14 @@ class Installer:
                                 f'The update record is closed: {transaction}')
                 return transaction
             self._allowed_managers(transaction, state, 'recover', 'restore the previous files')
-            self._record_bundles(transaction, state)
-            self._restore_previous(transaction, state)
-            self._check_restored(transaction, state)
-            self._phase(transaction, state, 'recovered')
+            try:
+                self._record_bundles(transaction, state)
+                self._restore_previous(transaction, state)
+                self._check_restored(transaction, state)
+                self._phase(transaction, state, 'recovered')
+            except BaseException as error:
+                if state['phase'] != 'recovering': raise  # Nothing was changed; the error says why.
+                raise self._failure(transaction, state, error, nothing_stopped=False)
             if state.get('had_target'):
                 self.summary = ('Restored the previous AquaSpace files; no app was started. To start AquaSpace:\n  '
                                 + shlex.join(['open', str(self.target)]))
@@ -1408,6 +1532,17 @@ class Installer:
                                 'No app was started.')
             self.summary += f'\nRecord: {transaction}'
             return transaction
+
+
+def command_line_installer(source, target, system, ready_timeout=READY_TIMEOUT):
+    """The Installer of install-aquaspace.py, with its locks. Other tools that act on a
+    real installation build theirs here too, so that they cannot overlap with it."""
+    # One lock for all of this user's updates, with any --target directory or spelling.
+    # Older updaters locked /tmp (created there at each boot) or the target folder
+    # (locked only if the file is there; this updater never creates it).
+    return Installer(source, target, system, lock_parent=USER_STATE_DIRECTORY, ready_timeout=ready_timeout,
+                     legacy_lock_parents=LEGACY_LOCK_DIRECTORIES,
+                     existing_legacy_lock_parents=(canonical(target).parent,))
 
 
 EXIT_CODES = f'''exit status:
@@ -1429,6 +1564,7 @@ def main(argv=None):
     parser.add_argument('--confirm', type=Path, metavar='UPDATE_RECORD', help='Verify that the new AquaSpace from an update controls windows, then complete the update; never stops or launches an app. It accepts the started child, or a later instance of the installed app that started after the new files were in place')
     parser.add_argument('--recover', type=Path, metavar='UPDATE_RECORD', help='Restore files from an unfinished update; never launches an app. Needs all managers stopped, except the stock AeroSpace that a file-only update kept running, unless the record proves nothing was stopped')
     parser.add_argument('--set-aside', type=Path, metavar='UPDATE_RECORD', help='Rename an unreadable update record in its folder so that it stops blocking installs; deletes nothing and never starts or stops apps')
+    parser.add_argument('--allow-newer-record', action='store_true', help='With --set-aside: also set aside a record that a newer updater wrote. Use it only if that updater is no longer available and no update is running')
     parser.add_argument('--archive-backups', action='store_true', help=f'Archive bundles from completed updates and keep only the newest {KEEP_COMPLETED_RECORDS} completed records; never starts or stops apps')
     parser.add_argument('--allow-running-stock', action='store_true', help='File-only repair of inactive AquaSpace while the sole stock AeroSpace remains running')
     parser.add_argument('--allow-identity-change', action='store_true', help='Install a build signed with a different identity; macOS then asks for Accessibility permission again')
@@ -1439,6 +1575,8 @@ def main(argv=None):
         parser.error('--restart, --resume, --confirm, --recover, --set-aside and --archive-backups cannot be combined')
     if args.allow_running_stock and any(modes):
         parser.error('--allow-running-stock is only available for file-only installation')
+    if args.allow_newer_record and not args.set_aside:
+        parser.error('--allow-newer-record is only available with --set-aside')
     if args.allow_identity_change and (args.resume or args.confirm or args.recover or args.set_aside or args.archive_backups):
         parser.error('--allow-identity-change is only available when installing')
     if args.ready_timeout is not None:
@@ -1447,18 +1585,15 @@ def main(argv=None):
         if not 0 < args.ready_timeout <= 3600:
             parser.error('--ready-timeout must be between 0 and 3600 seconds')
     try:
-        # One lock for all of this user's updates, with any --target directory or spelling.
-        installer = Installer(args.source, args.target, NativeSystem(), lock_parent=USER_STATE_DIRECTORY,
-                              ready_timeout=args.ready_timeout or READY_TIMEOUT,
-                              legacy_lock_parents=LEGACY_LOCK_DIRECTORIES,
-                              existing_legacy_lock_parents=(canonical(args.target).parent,))
+        installer = command_line_installer(args.source, args.target, NativeSystem(),
+                                           ready_timeout=args.ready_timeout or READY_TIMEOUT)
         if args.archive_backups:
             installer.archive_completed_backups()
             installer.summary = 'Completed update backups archived and old records pruned; no app launched or stopped.'
         elif args.resume: installer.resume(args.resume)
         elif args.confirm: installer.confirm(args.confirm)
         elif args.recover: installer.recover(args.recover)
-        elif args.set_aside: installer.set_aside(args.set_aside)
+        elif args.set_aside: installer.set_aside(args.set_aside, allow_newer=args.allow_newer_record)
         else: installer.install(restart=args.restart, allow_running_stock=args.allow_running_stock,
                                 allow_identity_change=args.allow_identity_change)
         print(installer.summary)

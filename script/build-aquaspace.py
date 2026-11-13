@@ -17,6 +17,7 @@ import platform
 import plistlib
 import re
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -24,7 +25,7 @@ import sys
 import tempfile
 import time
 from aquaspace_signing import SigningError, local_identity, sign_app
-from aquaspace_update import ExchangeUnsupported, exchange_paths
+from aquaspace_update import BUILD_LOCK_NAME, ExchangeUnsupported, exchange_paths, full_sync, sync_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 # Used only when no upstream release tag (v<major>.<minor>.<patch>...) is reachable from HEAD.
@@ -50,7 +51,10 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # --version is written into Swift source and Info.plist. These characters need no
 # escape in a Swift or JSON string literal, a plist, or a file name.
 VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
-LOCK_NAME = ".aquaspace-build.lock"
+# The installer requires build.json in a folder that has this lock file.
+LOCK_NAME = BUILD_LOCK_NAME
+# The previous build's manifest, carried in the staging folder with the previous app during a publish.
+PREVIOUS_MANIFEST = "previous-build.json"
 UNSIGNED_LAYOUT = frozenset((
     "Contents",
     "Contents/Info.plist",
@@ -302,6 +306,44 @@ def publish(staged, app):
         raise
 
 
+def directory_identity(path):
+    """The device and inode of a directory, or None if it is absent. A rename keeps both."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def carry_previous_manifest(published, staging):
+    """Copy the output's manifest into the staging folder, durably, before it is replaced.
+
+    A crash between the two renames of publish leaves the previous app in the
+    staging folder. Its manifest then waits beside it, and both go back together.
+    """
+    if not published.exists():
+        return
+    with (staging / PREVIOUS_MANIFEST).open("wb") as stream:
+        stream.write(published.read_bytes())
+        stream.flush()
+        full_sync(stream.fileno())
+    sync_directory(staging)
+
+
+def restore_manifest(staging, published):
+    """Put back the manifest carried in staging. If the previous build had none, remove the new one.
+
+    It copies and never moves the carried file, so it can run again after a crash.
+    """
+    carried = staging / PREVIOUS_MANIFEST
+    if carried.is_file():
+        temporary = published.with_name(published.name + ".tmp")
+        shutil.copyfile(carried, temporary)
+        os.replace(temporary, published)
+    elif published.exists() or published.is_symlink():
+        published.unlink()
+
+
 def restore_stranded_build(output):
     """Put back a previous build that a crash left between the two renames of publish."""
     app = output / "AquaSpace.app"
@@ -312,6 +354,9 @@ def restore_stranded_build(output):
         raise BuildError(f"{app} is missing and several earlier builds are left in {output}: "
                          + ", ".join(map(str, stranded)) + ". Move one of them to " + str(app) + ", then try again.")
     if stranded:
+        # The output holds the crashed build's manifest. Put the app's own manifest back
+        # first, so the output never holds an app beside the manifest of another app.
+        restore_manifest(stranded[0].parent, output / "build.json")
         os.rename(stranded[0], app)
         print(f"Restored the previous build that an interrupted build left at {stranded[0]}.", file=sys.stderr)
 
@@ -381,18 +426,17 @@ def build_locked(args, root, identity, keychain, source):
             "designated_requirement": requirement}, indent=2) + "\n")
         app = args.output / "AquaSpace.app"
         # The manifest goes first: the output never holds an app without the manifest of that
-        # app. After an interruption between the two steps, the installer rejects the mismatch.
+        # app. After a power loss between the two steps, the installer rejects the mismatch.
         published = args.output / "build.json"
-        previous = published.read_bytes() if published.exists() else None
+        carry_previous_manifest(published, work)
         os.replace(work / "build.json", published)
+        staged_directory = directory_identity(staged)
         try:
             publish(staged, app)
         except BaseException:
-            if previous is None:
-                published.unlink()
-            else:
-                (work / "previous-build.json").write_bytes(previous)
-                os.replace(work / "previous-build.json", published)
+            # Decide by what is on disk: an exchange can complete before an error or Ctrl-C.
+            if directory_identity(app) != staged_directory:
+                restore_manifest(work, published)
             raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -463,15 +507,16 @@ def run_installer(arguments):
     Ctrl-C reaches the installer directly, because it is in the same process
     group. Wait for it to report what remains: never kill it while it may be
     changing files (subprocess.run would send SIGKILL after 0.25 s).
+    The builder ignores Ctrl-C from before the start until the installer exits,
+    so no interrupt can leave the installer without a parent that reports its
+    status. A handler, not SIG_IGN: the installer must not inherit it.
     """
     sys.stdout.flush()
-    process = subprocess.Popen(arguments)
-    while True:
-        try:
-            code = process.wait()
-            break
-        except KeyboardInterrupt:
-            continue
+    previous = signal.signal(signal.SIGINT, lambda number, frame: None)
+    try:
+        code = subprocess.Popen(arguments).wait()
+    finally:
+        signal.signal(signal.SIGINT, previous)
     return code if code >= 0 else 128 - code  # Killed by a signal: report it as a shell does.
 
 

@@ -1084,6 +1084,27 @@ class LockTests(unittest.TestCase):
     def test_legacy_location_equal_to_the_user_lock_is_not_locked_twice(self):
         with update.InstallLock(self.root, legacy=[self.root]): pass
 
+    def test_failed_check_of_a_legacy_lock_closes_every_lock_it_opened(self):
+        legacy = self.root / 'legacy'; legacy.mkdir()
+        (legacy / self.name).write_text('')
+        legacy_inode = (legacy / self.name).stat().st_ino
+        opened, real_open, real_fstat = [], os.open, os.fstat
+        def recording_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs); opened.append(fd); return fd
+        def failing_fstat(fd):
+            info = real_fstat(fd)
+            if info.st_ino == legacy_inode: raise OSError(errno.EIO, 'Simulated I/O error')
+            return info
+        with patch.object(update.os, 'open', side_effect=recording_open), \
+             patch.object(update.os, 'fstat', side_effect=failing_fstat):
+            with self.assertRaises((update.UpdateError, OSError)):
+                with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
+        self.assertEqual(len(opened), 2)
+        for fd in opened:
+            with self.assertRaises(OSError, msg=f'descriptor {fd} stayed open'): os.fstat(fd)
+        # The lock is free again, so the next installer can take it.
+        with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
+
 
 class CommandLineTests(InstallerFixture):
     def main(self, *args):

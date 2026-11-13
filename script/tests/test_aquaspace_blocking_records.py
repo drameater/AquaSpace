@@ -152,6 +152,93 @@ class SetAsideTests(BlockingRecordFixture):
         self.assertEqual(self.system.events, [])
 
 
+class NewerRecordTests(BlockingRecordFixture):
+    """A record that a newer updater wrote is not damaged: no command hides or changes it."""
+
+    def newer_record(self, **journal):
+        """A pending record whose new.app holds the previous AquaSpace, as an interrupted exchange leaves it."""
+        self.system.add(100)
+        with base.hard_crash(self.installer, self.system, 'exchanged'): self.activate()
+        record = self.pending()[0]
+        self.assertEqual((record / 'new.app/Contents/MacOS/AquaSpace').read_text(), 'old')
+        state = json.loads((record / 'journal.json').read_text())
+        state.update(journal)
+        (record / 'journal.json').write_text(json.dumps(state))
+        self.system.running.clear()
+        self.system.events.clear()
+        return self.age(record)
+
+    CASES = {'newer schema': dict(schema=2), 'unknown phase': dict(phase='swapping'),
+             'newer schema and unknown fields': dict(schema=7, phase='verifying', target=['moved'])}
+
+    def test_every_command_refuses_a_newer_record_and_never_suggests_setting_it_aside(self):
+        commands = {
+            'install': lambda record: self.installer.install(),
+            'install --restart': lambda record: self.installer.install(restart=True),
+            '--resume': lambda record: self.installer.resume(record),
+            '--confirm': lambda record: self.installer.confirm(record),
+            '--recover': lambda record: self.installer.recover(record),
+            '--set-aside': lambda record: self.installer.set_aside(record),
+        }
+        for case, journal in self.CASES.items():
+            for name, command in commands.items():
+                with self.subTest(case=case, command=name):
+                    self.setUp()
+                    record = self.newer_record(**journal)
+                    before, installed = self.contents(record), self.contents(self.target)
+                    with self.assertRaises(update.UpdateError) as caught: command(record)
+                    message = str(caught.exception)
+                    self.assertIn('newer AquaSpace updater', message)
+                    self.assertIn('the updater version that wrote it', message)
+                    if name != '--set-aside':
+                        self.assertNotIn('--set-aside', message)
+                    self.assertEqual(self.contents(record), before)
+                    self.assertEqual(self.contents(self.target), installed)
+                    self.assertNotIn('stop', self.system.events)
+                    self.assertNotIn('launch', self.system.events)
+
+    def test_tidying_leaves_a_newer_record_alone(self):
+        record = self.newer_record(schema=2)
+        before = self.contents(record)
+        self.installer.archive_completed_backups()
+        self.assertEqual(self.contents(record), before)
+
+    def test_set_aside_of_a_newer_record_needs_the_explicit_flag_and_names_its_bundles(self):
+        record = self.newer_record(schema=2)
+        aside = self.installer.set_aside(record, allow_newer=True)
+        self.assertFalse(os.path.lexists(record))
+        self.assertEqual((aside / 'new.app/Contents/MacOS/AquaSpace').read_text(), 'old')
+        summary = self.installer.summary
+        self.assertIn('new.app', summary)
+        self.assertIn('previous version', summary)
+        self.assertIn(f'stay in {aside}', summary)
+
+    def test_command_line_flag_reaches_set_aside_and_is_refused_elsewhere(self):
+        record = self.newer_record(schema=2)
+        def main(*args):
+            err = io.StringIO()
+            with patch.object(update, 'NativeSystem', return_value=self.system), \
+                 patch.object(update, 'USER_STATE_DIRECTORY', self.root / 'state'), \
+                 patch.object(update, 'LEGACY_LOCK_DIRECTORIES', ()), \
+                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                try: return update.main(['--target', str(self.target), *map(str, args)]), err.getvalue()
+                except SystemExit as exit: return exit.code, err.getvalue()
+        self.assertEqual(main('--set-aside', record)[0], 1)
+        self.assertTrue(record.is_dir())
+        self.assertEqual(main('--resume', record, '--allow-newer-record')[0], 2)
+        self.assertEqual(main('--set-aside', record, '--allow-newer-record'), (0, ''))
+        self.assertFalse(os.path.lexists(record))
+
+    def test_damaged_journal_is_still_called_unreadable(self):
+        for journal in (dict(schema=0), dict(schema='2'), dict(schema=True), dict(phase=3)):
+            with self.subTest(journal=journal):
+                self.setUp()
+                record = self.newer_record(**journal)
+                with self.assertRaises(update.UpdateError) as caught: self.installer.install()
+                self.assertNotIn('newer', str(caught.exception))
+                self.assertEqual(self.set_aside_command(str(caught.exception)), record)
+
+
 class OtherTargetTests(BlockingRecordFixture):
     """A record for another --target in the same directory belongs to that installation."""
 

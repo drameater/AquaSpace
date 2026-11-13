@@ -38,9 +38,8 @@ COMMAND_TIMEOUT = update.LAUNCH_APPEAR_TIMEOUT + update.READY_TIMEOUT + 60
 
 
 def installer_for(system):
-    """An Installer with the same locks as install-aquaspace.py."""
-    return update.Installer(SOURCE, APP, system, lock_parent=update.USER_STATE_DIRECTORY,
-                            legacy_lock_parents=(*update.LEGACY_LOCK_DIRECTORIES, APP.parent))
+    """An Installer built exactly as install-aquaspace.py builds it, with the same locks."""
+    return update.command_line_installer(SOURCE, APP, system)
 
 
 def records():

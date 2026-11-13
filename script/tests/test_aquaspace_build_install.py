@@ -4,6 +4,7 @@ Offline only: fake swift, git, macOS tools and signer; fake process APIs; tempor
 """
 import json
 from pathlib import Path
+import shutil
 import sys
 import tarfile
 import unittest
@@ -64,8 +65,31 @@ class BuildThenInstallTests(builder_tests.BuilderTest):
         manifest = json.loads((self.output / 'build.json').read_text())
         manifest['app_sha256'] = '0' * 64
         (self.output / 'build.json').write_text(json.dumps(manifest))
-        with self.assertRaises(update.UpdateError): self.installer.install()
+        with self.assertRaises(update.UpdateError) as caught: self.installer.install()
+        self.assertIn('does not match its build manifest', str(caught.exception))
+        self.assertIn('Build again', str(caught.exception))
         self.assertFalse(self.target.exists())
+
+    def test_build_output_without_its_manifest_is_refused_before_anything_changes(self):
+        # The builder always writes build.json before the app, so its absence means a damaged output.
+        self.main()
+        (self.output / 'build.json').unlink()
+        with self.assertRaises(update.UpdateError) as caught: self.installer.install()
+        self.assertIn('Build again', str(caught.exception))
+        self.assertFalse(self.target.exists())
+        self.assertEqual(list(self.target.parent.glob('.aquaspace-*update-*')), [])  # No update record either.
+
+    def test_other_source_without_a_manifest_installs_and_says_the_check_was_skipped(self):
+        self.main()
+        other = self.root / 'copied/AquaSpace.app'
+        shutil.copytree(self.app, other, symlinks=True)
+        reports = []
+        installer = update.Installer(other, self.target, self.system, timeout=.3)
+        installer.report = reports.append
+        self.assertEqual(phase_of(installer.install()), 'committed')
+        skipped = [line for line in reports if 'manifest check was skipped' in line]
+        self.assertEqual(len(skipped), 1, reports)
+        self.assertIn(str(other.parent / 'build.json'), skipped[0])
 
 
 if __name__ == '__main__': unittest.main()
