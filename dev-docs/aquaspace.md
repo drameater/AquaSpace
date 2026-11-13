@@ -301,10 +301,10 @@ It does not install or start anything unless you pass `--install-and-restart`.
 `build-release.sh` passes all options on and accepts `--build-version` as a
 name for `--version`.
 
-SwiftPM evaluates `Package.swift` inside a macOS sandbox. A sandbox cannot start
-inside another sandbox. If you run the builder inside a sandbox, for example
-the command sandbox of a coding agent, `swift build` fails. Only then, pass
-`--disable-sandbox`.
+SwiftPM evaluates `Package.swift` inside a macOS sandbox. Some sandboxes do not
+allow a nested sandbox. If you run the builder inside such a sandbox, for
+example the command sandbox of a coding agent, `swift build` fails. Only then,
+pass `--disable-sandbox`.
 
 On the owner's machine the macOS 27 Command Line Tools SDK lacks the SwiftUI
 macro plugin, so builds use
