@@ -885,17 +885,16 @@ class Installer:
         for record in terminal[:-KEEP_COMPLETED_RECORDS]:
             if _owned_directory(record): shutil.rmtree(record)
 
-    @staticmethod
-    def _holds_other_bundle(staged, state):
-        """True if new.app is a complete bundle that is not this update's staged copy."""
+    def _holds_other_bundle(self, staged, state):
+        """True if new.app is a complete bundle that is not provably this update's staged copy."""
         executable = staged / 'Contents/MacOS/AquaSpace'
         if staged.is_symlink() or not executable.is_file() or not state.get('main_sha256'):
             return False
         try:
             bundle_metadata(staged)
-            return sha256(executable) != state['main_sha256']
-        except (UpdateError, OSError):
+        except UpdateError:
             return False
+        return not self._matches(staged, state['main_sha256'], state.get('requirement'))
 
     def archive_completed_backups(self):
         with self._lock():
@@ -948,6 +947,13 @@ class Installer:
             raise UpdateError(f'The update record {transaction} holds more bundles than one update can leave. '
                               'The updater cannot tell which one is the previous AquaSpace; no files were changed.')
         if len(new) == 2:
+            # Only the signature binds the other files to the main executable. If both seals
+            # verify, both bundles hold the same build, and the order above decides.
+            for path in new:
+                if not self._matches(path, state.get('main_sha256'), state.get('requirement')):
+                    raise UpdateError(f'{new[0]} and {new[1]} have the same main executable, and the signature of '
+                                      f'{path} does not verify. The updater cannot tell which one is the previous '
+                                      'AquaSpace, so it does not guess. No files were changed.')
             return new[0], (new[1] if state.get('had_target') else None)
         return (new[0] if new else None), (old[0] if old else None)
 
@@ -972,10 +978,29 @@ class Installer:
             self.checkpoint('upgraded')
 
     def _check_new(self, path, state):
+        self._verify_recorded(path, state.get('main_sha256'), state.get('requirement'), 'The bundle from this update')
+
+    def _verify_recorded(self, path, digest, requirement, what):
+        """Raise unless path holds the recorded bundle.
+
+        The main executable's hash alone is not proof: two bundles can share it and differ
+        in other files, which only the code signature binds to it. So the signature must
+        verify, and its designated requirement must equal the recorded one if there is one.
+        """
         bundle_metadata(path)
-        if sha256(path / 'Contents/MacOS/AquaSpace') != state.get('main_sha256'):
-            raise UpdateError(f'The bundle from this update changed on disk; refusing to use it: {path}')
-        self.system.verify_bundle(path)
+        if sha256(path / 'Contents/MacOS/AquaSpace') != digest:
+            raise UpdateError(f'{what} changed on disk; refusing to use it: {path}\nNo files were changed.')
+        actual = self.system.verify_bundle(path)
+        if requirement is not None and actual != requirement:
+            raise UpdateError(f'{what} is signed by another identity than the one this update recorded; refusing '
+                              f'to use it: {path}\nRecorded: {requirement}\nFound: {actual}\nNo files were changed.')
+
+    def _matches(self, path, digest, requirement):
+        try:
+            self._verify_recorded(path, digest, requirement, 'The bundle')
+        except (UpdateError, OSError, subprocess.SubprocessError):
+            return False
+        return True
 
     def _swap_into_target(self, incoming, outgoing):
         """Move `incoming` to the target and the target's bundle to `outgoing`."""
@@ -1029,11 +1054,8 @@ class Installer:
                 self._begin_recovery(transaction, state)
                 replace_directory(new, unconfirmed)
             return
-        bundle_metadata(old)
-        if sha256(old / 'Contents/MacOS/AquaSpace') != state.get('old_sha256'):
-            raise UpdateError(f'The previous AquaSpace bundle in this record changed on disk: {old}\n'
-                              'No files were changed.')
-        self.system.verify_bundle(old)
+        self._verify_recorded(old, state.get('old_sha256'), state.get('old_requirement'),
+                              'The previous AquaSpace bundle in this record')
         if target_present and new != self.target:
             raise UpdateError('The installation changed after this update; refusing to overwrite it.')
         self._begin_recovery(transaction, state)
@@ -1048,16 +1070,11 @@ class Installer:
             self._phase(transaction, state, 'recovering', recovering_from=state['phase'])
 
     def _check_restored(self, transaction, state):
-        """Prove by content that the target holds the previous bundle before reporting it."""
+        """Prove by content and signature that the target holds the previous bundle before reporting it."""
         if not state.get('had_target'): return
-        executable = self.target / 'Contents/MacOS/AquaSpace'
-        try:
-            restored = (not self.target.is_symlink() and executable.is_file()
-                        and sha256(executable) == state.get('old_sha256'))
-        except OSError:
-            restored = False
-        if not restored:
-            raise UpdateError(f'{self.target} does not hold the previous AquaSpace from this update. '
+        if not self._matches(self.target, state.get('old_sha256'), state.get('old_requirement')):
+            raise UpdateError(f'{self.target} does not hold the previous AquaSpace from this update: its main '
+                              'executable, its code signature or its signing identity differs. '
                               f'The record stays open: {transaction}')
 
     # Processes -------------------------------------------------------------
@@ -1211,8 +1228,7 @@ class Installer:
                               'Nothing was changed.')
         self.report(f'Note: {manifest} does not exist, so the build manifest check was skipped.')
 
-    def _check_identity(self, requirement, retry):
-        installed = self.system.requirement(self.target)
+    def _check_identity(self, requirement, installed, retry):
         if installed == requirement:
             return False
         if retry is None:
@@ -1254,17 +1270,19 @@ class Installer:
             if had_target: bundle_metadata(self.target)
             if old and not had_target: raise UpdateError('The running installation disappeared.')
             identity_changed = False
+            old_requirement = self.system.requirement(self.target) if had_target else None
             if had_target:
                 retry = None if allow_identity_change else shlex.join(
                     ['python3', str(INSTALLER_SCRIPT), '--source', str(self.source), '--target', str(self.target),
                      *(['--restart'] if restart else []), *(['--allow-running-stock'] if allow_running_stock else []),
                      *(['--ready-timeout', repr(float(self.ready_timeout))] if restart and self.ready_timeout != READY_TIMEOUT else []),
                      '--allow-identity-change'])
-                identity_changed = self._check_identity(requirement, retry)
+                identity_changed = self._check_identity(requirement, old_requirement, retry)
             state = dict(schema=SCHEMA, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),
                          had_target=had_target, old=old.record() if old else None, requirement=requirement,
                          identity_changed=identity_changed, old_bundle=_inode(self.target) if had_target else None,
                          old_sha256=sha256(self.target / 'Contents/MacOS/AquaSpace') if had_target else None,
+                         old_requirement=old_requirement,
                          restart=restart, retained=[p.record() for p in retained])
             transaction = self._begin(state)
             signaled = False
@@ -1384,7 +1402,8 @@ class Installer:
             if phase not in CONFIRMABLE_PHASES:
                 raise UpdateError('This update has not finished replacing the files, so there is nothing to confirm.\n'
                                   + self.next_steps(transaction, state))
-            if not self._target_holds_new(transaction, state):
+            if not (self._target_holds_new(transaction, state)
+                    and self._matches(self.target, state.get('main_sha256'), state.get('requirement'))):
                 raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm. '
                                   'Nothing was changed.\n' + self._recover_only(
                                       transaction, state, f'{self.target} does not hold the new bundle from this update.'))
