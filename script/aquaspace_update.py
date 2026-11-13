@@ -1208,7 +1208,9 @@ class Installer:
                     if (manifest.get('app_sha256') != main_hash or manifest.get('version') != state['version'] or
                             ('cli_sha256' in manifest and manifest['cli_sha256'] != cli_hash) or
                             ('designated_requirement' in manifest and manifest['designated_requirement'] != requirement)):
-                        raise UpdateError('The staged app/CLI does not match its build manifest.')
+                        raise UpdateError(f'The staged app/CLI does not match its build manifest {manifest_path}. '
+                                          'An interrupted build can leave them unmatched. Build again (the builder '
+                                          'writes the app and its manifest as a pair), then install again.')
                     atomic_json(transaction / 'build.json', manifest)
                 self._phase(transaction, state, 'prepared', main_sha256=main_hash, cli_sha256=cli_hash,
                             new_bundle=_inode(staged))

@@ -538,8 +538,7 @@ class SourceStagingTests(BuilderTest):
 
 
 
-class Crash(BaseException):
-    """Simulated power loss: no handler or cleanup runs after it."""
+POWER_LOSS = 75  # The exit status of a forked build that reached its crash point.
 
 
 class IconTests(FailureTests):
@@ -592,44 +591,68 @@ class PublishTests(FailureTests):
         self.assertEqual(layout(self.app), EXPECTED_LAYOUT)
         self.assertEqual(list(self.output.glob('.staging-*')), [])
 
-    def without_exchange_and_crashing_between_renames(self, crash):
-        """Force the two-rename path and stop after the first rename."""
-        real = os.rename
-        calls = self.renames = []
-        def rename(source, target):
-            if calls and isinstance(crash, Crash): raise Crash('the builder is gone')
-            real(source, target); calls.append(target)
-            if len(calls) == 1 and Path(target).name == 'previous.app': raise crash
-        unsupported = lambda first, second: (_ for _ in ()).throw(build.ExchangeUnsupported(45, 'unsupported'))
-        return (patch.object(build, 'exchange_paths', side_effect=unsupported, create=True),
-                patch.object(build.os, 'rename', side_effect=rename))
-
     def test_interrupt_between_the_two_renames_keeps_a_build_in_place(self):
         self.stage_previous_build()
-        no_exchange, rename = self.without_exchange_and_crashing_between_renames(KeyboardInterrupt())
-        with no_exchange, rename, self.assertRaises(KeyboardInterrupt):
+        def interrupt(): raise KeyboardInterrupt
+        with self.between_the_two_renames(interrupt), self.assertRaises(KeyboardInterrupt):
             with contextlib.redirect_stdout(io.StringIO()):
                 build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
         self.assertTrue((self.app / 'Contents').is_dir(), 'The output has no AquaSpace.app')
+        self.assert_previous_build_kept()
+
+    def build_until_power_loss(self, arm):
+        """Run a build in a child process that ends at the crash point, as a power loss does.
+
+        arm(power_loss) returns a context manager that calls power_loss() at the crash
+        point. os._exit runs no handler, finally block or cleanup: nothing after the
+        crash point executes. The test fails if the build never reaches that point.
+        """
+        pid = os.fork()
+        if pid == 0:
+            status = 1
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    with arm(lambda: os._exit(POWER_LOSS)):
+                        build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')],
+                                   root=self.root)
+                status = 0
+            finally:
+                os._exit(status)
+        _, status = os.waitpid(pid, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(status), POWER_LOSS, 'The crash point was never reached')
+
+    @contextlib.contextmanager
+    def between_the_two_renames(self, power_loss):
+        """Force the two-rename path of publish and lose power after its first rename."""
+        real = os.rename
+        def rename(source, target):
+            real(source, target)
+            if Path(target).name == 'previous.app': power_loss()
+        unsupported = lambda first, second: (_ for _ in ()).throw(build.ExchangeUnsupported(45, 'unsupported'))
+        with patch.object(build, 'exchange_paths', side_effect=unsupported), \
+             patch.object(build.os, 'rename', side_effect=rename):
+            yield
 
     def test_next_build_restores_a_previous_build_stranded_by_a_crash(self):
-        self.stage_previous_build()
-        no_exchange, rename = self.without_exchange_and_crashing_between_renames(Crash())
-        real_rmtree = shutil.rmtree
-        def frozen(*args, **kwargs):
-            if self.renames: raise Crash('the builder is gone')  # No cleanup runs after a power loss.
-            return real_rmtree(*args, **kwargs)
-        with no_exchange, rename, patch.object(build.shutil, 'rmtree', side_effect=frozen):
-            with self.assertRaises(Crash), contextlib.redirect_stdout(io.StringIO()):
-                build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
-        self.assertFalse(self.app.exists())
-        # The next build fails before publishing; the previous build must be back in place.
-        def failing_compile(package):
-            raise build.BuildError('swift build failed with exit code 1')
-        self.tools.compile = failing_compile
-        self.assert_stops('swift build failed')
-        self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
-        self.assertEqual(list(self.output.glob('.staging-*')), [])
+        for previous_manifest in (True, False):
+            with self.subTest(previous_manifest=previous_manifest):
+                self.setUp()
+                self.stage_previous_build()
+                if not previous_manifest: (self.output / 'build.json').unlink()  # From an older builder.
+                self.build_until_power_loss(self.between_the_two_renames)
+                self.assertFalse(self.app.exists())
+                # The next build fails before publishing; the previous build must be back in place
+                # with its own manifest, or with none if it had none.
+                def failing_compile(package):
+                    raise build.BuildError('swift build failed with exit code 1')
+                self.tools.compile = failing_compile
+                self.assert_stops('swift build failed')
+                self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
+                if previous_manifest:
+                    self.assertEqual((self.output / 'build.json').read_text(), 'previous manifest')
+                else:
+                    self.assertFalse((self.output / 'build.json').exists())
+                self.assertEqual(list(self.output.glob('.staging-*')), [])
 
     def test_a_running_build_blocks_a_second_build_of_the_same_output(self):
         self.stage_previous_build()

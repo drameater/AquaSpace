@@ -64,7 +64,9 @@ class BuildThenInstallTests(builder_tests.BuilderTest):
         manifest = json.loads((self.output / 'build.json').read_text())
         manifest['app_sha256'] = '0' * 64
         (self.output / 'build.json').write_text(json.dumps(manifest))
-        with self.assertRaises(update.UpdateError): self.installer.install()
+        with self.assertRaises(update.UpdateError) as caught: self.installer.install()
+        self.assertIn('does not match its build manifest', str(caught.exception))
+        self.assertIn('Build again', str(caught.exception))
         self.assertFalse(self.target.exists())
 
 
