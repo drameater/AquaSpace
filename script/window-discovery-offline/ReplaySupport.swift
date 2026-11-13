@@ -201,7 +201,7 @@ enum ReplayParentCase {
     }
     func bindAsFloatingWindow(to workspace: Workspace) { bind(to: workspace.floatingContainer, adaptiveWeight: 0, index: 0) }
     func bind(to parent: ReplayParent, adaptiveWeight: CGFloat, index: Int) {
-        beforeBind()
+        cancelPendingRestorationForUserBind()
         Simulation.mutations.append(windowId); self.parent = parent
     }
     func getAxSize(_ cm: CancellationMode) async throws -> CGSize? { try await Simulation.awaitSize?() }
@@ -250,6 +250,7 @@ extension Array {
 typealias TilingContainer = ReplayParent
 typealias MacApp = ReplayAquaApp
 typealias Window = MacWindow
+typealias TreeNode = MacWindow
 typealias NonLeafTreeNodeObject = ReplayParent
 struct CmdEnv {
     static let defaultEnv = Self()

@@ -136,7 +136,7 @@ def prepare(args):
     write('ReplayCoordinator.swift', COORDINATOR_HEADER + anchor + capture_owners + coordinator + '}\n')
 
     # Exercise the real shell command entrypoint and movement helper. Only tree
-    # storage/AX are replaced; the pre-bind policy is extracted from production.
+    # storage/AX are replaced; the pre-bind policy is in WindowRestorationMutation.swift.
     shell = production('shell/Shell.swift')
     write('ReplayCommandRunner.swift', 'extension Shell where T == any Command {\n' +
           shell.decl('func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode') + '}\n' +
@@ -160,15 +160,10 @@ def prepare(args):
 
     mac_window = production('tree/MacWindow.swift')
     write('AutomaticDetection.swift', mac_window.between('func runOnWindowDetected(', 'extension WindowDetectedCallback {'))
-    write('RegistrationInitialization.swift',
-          'extension MacWindow {\nstatic func initializeRegistered(_ window: MacWindow) async throws {\n'
-          'let windowId = window.windowId\n' +
-          mac_window.statements('let initialization = WindowDiscoveryInitialization(window)', 'return window') + '\n}\n}\n')
+    write('RegistrationInitialization.swift', 'extension MacWindow {\n' +
+          mac_window.decl('static func initializeRegistered(').replace('private static', 'static') + '}\n')
     write('WindowRelayout.swift', 'import Foundation\nextension Window {\n' + mac_window.decl('func relayoutWindow(') +
           '}\n\n' + mac_window.decl('func unbindAndGetBindingDataForNewWindow('))
-    before_bind = production('tree/TreeNode.swift').body_until('func bind(to newParent:', 'let result = unbindIfBound()')
-    write('ReplayBeforeBind.swift', 'extension MacWindow {\nfunc beforeBind() {\n' +
-          before_bind.replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n}\n')
     for relative in ('model/WindowRestorationMutation.swift', 'model/WindowDiscoveryInitialization.swift'):
         write(relative.split('/')[-1], production(relative).text.replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
 

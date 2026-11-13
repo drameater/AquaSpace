@@ -256,25 +256,6 @@ class SwiftSource:
             cursor = last
         return ''.join(parts) + self.text[cursor:]
 
-    def body_until(self, signature, stop):
-        """The body of the declaration after its opening brace, up to the line of the first `stop` in it."""
-        first = self._body_start(signature) + 1
-        following = [m for m in self._matches(stop) if m.start() > first]
-        if not following or following[0].start() >= self.end_of(signature):
-            raise self._error('statement in "' + signature + '":', stop, 0)
-        return self.text[first:self._line_start(following[0].start())]
-
-    def statements(self, start, stop):
-        """Lines from the line of `start` up to the first line of `stop` after it.
-
-        Use this only to lift statements out of a function body; prefer decl().
-        """
-        first = self._find(start)
-        following = [m for m in self._matches(stop) if m.start() > first]
-        if not following:
-            raise self._error('statement after "' + start + '":', stop, 0)
-        return self.text[self._line_start(first):self._line_start(following[0].start())]
-
 
 def retarget_imports(text, drop=(), add=()):
     """Remove `import M` lines for modules in `drop` and put `import A` lines for `add` first."""

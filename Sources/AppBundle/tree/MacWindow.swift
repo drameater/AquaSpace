@@ -60,8 +60,16 @@ final class MacWindow: Window {
             return existing
         }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
+        try await initializeRegistered(window)
+        return window
+    }
+
+    /// Registers a new window, then restores its closed-window state or runs its
+    /// new-window rules. The initialization barrier ends even when this throws.
+    @MainActor
+    private static func initializeRegistered(_ window: MacWindow) async throws {
         let initialization = WindowDiscoveryInitialization(window)
-        allWindowsMap[windowId] = window
+        allWindowsMap[window.windowId] = window
         defer { initialization.finish() }
 
         try await WindowRestorationMutation.$discoveryInitialization.withValue(initialization) {
@@ -71,7 +79,6 @@ final class MacWindow: Window {
                 await runOnWindowDetected(ifConventional: window)
             }
         }
-        return window
     }
 
     @MainActor
