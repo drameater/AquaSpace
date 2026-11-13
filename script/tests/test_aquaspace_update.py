@@ -1,11 +1,17 @@
 """Offline only: fake process/kernel APIs and temporary application bundles."""
+import contextlib
 import ctypes
 import errno
+import fcntl
+import io
 import json
 import os
 from pathlib import Path
 import plistlib
+import shlex
+import shutil
 import signal
+import stat
 import sys
 import tarfile
 import tempfile
@@ -27,14 +33,52 @@ def tearDownModule():
     for guard in reversed(_offline_guards): guard.stop()
 
 
-def bundle(path, version):
+LOCAL_IDENTITY = 'identifier "local.aquaspace" and certificate leaf = H"AAAA"'
+
+
+def bundle(path, version, requirement=LOCAL_IDENTITY):
     (path / 'Contents/MacOS').mkdir(parents=True)
     (path / 'Contents/MacOS/AquaSpace').write_text(version)
     (path / 'Contents/MacOS/aquaspace-cli').write_text('cli-' + version)
     (path / 'Contents/Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': 'local.aquaspace', 'CFBundleExecutable': 'AquaSpace',
-        'CFBundleShortVersionString': version}))
+        'CFBundleShortVersionString': version, 'FakeRequirement': requirement}))
     return path
+
+
+class Crash(BaseException):
+    """Simulated power loss: the installer ends at once and writes nothing more."""
+
+
+@contextlib.contextmanager
+def hard_crash(installer, system, at):
+    """End the installer at a journal phase or fake-system event, as a power loss would.
+
+    After the crash no handler can change the disk: journal writes, renames and
+    removals raise, so the record keeps exactly the state of the crash.
+    """
+    crashed = []
+    def trigger(name):
+        if name == at and not crashed:
+            crashed.append(name); raise Crash(name)
+    def frozen(real):
+        def call(*args, **kwargs):
+            if crashed: raise Crash('the installer is gone')
+            return real(*args, **kwargs)
+        return call
+    installer.checkpoint = trigger
+    system.on_crash_point = trigger
+    try:
+        with patch.object(update, 'atomic_json', frozen(update.atomic_json)), \
+             patch.object(update, 'replace_directory', frozen(update.replace_directory)), \
+             patch.object(update, '_remove_tree', frozen(update._remove_tree)):
+            yield crashed
+    except Crash:
+        pass
+    finally:
+        installer.checkpoint = lambda phase: None
+        system.on_crash_point = None
+    assert crashed, 'The simulated crash point was never reached: ' + at
 
 
 class FakeSystem:
@@ -53,6 +97,11 @@ class FakeSystem:
         self.stop_deadline = None
         self.spawn_raises_after_start = False
         self.on_event = None
+        self.on_crash_point = None
+        self.exchange_unsupported = False
+        self.unsigned = set()
+        self.launch_sessions = []
+        self.launched_at = None
 
     def add(self, pid, kind='local.aquaspace', path=None, birth=1):
         process = update.Process(pid, (birth, pid), os.getuid(),
@@ -69,13 +118,27 @@ class FakeSystem:
     def event(self, name):
         self.events.append(name)
         if self.on_event: self.on_event(self, name)
+        if self.on_crash_point: self.on_crash_point(name)
 
     def inspect(self, pid):
         return self.running.get(pid)
 
+    def requirement(self, path):
+        try: return plistlib.loads((path / 'Contents/Info.plist').read_bytes())['FakeRequirement']
+        except (OSError, KeyError): return None
+
     def verify_bundle(self, path):
         update.bundle_metadata(path)
         self.event('verify')
+        if path.name in self.unsigned: raise update.UpdateError('Simulated invalid signature: ' + str(path))
+        return self.requirement(path)
+
+    def exchange(self, first, second):
+        self.event('exchange')
+        if self.exchange_unsupported: raise update.ExchangeUnsupported(errno.ENOTSUP, 'Simulated HFS+ volume')
+        swap = first.with_name(first.name + '.swap')
+        first.rename(swap); second.rename(first); swap.rename(second)
+        self.event('exchanged')
 
     def capture_session(self, old, cli):
         self.event('capture')
@@ -86,7 +149,7 @@ class FakeSystem:
         self.event('stop')
         current = self.inspect(process.pid)
         if current is None or current.identity != process.identity:
-            raise update.UpdateError('Process identity changed; refusing to signal it')
+            raise update.NotSignaled('Process identity changed; refusing to signal it')
         if self.stop_never_exits: return
         if self.stop_delay:
             self.stop_deadline = self.now + self.stop_delay
@@ -96,8 +159,11 @@ class FakeSystem:
 
     def launch(self, executable, session, log):
         self.event('launch')
-        child = self.add(200)
+        self.launch_sessions.append(session)
+        self.launched_at = self.now
+        child = self.add(200, birth=int(self.time()))
         self.launches.append(child)
+        self.event('launched')
         if self.spawn_raises_after_start: raise OSError('Spawn outcome uncertain')
         return child
 
@@ -108,6 +174,7 @@ class FakeSystem:
                 'readOnly': False, 'originalPids': []}
 
     def monotonic(self): return self.now
+    def time(self): return 1_700_000_000 + self.now
 
     def sleep(self, seconds):
         self.now += seconds
@@ -116,15 +183,18 @@ class FakeSystem:
             self.event('old-exited')
 
 
-class InstallerTests(unittest.TestCase):
+class InstallerFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='aquaspace-offline-')
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        # The kernel reports canonical paths (/private/var, not /var), so the fake does too.
+        self.root = Path(self.tmp.name).resolve()
         self.source = bundle(self.root / 'build/AquaSpace.app', 'new')
         self.target = bundle(self.root / 'Applications/AquaSpace.app', 'old')
         self.system = FakeSystem(self.target)
         self.installer = update.Installer(self.source, self.target, self.system, timeout=.3)
+        self.reports = []
+        self.installer.report = self.reports.append
 
     def activate(self): return self.installer.install(restart=True)
 
@@ -134,6 +204,8 @@ class InstallerTests(unittest.TestCase):
         self.assertLessEqual(self.system.maximum_controllers, 1)
         self.assertLessEqual(len(self.system.launches), 1)
 
+
+class InstallerTests(InstallerFixture):
     def test_success_waits_for_old_exit_before_launch_and_restores_metadata(self):
         self.system.add(100)
         self.system.stop_delay = .1
@@ -190,12 +262,13 @@ class InstallerTests(unittest.TestCase):
         with tarfile.open(transaction / 'previous.app.tar.gz') as archive:
             self.assertEqual(archive.extractfile('previous.app/Contents/MacOS/AquaSpace').read(), b'original')
 
-    def test_partial_aborted_staging_copy_does_not_block_next_install(self):
+    def test_partial_aborted_staging_copy_does_not_block_next_install_and_is_not_archived(self):
+        # An aborted staging copy never ran, so it is not evidence worth 4 MB per record.
         transaction = self.target.parent / '.aquaspace-update-aborted'
         (transaction / 'new.app/Contents').mkdir(parents=True)
         update.atomic_json(transaction / 'journal.json', dict(schema=1, target=str(self.target), phase='aborted'))
         self.installer.install()
-        self.assertTrue((transaction / 'new.app.tar.gz').is_file())
+        self.assertFalse((transaction / 'new.app.tar.gz').exists())
         self.assertFalse((transaction / 'new.app').exists())
 
     def test_restart_without_active_manager_launches_once(self):
@@ -399,15 +472,12 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('launch', self.system.events)
 
     def test_recovery_after_every_interrupted_filesystem_boundary_never_launches(self):
+        # A power loss runs no handler, so the record stays in the crashed phase.
         for checkpoint in ['staging', 'prepared', 'stop_requested', 'stopped',
-                           'replacing', 'replaced', 'launch_attempted', 'child_started']:
+                           'replacing', 'exchanged', 'replaced', 'launch_attempted', 'child_started']:
             with self.subTest(checkpoint=checkpoint):
                 self.setUp(); self.system.add(100)
-                def crash(phase):
-                    if phase == checkpoint: raise KeyboardInterrupt('Simulated abrupt exit')
-                self.installer.checkpoint = crash
-                with self.assertRaises(KeyboardInterrupt): self.activate()
-                self.installer.checkpoint = lambda phase: None
+                with hard_crash(self.installer, self.system, checkpoint): self.activate()
                 # Simulate the user closing any running manager before --recover.
                 self.system.running.clear()
                 launches = len(self.system.launches)
@@ -463,6 +533,499 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.system.running.keys(), {200})
         self.assert_single_launch()
 
+def ready(child):
+    return {'pid': child.pid, 'phase': 'controlling', 'controlsWindows': True,
+            'readOnly': False, 'originalPids': []}
+
+
+def phase_of(record):
+    return json.loads((record / 'journal.json').read_text())['phase']
+
+
+class InterruptedUpdateTests(InstallerFixture):
+    """H1: after the stop, every failure names its next command and --resume finishes."""
+    def lines_with(self, text, flag):
+        return [shlex.split(line) for line in text.splitlines() if flag in line]
+
+    def assert_guides(self, text, record, *modes):
+        for mode in modes:
+            commands = self.lines_with(text, mode)
+            self.assertTrue(commands, f'{mode} command missing from: {text}')
+            argv = commands[0]
+            self.assertEqual(argv[:2], ['python3', str(update.INSTALLER_SCRIPT)])
+            self.assertEqual(argv[argv.index('--target') + 1], str(self.target))
+            self.assertEqual(argv[argv.index(mode) + 1], str(record))
+
+    def test_failure_after_stop_names_resume_and_recover_and_resume_finishes_once(self):
+        self.system.add(100)
+        def fail(system, event):
+            if event == 'exchange': raise OSError('Simulated rename failure')
+        self.system.on_event = fail
+        with self.assertRaises(update.UpdateError) as caught: self.activate()
+        record = self.pending()[0]
+        self.assert_guides(str(caught.exception), record, '--resume', '--recover')
+        self.assertFalse(self.system.running)
+        self.assertNotIn('launch', self.system.events)
+        self.system.on_event = None
+        self.installer.resume(record)
+        self.assertEqual(self.system.running.keys(), {200})
+        self.assertEqual(self.system.launch_sessions, [record / 'session.json'])
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.assertEqual(phase_of(record), 'committed')
+        with tarfile.open(record / 'previous.app.tar.gz') as backup:
+            self.assertEqual(backup.extractfile('previous.app/Contents/MacOS/AquaSpace').read(), b'old')
+        self.assert_single_launch()
+
+    def test_resume_after_power_loss_at_each_post_stop_boundary_launches_once(self):
+        for point in ['stopped', 'replacing', 'exchanged', 'replaced', 'launch_attempted']:
+            with self.subTest(point=point):
+                self.setUp(); self.system.add(100)
+                with hard_crash(self.installer, self.system, point): self.activate()
+                self.assertFalse(self.system.running)
+                self.assertTrue(self.target.is_dir(), 'The target path must never be absent')
+                self.system.now += update.LAUNCH_SETTLE_SECONDS
+                record = self.pending()[0]
+                self.installer.resume(record)
+                self.assertEqual(len(self.system.launches), 1)
+                self.assertEqual(self.system.launch_sessions, [record / 'session.json'])
+                self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+                self.assertEqual(phase_of(record), 'committed')
+                self.assertFalse(self.pending())
+                self.assert_single_launch()
+
+    def test_resume_refuses_while_any_manager_runs(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'replaced'): self.activate()
+        self.system.add(300, 'bobko.aerospace', self.root / 'AeroSpace.app/Contents/MacOS/AeroSpace')
+        with self.assertRaises(update.UpdateError): self.installer.resume(self.pending()[0])
+        self.assertNotIn('launch', self.system.events)
+
+    def test_resume_waits_after_an_uncertain_launch_before_trying_again(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'launch_attempted'): self.activate()
+        record = self.pending()[0]
+        with self.assertRaises(update.UpdateError) as caught: self.installer.resume(record)
+        self.assert_guides(str(caught.exception), record, '--resume')
+        self.assertNotIn('launch', self.system.events)
+        self.system.now += update.LAUNCH_SETTLE_SECONDS
+        self.installer.resume(record)
+        self.assertEqual(len(self.system.launches), 1)
+
+    def test_resume_after_the_child_died_starts_it_once_more(self):
+        self.system.add(100)
+        def died(system, child):
+            system.running.pop(child.pid, None); return None
+        self.system.status_fault = died
+        with self.assertRaises(update.UpdateError) as caught: self.activate()
+        record = self.pending()[0]
+        self.assert_guides(str(caught.exception), record, '--resume', '--confirm', '--recover')
+        self.system.status_fault = None
+        self.installer.resume(record)
+        self.assertEqual(len(self.system.launches), 2)
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertLessEqual(self.system.maximum_controllers, 1)
+
+    def test_target_is_never_absent_while_the_bundle_is_swapped(self):
+        self.system.add(100)
+        present = []
+        real = update.replace_directory
+        def rename(source, target):
+            real(source, target); present.append(self.target.is_dir())
+        self.system.on_event = lambda system, event: present.append(self.target.is_dir()) if event == 'exchanged' else None
+        with patch.object(update, 'replace_directory', side_effect=rename): self.activate()
+        self.assertGreaterEqual(len(present), 2)
+        self.assertTrue(all(present))
+
+    def test_volume_without_exchange_still_installs_and_a_crash_between_renames_resumes(self):
+        self.system.exchange_unsupported = True
+        self.activate()
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.setUp(); self.system.exchange_unsupported = True; self.system.add(100)
+        real = update.replace_directory
+        def first_rename_only(source, target):
+            real(source, target)
+            if source == self.target: raise Crash('power loss between the two renames')
+        with patch.object(update, 'replace_directory', side_effect=first_rename_only):
+            with self.assertRaises(Crash): self.activate()
+        self.assertFalse(self.target.exists())
+        self.installer.resume(self.pending()[0])
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.assertEqual(len(self.system.launches), 1)
+
+    def test_recover_after_crash_between_exchange_and_rename_restores_old(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'exchanged'): self.activate()
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.installer.recover(self.pending()[0])
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+        self.assertNotIn('launch', self.system.events)
+
+    def test_recover_interrupted_after_its_exchange_completes_on_retry(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'replaced'): self.activate()
+        record = self.pending()[0]
+        with hard_crash(self.installer, self.system, 'exchanged'): self.installer.recover(record)
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+        self.installer.recover(record)
+        self.assertEqual(phase_of(record), 'recovered')
+        self.assertEqual((record / 'unconfirmed.app/Contents/MacOS/AquaSpace').read_text(), 'new')
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+
+    def test_interrupt_after_stop_reports_next_commands_and_keeps_the_record(self):
+        self.system.add(100)
+        def interrupt(phase):
+            if phase == 'replaced': raise KeyboardInterrupt
+        self.installer.checkpoint = interrupt
+        with self.assertRaises(KeyboardInterrupt): self.activate()
+        record = self.pending()[0]
+        self.assert_guides('\n'.join(self.reports), record, '--resume', '--recover')
+
+    def test_unfinished_update_block_names_the_next_command(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'replaced'): self.activate()
+        record = self.pending()[0]
+        with self.assertRaises(update.UpdateError) as caught: self.activate()
+        self.assert_guides(str(caught.exception), record, '--resume', '--recover')
+
+
+class ReadinessTests(InstallerFixture):
+    """H2: a live replacement that waits for permission is not a failure."""
+
+    def test_unready_replacement_is_left_running_and_confirm_commits_without_stopping(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation) as caught: self.activate()
+        record = self.pending()[0]
+        self.assertIn(self.installer.command('--confirm', record), str(caught.exception))
+        self.assertIn('Accessibility', str(caught.exception))
+        self.assertEqual(self.system.running.keys(), {200})
+        self.assertEqual(phase_of(record), 'child_started')
+        # The next update is refused, and the refusal names the same command.
+        with self.assertRaises(update.UpdateError) as blocked: self.activate()
+        self.assertIn(self.installer.command('--confirm', record), str(blocked.exception))
+        stops = self.system.events.count('stop')
+        self.system.status_fault = None
+        self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertEqual(self.system.events.count('stop'), stops)
+        self.assertEqual(self.system.running.keys(), {200})
+        self.assert_single_launch()
+
+    def test_first_install_without_permission_has_no_dead_end(self):
+        shutil.rmtree(self.target)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation): self.activate()
+        record = self.pending()[0]
+        with self.assertRaises(update.AwaitingConfirmation): self.installer.confirm(record)
+        self.system.status_fault = None
+        self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertFalse(self.pending())
+        self.assertTrue(any('Accessibility' in text for text in self.reports))
+
+    def test_ready_timeout_bounds_the_wait(self):
+        # The replacement takes control 12 s after its launch.
+        for timeout, completes in ((5, False), (20, True)):
+            with self.subTest(timeout=timeout):
+                self.setUp(); self.system.add(100)
+                self.installer.ready_timeout = timeout
+                self.system.status_fault = lambda system, child: ready(child) if system.now - system.launched_at >= 12 else None
+                if completes:
+                    self.assertEqual(phase_of(self.activate()), 'committed')
+                else:
+                    with self.assertRaises(update.AwaitingConfirmation): self.activate()
+                self.assertEqual(self.system.running.keys(), {200})
+
+    def test_confirm_refuses_a_manager_this_update_did_not_start(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation): self.activate()
+        record = self.pending()[0]
+        self.system.running.clear()
+        self.system.add(201)  # Same bundle, different process.
+        self.system.status_fault = None
+        with self.assertRaises(update.UpdateError): self.installer.confirm(record)
+        self.system.running.clear()
+        with self.assertRaises(update.UpdateError) as caught: self.installer.confirm(record)
+        self.assertIn('--resume', str(caught.exception))
+        self.assertEqual(phase_of(record), 'child_started')
+
+    def test_child_exiting_during_confirm_names_the_next_commands(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation): self.activate()
+        record = self.pending()[0]
+        def exits(system, child):
+            system.running.pop(child.pid, None); return None
+        self.system.status_fault = exits
+        with self.assertRaises(update.UpdateError) as caught: self.installer.confirm(record)
+        self.assertIn(self.installer.command('--resume', record), str(caught.exception))
+        self.assertEqual(phase_of(record), 'child_started')
+
+    def test_confirm_adopts_child_started_after_the_recorded_launch_intent(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'launched'): self.activate()
+        record = self.pending()[0]
+        self.assertEqual(phase_of(record), 'launch_attempted')
+        with self.assertRaises(update.UpdateError) as caught: self.installer.resume(record)
+        self.assertIn('--confirm', str(caught.exception))
+        self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertEqual(len(self.system.launches), 1)
+
+    def test_confirm_never_adopts_a_manager_older_than_the_launch(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'launch_attempted'): self.activate()
+        self.system.add(200, birth=1)  # Started long before the launch intent.
+        with self.assertRaises(update.UpdateError): self.installer.confirm(self.pending()[0])
+
+    def test_recover_with_the_new_child_running_points_to_confirm(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation): self.activate()
+        record = self.pending()[0]
+        with self.assertRaises(update.UpdateError) as caught: self.installer.recover(record)
+        self.assertIn(self.installer.command('--confirm', record), str(caught.exception))
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+
+class AbortTests(InstallerFixture):
+    """M1/M2: records that prove nothing was stopped never require quitting a manager."""
+
+    def test_interrupt_during_staging_copy_aborts_cleanly(self):
+        self.system.add(100)
+        real = shutil.copytree
+        def interrupted(*args, **kwargs):
+            real(*args, **kwargs); raise KeyboardInterrupt
+        with patch.object(update.shutil, 'copytree', side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt): self.activate()
+        self.assertFalse(self.pending())
+        record, = self.target.parent.glob('.aquaspace-update-*')
+        self.assertEqual(phase_of(record), 'aborted')
+        self.assertFalse((record / 'new.app').exists())
+        self.assertEqual(self.system.running.keys(), {100})
+        self.activate()  # The manager kept running; the retry needs nothing else.
+        self.assert_single_launch()
+
+    def test_stop_refused_before_any_signal_closes_the_record(self):
+        self.system.add(100)
+        def replaced(system, event):
+            if event == 'stop': system.add(100, birth=99)
+        self.system.on_event = replaced
+        with self.assertRaises(update.UpdateError) as caught: self.activate()
+        self.assertIn('No process was stopped', str(caught.exception))
+        self.assertFalse(self.pending())
+        self.assertEqual(self.system.running[100].started[0], 99)
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+
+    def test_dead_record_that_proves_nothing_was_stopped_closes_with_manager_running(self):
+        for point in ['staging', 'prepared', 'stop_requested']:
+            for close in ('recover', 'resume'):
+                with self.subTest(point=point, close=close):
+                    self.setUp(); old = self.system.add(100)
+                    with hard_crash(self.installer, self.system, point): self.activate()
+                    getattr(self.installer, close)(self.pending()[0])
+                    self.assertFalse(self.pending())
+                    self.assertEqual(self.system.running, {100: old})
+                    self.assertNotIn('stop', self.system.events)
+                    self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+
+    def test_install_closes_a_dead_pre_stop_record_by_itself(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'prepared'): self.activate()
+        self.assertTrue(self.pending())
+        self.activate()
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+    def test_failed_first_journal_write_leaves_no_blocking_record(self):
+        with patch.object(update, 'atomic_json', side_effect=OSError('Simulated full disk')):
+            with self.assertRaises(OSError): self.installer.install()
+        self.assertFalse(list(self.target.parent.glob('.aquaspace-update-*')))
+        self.installer.install()
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+    def test_records_abandoned_before_their_first_journal_never_block(self):
+        parent = self.target.parent
+        draft = parent / '.aquaspace-new-update-1'; draft.mkdir()
+        update.atomic_json(draft / 'journal.json', dict(schema=1, target=str(self.target), phase='staging'))
+        legacy_empty = parent / '.aquaspace-update-2'; legacy_empty.mkdir()
+        legacy_partial = parent / '.aquaspace-update-3'; legacy_partial.mkdir()
+        (legacy_partial / 'journal.json.tmp').write_text('{')
+        unknown = parent / '.aquaspace-update-4'; unknown.mkdir()
+        (unknown / 'notes.txt').write_text('kept')
+        self.installer.install()
+        for path in (draft, legacy_empty, legacy_partial):
+            self.assertFalse(path.exists())
+        self.assertEqual((unknown / 'notes.txt').read_text(), 'kept')
+
+
+class RecordPruningTests(InstallerFixture):
+    """M3: completed records are bounded; pending records are never removed."""
+
+    def committed(self, name, age):
+        record = self.target.parent / ('.aquaspace-update-' + name)
+        record.mkdir()
+        update.atomic_json(record / 'journal.json', dict(schema=1, target=str(self.target), phase='committed'))
+        (record / 'previous.app.tar.gz').write_bytes(b'x' * 10)
+        os.utime(record / 'journal.json', (1000 + age, 1000 + age))
+        return record
+
+    def test_only_the_newest_completed_records_are_kept(self):
+        records = [self.committed(f'{i:02}', age=i) for i in range(8)]
+        pending = self.target.parent / '.aquaspace-update-pending'
+        pending.mkdir()
+        update.atomic_json(pending / 'journal.json', dict(schema=1, target=str(self.target), phase='replaced'))
+        os.utime(pending / 'journal.json', (1, 1))
+        self.installer.archive_completed_backups()
+        kept = sorted(p for p in self.target.parent.glob('.aquaspace-update-*') if p != pending)
+        self.assertEqual(kept, records[-update.KEEP_COMPLETED_RECORDS:])
+        self.assertTrue((pending / 'journal.json').is_file())
+
+    def test_install_prunes_before_adding_its_own_record(self):
+        for i in range(update.KEEP_COMPLETED_RECORDS + 3): self.committed(f'{i:02}', age=i)
+        self.installer.install()
+        self.assertEqual(len(list(self.target.parent.glob('.aquaspace-update-*'))), update.KEEP_COMPLETED_RECORDS + 1)
+
+
+class IdentityChangeTests(InstallerFixture):
+    """M7: a different signing identity loses the Accessibility grant; ask first."""
+
+    def test_identity_change_is_refused_before_anything_stops(self):
+        shutil.rmtree(self.source)
+        bundle(self.source, 'new', 'identifier "local.aquaspace" and certificate leaf = H"BBBB"')
+        self.system.add(100)
+        with self.assertRaises(update.UpdateError) as caught: self.activate()
+        message = str(caught.exception)
+        self.assertIn('Accessibility', message)
+        retry = [shlex.split(line) for line in message.splitlines() if '--allow-identity-change' in line][0]
+        self.assertIn('--restart', retry)
+        self.assertEqual(retry[retry.index('--source') + 1], str(self.source))
+        self.assertNotIn('stop', self.system.events)
+        self.assertFalse(list(self.target.parent.glob('.aquaspace-update-*')))
+        record = self.installer.install(restart=True, allow_identity_change=True)
+        self.assertTrue(json.loads((record / 'journal.json').read_text())['identity_changed'])
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+    def test_unreadable_installed_signature_counts_as_a_change(self):
+        info = self.target / 'Contents/Info.plist'
+        data = plistlib.loads(info.read_bytes()); del data['FakeRequirement']
+        info.write_bytes(plistlib.dumps(data))
+        with self.assertRaises(update.UpdateError): self.installer.install()
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+
+    def test_manifest_requirement_must_match_the_staged_signature(self):
+        self.system.add(100)
+        (self.source.parent / 'build.json').write_text(json.dumps({
+            'version': 'new', 'app_sha256': update.sha256(self.source / 'Contents/MacOS/AquaSpace'),
+            'designated_requirement': 'identifier "local.aquaspace" and certificate leaf = H"CCCC"'}))
+        with self.assertRaises(update.UpdateError): self.activate()
+        self.assertNotIn('stop', self.system.events)
+        self.assertFalse(self.pending())
+
+
+class SmallerDefectTests(InstallerFixture):
+    def test_archive_failure_after_commit_reports_success_with_a_warning(self):
+        self.system.add(100)
+        with patch.object(update, 'archive_bundle', side_effect=OSError('Simulated disk error')):
+            record = self.activate()
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertTrue((record / 'previous.app').is_dir())
+        self.assertIn('--archive-backups', self.installer.warnings[0])
+        self.installer.archive_completed_backups()
+        self.assertTrue((record / 'previous.app.tar.gz').is_file())
+
+    def test_other_spelling_of_target_is_the_same_installation(self):
+        link = self.root / 'Linked Applications'
+        link.symlink_to(self.target.parent)
+        self.installer = update.Installer(self.source, link / '.' / 'AquaSpace.app', self.system, timeout=.3)
+        self.installer.report = self.reports.append
+        self.system.add(100)
+        record = self.activate()
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertEqual(self.installer.target, self.target)
+
+    def test_recover_refuses_a_previous_bundle_with_an_invalid_signature(self):
+        self.system.add(100)
+        with hard_crash(self.installer, self.system, 'replaced'): self.activate()
+        self.system.unsigned.add('previous.app')
+        with self.assertRaises(update.UpdateError): self.installer.recover(self.pending()[0])
+        self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+
+class LockTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.name = f'.aquaspace-install-{os.getuid()}.lock'
+
+    def test_user_lock_directory_is_created_private(self):
+        directory = self.root / 'Application Support/AquaSpace/Updater'
+        with update.InstallLock(directory): pass
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertTrue((directory / self.name).is_file())
+
+    def test_legacy_lock_held_by_an_older_updater_blocks(self):
+        legacy = self.root / 'legacy'; legacy.mkdir()
+        with (legacy / self.name).open('w') as older:
+            fcntl.flock(older, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(update.UpdateError, 'older'):
+                with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
+        with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
+
+    def test_missing_or_symlinked_legacy_lock_is_ignored_and_not_created(self):
+        missing, linked = self.root / 'missing', self.root / 'linked'
+        missing.mkdir(); linked.mkdir()
+        (linked / self.name).symlink_to(self.root / 'elsewhere')
+        with update.InstallLock(self.root / 'user', legacy=[missing, linked]): pass
+        self.assertFalse((missing / self.name).exists())
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_legacy_location_equal_to_the_user_lock_is_not_locked_twice(self):
+        with update.InstallLock(self.root, legacy=[self.root]): pass
+
+
+class CommandLineTests(InstallerFixture):
+    def main(self, *args):
+        err = io.StringIO()
+        with patch.object(update, 'NativeSystem', return_value=self.system), \
+             patch.object(update, 'USER_STATE_DIRECTORY', self.root / 'state'), \
+             patch.object(update, 'LEGACY_LOCK_DIRECTORIES', ()), \
+             contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = update.main(['--source', str(self.source), '--target', str(self.target), *map(str, args)])
+        return code, err.getvalue()
+
+    def test_waiting_replacement_exits_3_and_confirm_exits_0(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        code, err = self.main('--restart', '--ready-timeout', '2')
+        self.assertEqual(code, update.EXIT_AWAITING_CONFIRMATION)
+        record = self.pending()[0]
+        confirm = [shlex.split(line) for line in err.splitlines() if '--confirm' in line][0]
+        self.assertEqual(confirm[confirm.index('--confirm') + 1], str(record))
+        self.system.status_fault = None
+        self.assertEqual(self.main('--confirm', record)[0], 0)
+        self.assertEqual(phase_of(record), 'committed')
+
+    def test_failure_after_stop_exits_1_with_commands_and_resume_exits_0(self):
+        self.system.add(100)
+        self.system.on_event = lambda system, event: (_ for _ in ()).throw(OSError('Simulated')) if event == 'exchange' else None
+        code, err = self.main('--restart')
+        self.assertEqual(code, 1)
+        record = self.pending()[0]
+        self.assertIn(f'--resume {shlex.quote(str(record))}', err)
+        self.system.on_event = None
+        self.assertEqual(self.main('--resume', record)[0], 0)
+        self.assertEqual(len(self.system.launches), 1)
+
+    def test_conflicting_modes_are_usage_errors(self):
+        for args in (['--restart', '--resume', 'x'], ['--confirm', 'x', '--recover', 'y'],
+                     ['--recover', 'x', '--allow-identity-change'], ['--ready-timeout', '5'],
+                     ['--restart', '--ready-timeout', '0']):
+            with self.subTest(args=args), self.assertRaises(SystemExit) as error:
+                self.main(*args)
+            self.assertEqual(error.exception.code, 2)
+        self.assertEqual(self.system.events, [])
+
 
 class FakeLibProc:
     def __init__(self, executable):
@@ -473,6 +1036,7 @@ class FakeLibProc:
         self.birth = 123
         self.change_birth = False
         self.info_reads = 0
+        self.name = b''
 
     def proc_listpids(self, kind, uid, buffer, size):
         if buffer is None: return 4
@@ -485,6 +1049,7 @@ class FakeLibProc:
         self.info_reads += 1
         info = ctypes.cast(buffer, ctypes.POINTER(update.BsdInfo)).contents
         info.pbi_pid = pid; info.pbi_uid = os.getuid(); info.pbi_status = 2
+        info.pbi_name = self.name
         info.pbi_start_tvsec = self.birth + int(self.change_birth and self.info_reads > 1)
         info.pbi_start_tvusec = 456
         return ctypes.sizeof(update.BsdInfo)
@@ -546,14 +1111,46 @@ class ProcessInspectionTests(unittest.TestCase):
                     with self.assertRaises(update.UpdateError):
                         self.inspector.managers()
 
-    def test_unreadable_executable_path_is_skipped_not_a_blocker(self):
+    def test_unreadable_executable_path_of_unrelated_process_is_skipped_not_a_blocker(self):
         # Regression: a Homebrew upgrade deleted a running opencode binary (ENOENT)
-        # and the installer refused every update while that process lived.
+        # and the installer refused every update while that process lived. The
+        # kernel's process name now classifies it, so one BSD record read is allowed.
+        self.lib.name = b'opencode'
         for code in (errno.ENOENT, errno.EPERM):
             with self.subTest(code=code):
                 self.lib.path_error = code
                 self.assertEqual(self.inspector.managers(), [])
-                self.assertEqual(self.lib.info_reads, 0)
+
+    def test_manager_with_deleted_executable_stays_visible_by_kernel_name(self):
+        # An update can delete a manager's binary while it runs; it still controls windows.
+        for name in (b'AquaSpace', b'AeroSpace'):
+            with self.subTest(name=name):
+                self.lib.path_error = errno.ENOENT
+                self.lib.name = name
+                managers = self.inspector.managers()
+                self.assertEqual(len(managers), 1)
+                self.assertEqual(managers[0].bundle_id, 'unidentified.window-manager')
+                self.assertEqual(managers[0].identity, (1234, 123, 456, os.getuid()))
+
+    def test_process_with_neither_path_nor_bsd_record_is_skipped(self):
+        # Only protected processes deny both; this user's managers never do.
+        self.lib.path_error = errno.EPERM
+        self.lib.info_error = errno.EPERM
+        self.assertEqual(self.inspector.managers(), [])
+
+    def test_bundle_metadata_is_parsed_once_per_file_version(self):
+        raw, metadata = self.macos_xml()
+        reply = SimpleNamespace(stdout=plistlib.dumps(metadata, fmt=plistlib.FMT_BINARY))
+        with patch.object(update.subprocess, 'run', return_value=reply) as convert:
+            for _ in range(3):
+                self.assertEqual(self.inspector.managers()[0].bundle_id, 'local.aquaspace')
+        self.assertEqual(convert.call_count, 1)
+        # A replaced Info.plist (new inode and size) is read again, so identity changes are seen.
+        info = self.app / 'Contents/Info.plist'
+        replacement = info.with_name('Info.new')
+        replacement.write_bytes(plistlib.dumps(dict(metadata, CFBundleIdentifier='bobko.aerospace')))
+        replacement.replace(info)
+        self.assertEqual(self.inspector.managers()[0].bundle_id, 'bobko.aerospace')
 
     def test_unrelated_helper_and_embedded_cli_need_no_bsd_identity_permission(self):
         for path in [Path(self.tmp.name) / 'system/protected-helper',
@@ -636,10 +1233,17 @@ class NativeBackendTests(unittest.TestCase):
         wrong = update.Process(999, (1, 1), os.getuid(), Path('/other/AquaSpace'), 'local.aquaspace')
         for inventory in ([wrong], []):
             with self.subTest(inventory=inventory), patch.object(self.native, 'run') as launch:
-                with patch.object(self.native, 'managers', side_effect=[[], inventory]), patch.object(self.native, 'monotonic', side_effect=[0, 6]):
+                with patch.object(self.native, 'managers', side_effect=[[], inventory]), patch.object(self.native, 'monotonic', side_effect=[0, update.LAUNCH_APPEAR_TIMEOUT + 1]):
                     with self.assertRaises(update.UpdateError):
                         self.native.launch(self.app / 'Contents/MacOS/AquaSpace', None, Path(self.tmp.name) / 'app.log')
                 self.assertEqual(launch.call_count, 1)
+
+    def test_bundle_verification_uses_the_system_codesign(self):
+        requirement = 'identifier "local.aquaspace" and certificate leaf = H"AAAA"'
+        with patch.object(self.native, 'run') as tool, \
+             patch.object(update, 'designated_requirement', return_value=requirement):
+            self.assertEqual(self.native.verify_bundle(self.app), requirement)
+        self.assertEqual({call.args[0][0] for call in tool.call_args_list}, {'/usr/bin/codesign'})
 
     def test_native_stop_rejects_reused_pid_before_sending_any_signal(self):
         old = update.Process(1234, (1, 2), os.getuid(), self.app / 'Contents/MacOS/AquaSpace', 'local.aquaspace')

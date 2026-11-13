@@ -40,6 +40,19 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(args, ['script/build-aquaspace.py', '--install-and-restart',
                                 '--sdk', 'a folder with spaces/SDK'])
 
+    def test_installer_options_pass_through_with_an_existing_build(self):
+        result, args = self.invoke('--dont-rebuild', '--allow-identity-change', '--ready-timeout', '120')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['script/install-aquaspace.py', '--restart',
+                                '--allow-identity-change', '--ready-timeout', '120'])
+
+    def test_installer_options_with_a_rebuild_fail_without_invoking_anything(self):
+        for options in (['--allow-identity-change'], ['--ready-timeout', '60'], ['--dont-rebuild', '--ready-timeout']):
+            with self.subTest(options=options):
+                result, args = self.invoke(*options)
+                self.assertEqual(result.returncode, 2)
+                self.assertIsNone(args)
+
     def test_build_options_with_dont_rebuild_fail_without_invoking_anything(self):
         result, args = self.invoke('--dont-rebuild', '--sdk', 'unused')
         self.assertEqual(result.returncode, 2)
