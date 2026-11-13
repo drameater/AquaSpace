@@ -71,7 +71,7 @@ func nativeTabLiveTestAllows(_ id: UInt32, _ window: AXUIElement) -> Bool {
 ''')
     replace_once(bundle / "initAppBundle.swift", "        initServerArgs()",
                  "        initServerArgs()\n        _ = nativeTabLiveTestPrefix\n        _ = nativeTabLiveTestExcludedWindowIds")
-    flags = ["--package-path", str(source), "--scratch-path", str(args.scratch_path), "--jobs", str(args.jobs), "--disable-sandbox", "--skip-update"]
+    flags = ["--package-path", str(source), "--scratch-path", str(args.scratch_path), "--jobs", str(args.jobs), "--disable-sandbox", "--disable-automatic-resolution"]
     if args.sdk:
         flags += ["--sdk", str(args.sdk)]
     args.scratch_path.mkdir(parents=True, exist_ok=True)

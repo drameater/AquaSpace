@@ -167,7 +167,8 @@ def stage_sources(root, source):
 
 def compile_products(source, scratch, sdk=None, jobs=2, sandbox=True):
     """Compile the app and CLI in release configuration; return the binary directory."""
-    flags = ["-c", "release", "--jobs", str(jobs), "--disable-automatic-resolution", "--skip-update",
+    # Only the pinned revisions. SwiftPM takes them from its local cache when it has them.
+    flags = ["-c", "release", "--jobs", str(jobs), "--disable-automatic-resolution",
              "--package-path", source, "--scratch-path", scratch]
     if not sandbox:
         flags.append("--disable-sandbox")

@@ -309,7 +309,7 @@ def package_for(args, name):
     return OfflinePackage(args.scratch_root.resolve() / name)
 
 
-def swift_test(package, args, swift, plugin, build_path=None, extra=()):
+def swift_test(package, args, swift, plugin, build_path=None):
     """Run `swift test` on the generated package and return its exit status."""
     cache = args.scratch_root.resolve() / 'offline-module-cache'
     env = dict(os.environ, CLANG_MODULE_CACHE_PATH=str(cache / 'clang'),
@@ -317,7 +317,7 @@ def swift_test(package, args, swift, plugin, build_path=None, extra=()):
     command = [str(swift), 'test', '--package-path', str(package.directory),
                '--scratch-path', str(build_path or package.directory / 'build'),
                '--disable-automatic-resolution', '--jobs', str(args.jobs),
-               '-Xswiftc', '-load-plugin-library', '-Xswiftc', str(plugin), *extra]
+               '-Xswiftc', '-load-plugin-library', '-Xswiftc', str(plugin)]
     if args.sdk:
         command += ['--sdk', str(args.sdk)]
     return subprocess.run(command, env=env).returncode

@@ -3,7 +3,7 @@
 
 Builds the AppBundle library and two Swift Testing tests using TestWindow/TestApp.
 The test marker selects simulated monitors/config; no AX reads or app entrypoint
-are invoked. Resolution/update are disabled: dependencies must already be cached.
+are invoked. Automatic resolution is disabled: dependencies must already be cached.
 On Command Line Tools 26.x, pass an SDK that has the SwiftUI macro plugin, for
 example --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk.
 """
@@ -35,8 +35,7 @@ def prepare(args):
     # SwiftPM names a path dependency after its directory, so the checkout name decides it.
     package.write('Package.swift', PACKAGE.replace('ROOT_PATH', json.dumps(str(harness.ROOT))).replace(
         'IDENTITY', json.dumps(harness.path_package_identity(harness.ROOT))))
-    # --skip-update keeps SwiftPM off the network for the remote dependencies.
-    return package, dict(build_path=args.scratch_path, extra=('--skip-update',))
+    return package, dict(build_path=args.scratch_path)
 
 
 if __name__ == '__main__':
