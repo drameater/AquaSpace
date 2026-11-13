@@ -420,6 +420,14 @@ class InstallLock:
         except OSError as error:
             self.__exit__()
             raise UpdateError('Another installer is running, or the install lock cannot be acquired.') from error
+        try:
+            self._lock_legacy()
+        except BaseException:
+            self.__exit__()  # The with statement does not call __exit__ when __enter__ fails.
+            raise
+        return self
+
+    def _lock_legacy(self):
         primary = os.fstat(self.fd)
         for path, create in self.legacy:
             if not create and not os.path.lexists(path): continue
@@ -434,7 +442,10 @@ class InstallLock:
                 continue
             self.fds.append(fd)
             os.set_inheritable(fd, False)
-            info = os.fstat(fd)
+            try:
+                info = os.fstat(fd)
+            except OSError as error:
+                raise UpdateError(f'Cannot check the old install lock {path}: {error.strerror or error}') from error
             if info.st_uid != os.getuid():
                 self._skip(path, 'it belongs to another account'); continue
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -443,10 +454,8 @@ class InstallLock:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
-                self.__exit__()
                 raise UpdateError(f'An older AquaSpace installer is running (it holds {path}). '
                                   'Wait for it to finish, then try again.') from error
-        return self
 
     def _skip(self, path, reason):
         self.report(f'Note: the old install lock {path} cannot be used ({reason}). An older AquaSpace installer '
