@@ -59,15 +59,16 @@ that they mean. Nothing adds `aquaspace` to your shell `PATH`.
 
 ## Controller ownership and handoff
 
-This section describes the safety model in
-[WindowManagerHandoff.swift](../Sources/AppBundle/WindowManagerHandoff.swift),
-[WindowManagerAdmission.swift](../Sources/AppBundle/model/WindowManagerAdmission.swift),
-[windowManagerProcesses.swift](../Sources/AppBundle/util/windowManagerProcesses.swift),
-[PendingWindowRestoration.swift](../Sources/AppBundle/model/PendingWindowRestoration.swift)
-and [WindowDiscoveryInitialization.swift](../Sources/AppBundle/model/WindowDiscoveryInitialization.swift).
-
 The rule: at most one manager moves windows. When AquaSpace is not sure, it
 stops controlling windows and exits. It never starts another manager to recover.
+
+| Code | Job |
+| --- | --- |
+| [WindowManagerController.swift](../Sources/AppBundle/model/WindowManagerController.swift) | The lifecycle: startup admission, claim, peer watch, launch notifications, yield, handoff and stop. It also holds the write gate, `WindowWriteGate`. Every outside effect (exit, report, pause, drain, take over, hand off) is an injected closure, so tests run the real policy without a desktop. |
+| [WindowManagerHandoff.swift](../Sources/AppBundle/WindowManagerHandoff.swift) | Builds the one production controller and supplies its effects. Captures, sends and restores sessions. Keeps pending restoration. |
+| [WindowManagerAdmission.swift](../Sources/AppBundle/model/WindowManagerAdmission.swift), [WindowControlPermission.swift](../Sources/AppBundle/model/WindowControlPermission.swift) | The controller lock, the ownership phase and the state inside the write gate. |
+| [windowManagerProcesses.swift](../Sources/AppBundle/util/windowManagerProcesses.swift), [WindowManagerWatchHealth.swift](../Sources/AppBundle/model/WindowManagerWatchHealth.swift) | The process scan, its cache for the watch, and the log of failed watch scans. |
+| [WindowManagerSession.swift](../Sources/AppBundle/model/WindowManagerSession.swift), [PendingWindowRestoration.swift](../Sources/AppBundle/model/PendingWindowRestoration.swift), [WindowDiscoveryInitialization.swift](../Sources/AppBundle/model/WindowDiscoveryInitialization.swift) | The session format, delayed restoration and automatic window setup. |
 
 ### Identifying managers
 
@@ -82,9 +83,10 @@ of each process. It does not trust process names or startup arguments.
 - For a manager candidate, the scan reads the process birth time (PID, user,
   start time) before and after it reads the path. Both reads must agree, so a
   reused PID cannot pass.
-- A process whose path or `Info.plist` cannot be read is skipped. It cannot be a
-  known manager. This rule stops one unrelated process (for example, an app that
-  was replaced on disk while it runs) from stopping AquaSpace.
+- A process whose path cannot be read is skipped. If its `Info.plist` cannot be
+  read, only the executable name decides. This rule stops one unrelated process
+  (for example, an app that was replaced on disk while it runs) from stopping
+  AquaSpace.
 - A scan that fails as a whole is an error, not an empty result.
 
 ### Startup
@@ -108,10 +110,12 @@ of each process. It does not trust process names or startup arguments.
    floating and fullscreen flags, then the focused workspace and window. Rows
    for windows that are not visible yet stay pending (see below).
 
-The *write gate* (`WindowControlPermission`) has three parts: permission to
-write window positions, permission for automatic window setup, and a generation
-ID. A freeze closes both permissions and starts a new generation, so work that
-began before the freeze cannot continue after a later claim.
+The *write gate* (`WindowWriteGate`) holds a `WindowControlPermission` with
+three parts: permission to write window positions, permission for automatic
+window setup, and a generation ID. A freeze closes both permissions and starts a
+new generation, so work that began before the freeze cannot continue after a
+later claim. If the last startup step fails, before or after the claim,
+AquaSpace stops as in [Any other peer or doubt](#any-other-peer-or-doubt).
 
 ### Monitoring
 
@@ -121,11 +125,19 @@ began before the freeze cannot continue after a later claim.
   processes are not managers, by PID and kernel exec generation (unique process
   ID, exec version and executable image UUID). Any `exec` changes the
   generation, so a process that becomes a manager is read again on the next
-  scan. Startup, launch notifications, session export and status use a full
-  scan.
+  scan. Startup, launch notifications, session export, pending restoration and
+  status use a full scan.
+- If the `Info.plist` of a process cannot be read, the periodic scan reads it
+  again after 1, 2, 4, 8 and 16 scans, then every 25 scans.
+- After 25 failed scans in a row (about 5 seconds), AquaSpace writes one entry
+  to the system log, and one more when a scan works again. AquaSpace keeps
+  control during the failures. The entries use subsystem `local.aquaspace`,
+  category `Lifecycle`, as the failure reports do.
 - When macOS reports that another app with a manager bundle ID will launch,
   launched or became active, AquaSpace freezes writes at once and scans. If the
-  scan confirms a peer, AquaSpace yields. If not, it resumes control.
+  scan confirms a peer, AquaSpace yields. If not, it resumes control. If a
+  handoff or a stop already runs, AquaSpace ignores the notification, so a
+  failed scan cannot end a handoff.
 - Yielding cannot be undone. A yielded AquaSpace never takes control again; a
   new AquaSpace process must start.
 
@@ -154,7 +166,9 @@ Open AquaSpace normally to switch back.
 A debug build, an unbundled build, another AquaSpace, several peers, or a
 failed admission check stops control: AquaSpace yields, clears pending
 restoration, freezes writes, pauses management, writes the failure report,
-finishes pending AX work and exits with a failure status.
+finishes pending AX work and exits with a failure status. The report is
+written before the first wait, so it is saved even if a wait never ends. A
+second stop while the first one runs does nothing.
 
 ### Pending restoration
 
