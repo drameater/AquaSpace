@@ -1,6 +1,7 @@
 """Offline lost-executable inventory regressions: no native APIs or app launches."""
 import ctypes
 import errno
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -11,9 +12,9 @@ import aquaspace_update as u
 
 class LostExecutable:
     """One live process whose binary was deleted, e.g. by a Homebrew upgrade."""
-    def __init__(self):
+    def __init__(self, name=b'opencode'):
         self.path_error = errno.ENOENT
-        self.info_reads = 0
+        self.name = name
 
     def proc_listpids(self, kind, uid, buffer, size):
         if buffer is not None: ctypes.cast(buffer, ctypes.POINTER(ctypes.c_int))[0] = 1234
@@ -24,8 +25,11 @@ class LostExecutable:
         return 0
 
     def proc_pidinfo(self, pid, flavor, arg, buffer, size):
-        self.info_reads += 1
-        raise AssertionError('A process that cannot be classified needs no identity read')
+        # The kernel keeps the process name and birth time after the file is gone.
+        info = ctypes.cast(buffer, ctypes.POINTER(u.BsdInfo)).contents
+        info.pbi_pid, info.pbi_uid, info.pbi_status = pid, os.getuid(), 2
+        info.pbi_name, info.pbi_start_tvsec, info.pbi_start_tvusec = self.name, 77, 8
+        return ctypes.sizeof(u.BsdInfo)
 
 
 class LostExecutableInventoryTests(unittest.TestCase):
@@ -42,7 +46,12 @@ class LostExecutableInventoryTests(unittest.TestCase):
 
     def test_deleted_executable_is_skipped_without_blocking_the_update(self):
         self.assertEqual(self.scanner.managers(), [])
-        self.assertEqual(self.lib.info_reads, 0)
+
+    def test_deleted_manager_executable_still_blocks_the_update(self):
+        self.lib.name = b'AquaSpace'
+        managers = self.scanner.managers()
+        self.assertEqual([m.bundle_id for m in managers], ['unidentified.window-manager'])
+        self.assertEqual(managers[0].identity, (1234, 77, 8, os.getuid()))
 
     def test_gone_process_is_skipped(self):
         self.lib.path_error = errno.ESRCH
