@@ -42,6 +42,14 @@ final class WindowDiscoveryInitialization {
             (mayRunAutomaticCommand && WindowRestorationMutation.discoveryInitialization?.focusToken == userFocusToken)
     }
 
+    /// The entry check of setFocus: false when automatic discovery may not focus.
+    /// Otherwise it records an accepted user focus and returns true.
+    static func admitFocus(changed: @autoclosure () -> Bool) -> Bool {
+        guard mayRunAutomaticFocus else { return false }
+        recordUserFocus(changed: changed())
+        return true
+    }
+
     static func recordUserFocus(changed: Bool = false) {
         guard !WindowRestorationMutation.isAutomaticDiscovery, !WindowRestorationMutation.isSessionRestore,
               WindowRestorationMutation.isUserCommand || changed else { return }
