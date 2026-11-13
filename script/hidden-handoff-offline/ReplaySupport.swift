@@ -2,7 +2,7 @@ import Foundation
 
 // Local types intentionally shadow the real CG APIs. Only synthetic dictionaries
 // enter the actual production cache/classifier; there is no live desktop access.
-typealias CGWindowID = UInt32
+// The AX fakes and CGWindowID come from script/offline-shared.
 typealias CFDictionary = NSDictionary
 typealias CFNumber = NSNumber
 let kCGNullWindowID: UInt32 = 0
@@ -61,47 +61,9 @@ func CGWindowListCopyWindowInfo(_ options: CGWindowListOption, _ relative: CGWin
     return rows?.map { [kCGWindowLayer: $0.layer, kCGWindowNumber: $0.id, kCGWindowOwnerPID: $0.pid] as [String: Any] }
 }
 
-enum CancellationMode: Equatable, Sendable { case cancellable, nonCancellable }
-func checkCancellation(_ cm: CancellationMode = .cancellable) throws(CancellationError) {
-    if cm == .cancellable && Task.isCancelled { throw CancellationError() }
-}
-func check(_ condition: Bool, _ message: @autoclosure () -> String = "") {
-    if !condition { fatalError(message()) }
-}
-
 enum Json {
     case string(String), int(Int), null
-}
-extension Optional {
-    func orDie() -> Wrapped { guard let value = self else { fatalError("Unexpected nil") }; return value }
 }
 enum NSApplication {
     enum ActivationPolicy { case regular, accessory, prohibited }
 }
-protocol ReadableAttr { associatedtype T; var key: String { get } }
-struct ReplayAttr<T>: ReadableAttr { let key: String }
-final class AXUIElement: AxUiElementMock {
-    var id: UInt32?
-    var attributes: [String: Any] = [:]
-    init(_ id: UInt32? = nil) { self.id = id }
-    func containingWindowId() -> UInt32? { id }
-    func get<Attr: ReadableAttr>(_ attr: Attr) -> Attr.T? { attributes[attr.key] as? Attr.T }
-    func put<T>(_ attr: ReplayAttr<T>, _ value: T) { attributes[attr.key] = value }
-}
-typealias WindowIdAndAxUiElementMock = (windowId: UInt32, ax: any AxUiElementMock)
-enum Ax {
-    static let titleAttr = ReplayAttr<String>(key: "title")
-    static let identifierAttr = ReplayAttr<String>(key: "identifier")
-    static let subroleAttr = ReplayAttr<String>(key: "subrole")
-    static let enabledAttr = ReplayAttr<Bool>(key: "enabled")
-    static let isFocused = ReplayAttr<Bool>(key: "focused")
-    static let isMainAttr = ReplayAttr<Bool>(key: "main")
-    static let focusedWindowAttr = ReplayAttr<WindowIdAndAxUiElementMock>(key: "focusedWindow")
-    static let closeButtonAttr = ReplayAttr<any AxUiElementMock>(key: "close")
-    static let fullscreenButtonAttr = ReplayAttr<any AxUiElementMock>(key: "fullscreen")
-    static let zoomButtonAttr = ReplayAttr<any AxUiElementMock>(key: "zoom")
-    static let minimizeButtonAttr = ReplayAttr<any AxUiElementMock>(key: "minimize")
-}
-let kAXStandardWindowSubrole = "AXStandardWindow"
-let kAXDialogSubrole = "AXDialog"
-let kAXFloatingWindowSubrole = "AXFloatingWindow"

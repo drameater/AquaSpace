@@ -313,7 +313,7 @@ extension OfflineWindowDiscoveryTests {
     }
     @Test func unreadableNativeTitlebarMembershipCannotAuthorizeDelayedMoves() async {
         let (_, _, root) = setup()
-        root.attributes.removeValue(forKey: Ax.childrenAttr.name)
+        root.attributes.removeValue(forKey: Ax.childrenAttr.key)
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
         let bar = AXUIElement(owner: 42); bar.set(Ax.roleAttr, kAXTabGroupRole)
@@ -368,7 +368,7 @@ extension OfflineWindowDiscoveryTests {
 
     @Test func failedSecondProofCannotForgetTheFirstRootBeforeReplacement() async {
         let (app, window, root) = setup()
-        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.key) }
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
         #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
@@ -446,7 +446,7 @@ extension OfflineWindowDiscoveryTests {
     @Test func failedSecondProofWithUnchangedRootRemainsRetryable() async {
         let (app, window, root) = setup()
         let originalToken = app.windows.threadGuarded[42]?.restorationToken
-        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.key) }
         await ReplayCoordinator.restorePendingAssignments()
         #expect(ReplayCoordinator.restorationRootTokens[42] == originalToken)
         #expect(ReplayCoordinator.pendingRestoration.assignments.count == 1)
@@ -559,7 +559,7 @@ extension OfflineWindowDiscoveryTests {
         root.attributes["windowType"] = AxUiElementWindowType.popup
         await ReplayCoordinator.restorePendingAssignments()
         let token = ReplayCoordinator.restorationRootTokens[42]
-        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.name) }
+        app.thread?.afterRead = { root.attributes.removeValue(forKey: Ax.childrenAttr.key) }
         do {
             _ = try await ReplayCoordinator.sessionForUpdate()
             Issue.record("A failed second export proof must block export")

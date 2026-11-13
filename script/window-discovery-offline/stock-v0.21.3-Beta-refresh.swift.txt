@@ -1,0 +1,32 @@
+    private func refreshAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [UInt32] {
+        if nsApp.isTerminated {
+            await destroy()
+            return []
+        }
+        guard let thread else { return [] }
+        let (alive, dead) = try await thread.runInLoop(.cancellable) { [nsApp, windows, axApp] (job) -> ([UInt32], [UInt32]) in
+            var alive: [UInt32: AxWindow] = windows.threadGuarded
+            var dead = [UInt32: AxWindow]()
+            // Second line of defence against lock screen. See the first line of defence: closedWindowsCache
+            // Second and third lines of defence are technically needed only to avoid potential flickering
+            if frontmostAppBundleId != lockScreenAppBundleId {
+                (alive, dead) = try alive.partition {
+                    try job.checkCancellation()
+                    return $0.value.ax.containingWindowId() != nil
+                }
+            }
+
+            for (id, window) in axApp.threadGuarded.get(Ax.windowsAttr) ?? [] {
+                try job.checkCancellation()
+                try alive.getOrRegisterAxWindow(windowId: id, window, nsApp, job)
+            }
+
+            windows.threadGuarded = alive
+            return (Array(alive.keys), Array(dead.keys))
+        }
+        windowsCount = alive.count
+        for windowId in dead {
+            setFrameJobs.removeValue(forKey: windowId)?.cancel()
+        }
+        return alive
+    }

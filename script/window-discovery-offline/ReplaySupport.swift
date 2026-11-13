@@ -1,6 +1,5 @@
 import Foundation
 
-enum CancellationMode { case cancellable, nonCancellable }
 @MainActor final class ReplayThread {
     var afterRead: (() -> Void)?
     func runInLoop<T>(_ mode: CancellationMode, _ body: (RunLoopJob) throws -> T) async throws -> T {
@@ -41,7 +40,6 @@ extension Dictionary where Key == UInt32, Value == AxWindow {
         return window
     }
 }
-extension RunLoopJob { func cancel() { cancelled = true } }
 struct DiscoveryFixture: Sendable {
     let pid: Int32
     let retained: [UInt32]
@@ -57,16 +55,8 @@ struct DiscoveryFixture: Sendable {
     }
 }
 
-
 enum AxUiElementWindowType: Sendable { case window, dialog, popup }
 enum MacOsWindowLevel { case normalWindow }
-struct KnownBundleId { init?(rawValue: String) { return nil } }
-enum ReplayAXError { case success, failure }
-func AXUIElementGetPid(_ element: AXUIElement, _ pid: inout Int32) -> ReplayAXError {
-    guard let value = element.attributes["pid"] as? Int32 else { return .failure }
-    pid = value
-    return .success
-}
 extension AXUIElement {
     func getWindowType(axApp: AXUIElement, _ bundle: KnownBundleId?, _ policy: String,
                        _ level: MacOsWindowLevel?) -> AxUiElementWindowType {
@@ -192,6 +182,8 @@ enum ReplayParentCase {
     var discoveryInitialization: WindowDiscoveryInitialization?
     var userMutationToken = UUID()
     var lastFloatingSize: CGSize?
+    var lastAppliedLayoutVirtualRect: CGRect?
+    var lastAppliedLayoutPhysicalRect: CGRect?
     var layoutReason: ReplayLayoutReason = .standard
     var visualWorkspace: Workspace? { nodeWorkspace }
     var macAppUnsafe: ReplayAquaApp { macApp }
@@ -429,7 +421,6 @@ struct CmdStdin {
     static var emptyStdin: Self { Self("") }
 }
 extension Array { func singleOrNil() -> Element? { count == 1 ? first : nil }; func orDie() -> Self { self } }
-extension Optional { func orDie() -> Wrapped { self! } }
 @MainActor func bugPrompt() -> String { "replay error" }
 @MainActor func bugPrompt(_ message: String) -> String { message }
 @MainActor func windowIsntPartOfTree(_ window: Window) -> String { "unbound" }
@@ -469,6 +460,10 @@ extension Bool {
     func resolveTargetOrReportError(_ env: CmdEnv, _ io: CmdIo) -> Target? { Target(windowOrNil: window) }
 }
 @MainActor func resetClosedWindowsCache() {}
+// Native-tab focus history is not modeled; no discovery replay replaces a tab.
+@MainActor func replaceNativeTabFocusId(_ oldId: UInt32, _ newId: UInt32) {
+    fatalError("Native-tab focus transfer is outside the discovery replay")
+}
 @MainActor func refreshModel_nonCancellable() async { await Simulation.commandRefresh?() }
 
 struct ReplayLayoutResult {

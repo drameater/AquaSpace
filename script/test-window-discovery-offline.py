@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
 """Compare stock/fork discovery with captured AX visibility, entirely in memory.
 
-Extracts the actual refresh methods from the local stock tag and current source,
-plus AquaSpace's real tab state machine. No AppKit, AX, WindowServer, application,
-process inventory, installed CLI or diagnostic helper is linked or invoked.
+Compiles the stock refresh method of upstream v0.21.3-Beta (a vendored copy) and
+the current one, plus AquaSpace's real tab state machine, restoration, command
+and callback code. No AppKit, AX, WindowServer, application, process inventory,
+installed CLI or diagnostic helper is linked or invoked.
+
+Most production files here mix the tested logic with model-tree code, so the
+runner lifts named declarations out of them (see offline_harness.SwiftSource).
+When production code renames one, the run stops with the file and the name.
 """
 import hashlib
 import json
-import os
-from pathlib import Path
 import subprocess
 
+import offline_harness as harness
 
-def main():
-    root = Path(__file__).resolve().parents[1]
-    package = root / '.debug/window-discovery-offline'
-    source = package / 'Sources/WindowDiscoveryReplay'
-    tests = package / 'Tests/WindowDiscoveryReplayTests'
-    for directory in (source, tests):
-        directory.mkdir(parents=True, exist_ok=True)
-    production = root / 'Sources/AppBundle'
-    stock = subprocess.check_output(['git', '-C', str(root), 'show',
-        'v0.21.3-Beta:Sources/AppBundle/tree/MacApp.swift'], text=True)
-    fork = (production / 'tree/MacApp.swift').read_text()
-    prefix = '    private func refreshAndGetAliveWindowIds('
-    bodies = {}
-    for name, text, end in [('Stock', stock, '\n    private func destroy()'),
-                            ('Aqua', fork, '\n    @MainActor\n    func invalidateNativeTabObservations')]:
-        if text.count(prefix) != 1 or text.count(end) != 1:
-            raise RuntimeError('Discovery method boundaries changed; review extraction.')
-        body = text[text.index(prefix):text.index(end)].replace('private func', 'func', 1)
-        bodies[name] = hashlib.sha256(body.encode()).hexdigest()
-        wrapper = '''import Foundation
+PACKAGE = '''// swift-tools-version: 6.2
+import PackageDescription
+let package = Package(name: "WindowDiscoveryReplay", platforms: [.macOS(.v13)], targets: [
+    .target(name: "WindowDiscoveryReplay"),
+    .testTarget(name: "WindowDiscoveryReplayTests", dependencies: ["WindowDiscoveryReplay"]),
+])
+'''
+FIXTURES = harness.ROOT / 'script/window-discovery-offline'
+# The stock method is frozen upstream history, so a vendored copy replaces the
+# git tag that earlier versions read. The tag, when present, verifies the copy.
+STOCK_TAG, STOCK_COMMIT = 'v0.21.3-Beta', 'd56e1637c3a1ed660d0cadd7534e94fb3218d1c3'
+STOCK_REFRESH = FIXTURES / 'stock-v0.21.3-Beta-refresh.swift.txt'
+REFRESH = 'func refreshAndGetAliveWindowIds('
+TESTS = ('WindowDiscoveryTest', 'DeferredRestorationTest', 'CallbackCommandContinuationTest', 'CallbackSafetyTest',
+         'NoOpIntentTest', 'MutationIntentEntryTest', 'CrossWindowCallbackChainTest')
+APP_WRAPPER = '''import Foundation
 import CoreFoundation
 @MainActor final class ReplayNAMEApp {
     let nsApp = ReplayApplication()
@@ -50,62 +50,9 @@ import CoreFoundation
     func seed(_ roots: [AXUIElement]) {
         windows.threadGuarded = Dictionary(uniqueKeysWithValues: roots.map { ($0.owner!, AxWindow($0)) })
     }
-BODY
-}
-'''.replace('NAME', name).replace('BODY', body)
-        if name == 'Aqua':
-            proof_start = '    struct RestorationWindowProof:'
-            proof_end = '\n    @MainActor\n    func applyNativeTabUpdate'
-            if fork.count(proof_start) != 1 or fork.count(proof_end) != 1:
-                raise RuntimeError('AX proof extraction boundaries changed.')
-            wrapper = wrapper[:-2] + fork[fork.index(proof_start):fork.index(proof_end)] + '\n}\n'
-        (source / ('Replay' + name + 'App.swift')).write_text(wrapper)
-    for relative in ('model/NativeTabReplacement.swift', 'tree/nativeTabTopology.swift', 'tree/nativeTabs.swift'):
-        text = (production / relative).read_text()
-        if relative.endswith('/nativeTabs.swift'):
-            start, end = '/// Read the binding at the instant of replacement:', '/// AX objects stay on their application'
-            if text.count(start) != 1 or text.count(end) != 1:
-                raise RuntimeError('Tab adapter extraction boundaries changed.')
-            text = text[:text.index(start)] + text[text.index(end):]
-        (source / Path(relative).name).write_text(text.replace('import AppKit\n', 'import Foundation\nimport CoreFoundation\n'))
-    support = (root / 'script/native-tabs-offline/ReplayAX.swift').read_text()
-    support = support.replace('enum Ax {', 'enum Ax {\n    static let windowsAttr = ReplayAttribute<[WindowIdAndAxUiElement]>(name: "windows")')
-    support = support.replace('enum Ax {', 'enum Ax {\n    static let focusedWindowAttr = ReplayAttribute<WindowIdAndAxUiElement>(name: "focused")')
-    (source / 'ReplayAX.swift').write_text(support)
-    dictionary = (root / 'Sources/Common/util/DictionaryEx.swift').read_text()
-    boundary = '\nextension Dictionary where Key: Comparable'
-    if dictionary.count(boundary) != 1:
-        raise RuntimeError('Dictionary helper boundary changed.')
-    (source / 'DictionaryEx.swift').write_text(dictionary[:dictionary.index(boundary)])
-    (source / 'PendingWindowRestoration.swift').write_text((production / 'model/PendingWindowRestoration.swift').read_text())
-    handoff = (production / 'WindowManagerHandoff.swift').read_text()
-    admission_source = (production / 'model/WindowManagerAdmission.swift').read_text()
-    permission_start, permission_stop = 'struct WindowControlPermission:', '\nenum WindowManagerOwnership:'
-    if any(admission_source.count(marker) != 1 for marker in (permission_start, permission_stop)):
-        raise RuntimeError('Controller permission boundaries changed.')
-    (source / 'WindowControlPermission.swift').write_text('import Foundation\n' + admission_source[
-        admission_source.index(permission_start):admission_source.index(permission_stop)])
-    begin, end = 'struct WindowManagerSession:', '\n@MainActor\nenum WindowManagerHandoff'
-    restore, switch = '    static func restoreStartupSession() async {', '\n    static func switchToOriginal('
-    if any(handoff.count(marker) != 1 for marker in (begin, end, restore, switch)):
-        raise RuntimeError('Handoff extraction boundaries changed.')
-    (source / 'WindowManagerSession.swift').write_text(handoff[handoff.index(begin):handoff.index(end)])
-    (source / 'ReplayHandoff.swift').write_text("""@MainActor enum ReplayHandoff {
-    static var startupSession: WindowManagerSession?
-    static var commands: [[String]] = []
-    static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
-    static var onCommand: (([String]) throws -> Void)?
-    static func reconcilePendingRestoration() {}
-    static func localCommand(_ args: [String]) async throws { commands.append(args); try onCommand?(args) }
-""" + handoff[handoff.index(restore):handoff.index(switch)] + '\n}\n')
-    anchor_start, anchor_end = '    private struct RestorationAnchor:', '    private static func captureOwners('
-    coordinator_start, coordinator_end = '    static func reconcilePendingRestoration()', '    private static func capture(_ command:'
-    if any(handoff.count(marker) != 1 for marker in (anchor_start, anchor_end, coordinator_start, coordinator_end)):
-        raise RuntimeError('Deferred adapter extraction boundaries changed.')
-    anchor = handoff[handoff.index(anchor_start):handoff.index(anchor_end)].replace('private ', '')
-    coordinator = handoff[handoff.index(coordinator_start):handoff.index(coordinator_end)].replace('private static func captureCurrentModel', 'static func captureCurrentModel')
-    capture_owners = handoff[handoff.index(anchor_end):handoff.index(coordinator_start)]
-    (source / 'ReplayCoordinator.swift').write_text('''import Foundation
+BODY}
+'''
+COORDINATOR_HEADER = '''import Foundation
 @MainActor enum ReplayCoordinator {
     static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
     static var restoringPending = false
@@ -119,133 +66,127 @@ BODY
     static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
     static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
     enum HandoffError: Error { case message(String) }
-''' + anchor + capture_owners + coordinator + '\n}\n')
+'''
+HANDOFF_HEADER = '''@MainActor enum ReplayHandoff {
+    static var startupSession: WindowManagerSession?
+    static var commands: [[String]] = []
+    static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
+    static var onCommand: (([String]) throws -> Void)?
+    static func reconcilePendingRestoration() {}
+    static func localCommand(_ args: [String]) async throws { commands.append(args); try onCommand?(args) }
+'''
+
+
+def git(*args):
+    return subprocess.run(['git', '-C', str(harness.ROOT), *args], capture_output=True, text=True)
+
+
+def stock_refresh():
+    """Return the vendored stock method; check it against the tag when the tag exists."""
+    vendored = STOCK_REFRESH.read_text()
+    tagged = git('show', STOCK_TAG + ':Sources/AppBundle/tree/MacApp.swift')
+    if tagged.returncode != 0:
+        return vendored, f'vendored copy (tag {STOCK_TAG} not present; not re-verified)'
+    if harness.SwiftSource(f'MacApp.swift at {STOCK_TAG}', tagged.stdout).decl(REFRESH) != vendored:
+        raise harness.HarnessError(f'{STOCK_REFRESH.relative_to(harness.ROOT)} differs from {REFRESH}...) at tag {STOCK_TAG}. '
+                                   'The upstream tag is immutable; restore the vendored copy from it.')
+    return vendored, f'vendored copy, verified against tag {STOCK_TAG}'
+
+
+def without_imports(text):
+    return harness.retarget_imports(text, drop=('AppKit', 'Common'), add=('Foundation',))
+
+
+def prepare(args):
+    package = harness.package_for(args, 'window-discovery-offline')
+    source, tests = 'Sources/WindowDiscoveryReplay/', 'Tests/WindowDiscoveryReplayTests/'
+
+    def production(relative):
+        return harness.SwiftSource('Sources/AppBundle/' + relative)
+
+    def write(name, text):
+        package.write(source + name, text)
+
+    mac_app = production('tree/MacApp.swift')
+    stock, stock_origin = stock_refresh()
+    bodies = {}
+    for name, body, extra in (('Stock', stock, ''),
+                              ('Aqua', mac_app.decl(REFRESH),
+                               mac_app.decl('struct RestorationWindowProof:', 'func restorationWindowProof('))):
+        body = body.replace('private func', 'func', 1)
+        bodies[name] = hashlib.sha256(body.encode()).hexdigest()
+        write(f'Replay{name}App.swift', APP_WRAPPER.replace('NAME', name).replace('BODY', body + extra))
+    # Whole files. nativeTabs.swift binds windows through the local tree stubs.
+    for relative in ('model/NativeTabReplacement.swift', 'tree/nativeTabTopology.swift', 'tree/nativeTabs.swift',
+                     'util/AxUiElementMock.swift', 'model/KnownBundleId.swift', 'model/PendingWindowRestoration.swift'):
+        write(relative.split('/')[-1], harness.retarget_imports(
+            production(relative).text, drop=('AppKit', 'Common'), add=('Foundation', 'CoreFoundation')))
+    write('DictionaryEx.swift', harness.SwiftSource('Sources/Common/util/DictionaryEx.swift').text)
+    for name in ('ReplayAX.swift', 'ReplayRuntime.swift', 'ReplayNativeTabEnvironment.swift'):
+        package.copy(source + name, harness.SHARED_SWIFT / name)
+
+    admission = production('model/WindowManagerAdmission.swift')
+    write('WindowControlPermission.swift', 'import Foundation\n' + admission.decl('struct WindowControlPermission:'))
+    handoff = production('WindowManagerHandoff.swift')
+    write('WindowManagerSession.swift', handoff.decl('struct WindowManagerSession:'))
+    write('ReplayHandoff.swift', HANDOFF_HEADER + handoff.decl('static func restoreStartupSession(') + '}\n')
+    anchor = handoff.between('struct RestorationAnchor:', 'static func captureOwners(').replace('private ', '')
+    capture_owners = handoff.between('static func captureOwners(', 'static func reconcilePendingRestoration(')
+    coordinator = handoff.between('static func reconcilePendingRestoration(', 'static func capture(_ command:').replace(
+        'private static func captureCurrentModel', 'static func captureCurrentModel')
+    write('ReplayCoordinator.swift', COORDINATOR_HEADER + anchor + capture_owners + coordinator + '}\n')
+
     # Exercise the real shell command entrypoint and movement helper. Only tree
     # storage/AX are replaced; the pre-bind policy is extracted from production.
-    shell = (production / 'shell/Shell.swift').read_text()
-    shell_start = '    @MainActor func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode {'
-    shell_end = '\n    @discardableResult @MainActor func run('
-    if shell.count(shell_start) != 1 or shell.count(shell_end) != 1:
-        raise RuntimeError('Shell command extraction boundaries changed.')
-    compound_start = '@MainActor private func runShellOr('
-    if shell.count(compound_start) != 1:
-        raise RuntimeError('Compound shell extraction boundary changed.')
-    (source / 'ReplayCommandRunner.swift').write_text('extension Shell where T == any Command {\n' +
-        shell[shell.index(shell_start):shell.index(shell_end)] + '\n}\n' + shell[shell.index(compound_start):])
-    move = (production / 'command/impl/MoveNodeToWorkspaceCommand.swift').read_text()
-    move_start = '@MainActor\nfunc moveWindowToWorkspace('
-    if move.count(move_start) != 1:
-        raise RuntimeError('Move command extraction boundary changed.')
-    (source / 'MoveWindow.swift').write_text(move[move.index(move_start):].replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
-    focus_command = (production / 'command/impl/FocusCommand.swift').read_text()
-    focus_end = '\n@MainActor private func makeFloatingWindowsSeenAsTiling('
-    if focus_command.count(focus_end) != 1:
-        raise RuntimeError('Focus command boundary changed.')
-    (source / 'FocusCommand.swift').write_text(focus_command[:focus_command.index(focus_end)]
-        .replace('import AppKit\n', '').replace('import Common\n', ''))
-    focus_source = (production / 'focus.swift').read_text()
-    focus_start, focus_stop = '@MainActor func setFocus(', '\nextension Window {'
-    if focus_source.count(focus_start) != 1 or focus_source.count(focus_stop) != 1:
-        raise RuntimeError('Focus effect boundary changed.')
-    (source / 'FocusEffect.swift').write_text(focus_source[
-        focus_source.index(focus_start):focus_source.index(focus_stop)].replace('_focus', 'focus'))
-    check_start = 'func shouldFailBecauseFullscreen_nonCancellable('
-    move_command = (production / 'command/impl/MoveCommand.swift').read_text()
-    if move_command.count(check_start) != 1:
-        raise RuntimeError('Fullscreen focus check boundary changed.')
-    (source / 'FocusFullscreenCheck.swift').write_text('@MainActor\n' + move_command[move_command.index(check_start):])
-    tiling = (production / 'tree/TilingContainer.swift').read_text()
-    orientation_start, orientation_stop = '    @MainActor\n    func changeOrientation(', '\n    func normalizeOppositeOrientationForNestedContainers('
-    if any(tiling.count(marker) != 1 for marker in (orientation_start, orientation_stop)):
-        raise RuntimeError('Orientation mutation boundaries changed.')
-    (source / 'OrientationEffect.swift').write_text('extension ReplayParent {\n' + tiling[
-        tiling.index(orientation_start):tiling.index(orientation_stop)].replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n')
-    focus_helpers_start, focus_helpers_end = '@MainActor private func makeFloatingWindowsSeenAsTiling(', '\nextension TreeNode {'
-    if focus_command.count(focus_helpers_start) != 1 or focus_command.count(focus_helpers_end) != 1:
-        raise RuntimeError('Floating focus preparation boundaries changed.')
-    focus_helpers = focus_command[focus_command.index(focus_helpers_start):focus_command.index(focus_helpers_end)]
-    (source / 'FloatingFocusPreparation.swift').write_text('import Foundation\n' + focus_helpers.replace('private ', ''))
-    fullscreen = (production / 'command/impl/FullscreenCommand.swift').read_text()
-    (source / 'FullscreenCommand.swift').write_text(fullscreen.replace('import AppKit\n', '').replace('import Common\n', '')
-        .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
-    for name in ('LayoutCommand', 'CloseCommand', 'CloseAllWindowsButCurrentCommand', 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
-        body = (production / ('command/impl/' + name + '.swift')).read_text()
-        (source / (name + '.swift')).write_text(body.replace('import AppKit\n', 'import Foundation\n').replace('import Common\n', '')
-            .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
-    mac_window = (production / 'tree/MacWindow.swift').read_text()
-    detected_start = '@MainActor\nfunc runOnWindowDetected('
-    detected_end = '@MainActor\nfunc onWindowDetected('
-    if mac_window.count(detected_start) != 1 or mac_window.count(detected_end) != 1:
-        raise RuntimeError('Automatic detection callback boundaries changed.')
-    matcher_start = '\nextension WindowDetectedCallback {'
-    if mac_window.count(matcher_start) != 1:
-        raise RuntimeError('Detection callback matcher boundary changed.')
-    (source / 'AutomaticDetection.swift').write_text(mac_window[
-        mac_window.index(detected_start):mac_window.index(matcher_start)])
-    # All four compound operators now come from the production shell above.
-    (source / 'SequentialShell.swift').unlink(missing_ok=True)
-    registration_start = '        let initialization = WindowDiscoveryInitialization(window)'
-    registration_end = '        return window\n    }'
-    if mac_window.count(registration_start) != 1 or mac_window.count(registration_end) != 1:
-        raise RuntimeError('Registration initialization boundaries changed.')
-    registration = mac_window[mac_window.index(registration_start):mac_window.index(registration_end)]
-    (source / 'RegistrationInitialization.swift').write_text(
-        'extension MacWindow {\nstatic func initializeRegistered(_ window: MacWindow) async throws {\n'
-        'let windowId = window.windowId\n' + registration + '\n}\n}\n')
-    relayout_start = 'extension Window {\n    @MainActor\n    func relayoutWindow('
-    relayout_end = 'private func unbindAndGetBindingDataForNewTilingWindow('
-    if mac_window.count(relayout_start) != 1 or mac_window.count(relayout_end) != 1:
-        raise RuntimeError('Relayout continuation extraction boundaries changed.')
-    relayout = mac_window[mac_window.index(relayout_start):mac_window.index(relayout_end)]
-    # Drop only the final annotation for the following memory binding helper.
-    relayout = relayout[:relayout.rindex('@MainActor')]
-    (source / 'WindowRelayout.swift').write_text('import Foundation\n' + relayout)
-    tree = (production / 'tree/TreeNode.swift').read_text()
-    bind_start = 'func bind(to newParent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) -> BindingData? {'
-    bind_end = '        let result = unbindIfBound()'
-    if tree.count(bind_start) != 1 or tree.count(bind_end) != 1:
-        raise RuntimeError('Tree mutation extraction boundaries changed.')
-    before_bind = tree[tree.index(bind_start) + len(bind_start):tree.index(bind_end)]
-    (source / 'ReplayBeforeBind.swift').write_text('extension MacWindow {\nfunc beforeBind() {\n' +
-        before_bind.replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n}\n')
-    mutation = production / 'model/WindowRestorationMutation.swift'
-    destination = source / mutation.name
-    if mutation.exists():
-        destination.write_text(mutation.read_text())
-    elif destination.exists():
-        destination.unlink()
-    (source / 'WindowDiscoveryInitialization.swift').write_text((production / 'model/WindowDiscoveryInitialization.swift').read_text().replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
-    fixture_root = root / 'script/window-discovery-offline'
-    (source / 'ReplaySupport.swift').write_text((fixture_root / 'ReplaySupport.swift').read_text())
-    (tests / 'WindowDiscoveryTest.swift').write_text((fixture_root / 'WindowDiscoveryTest.swift').read_text())
-    (tests / 'DeferredRestorationTest.swift').write_text((fixture_root / 'DeferredRestorationTest.swift').read_text())
-    (tests / 'CallbackCommandContinuationTest.swift').write_text((fixture_root / 'CallbackCommandContinuationTest.swift').read_text())
-    (tests / 'CallbackSafetyTest.swift').write_text((fixture_root / 'CallbackSafetyTest.swift').read_text())
-    (tests / 'NoOpIntentTest.swift').write_text((fixture_root / 'NoOpIntentTest.swift').read_text())
-    (tests / 'MutationIntentEntryTest.swift').write_text((fixture_root / 'MutationIntentEntryTest.swift').read_text())
-    (tests / 'CrossWindowCallbackChainTest.swift').write_text((fixture_root / 'CrossWindowCallbackChainTest.swift').read_text())
-    fixture = json.loads((fixture_root / 'captured-inventory.json').read_text())
+    shell = production('shell/Shell.swift')
+    write('ReplayCommandRunner.swift', 'extension Shell where T == any Command {\n' +
+          shell.decl('func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode') + '}\n' +
+          shell.between('func runShellOr('))
+    write('MoveWindow.swift', production('command/impl/MoveNodeToWorkspaceCommand.swift')
+          .between('func moveWindowToWorkspace(').replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+    focus_command = production('command/impl/FocusCommand.swift')
+    write('FocusCommand.swift', harness.retarget_imports(
+        focus_command.before('func makeFloatingWindowsSeenAsTiling('), drop=('AppKit', 'Common')))
+    write('FloatingFocusPreparation.swift', 'import Foundation\n' + focus_command.between(
+        'func makeFloatingWindowsSeenAsTiling(', 'extension TreeNode {').replace('private ', ''))
+    write('FocusEffect.swift', production('focus.swift').between('func setFocus(', 'extension Window {').replace('_focus', 'focus'))
+    write('FocusFullscreenCheck.swift', '@MainActor\n' + production('command/impl/MoveCommand.swift')
+          .between('func shouldFailBecauseFullscreen_nonCancellable('))
+    write('OrientationEffect.swift', 'extension ReplayParent {\n' + production('tree/TilingContainer.swift')
+          .decl('func changeOrientation(').replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '}\n')
+    for name in ('FullscreenCommand', 'LayoutCommand', 'CloseCommand', 'CloseAllWindowsButCurrentCommand',
+                 'MacosNativeFullscreenCommand', 'MacosNativeMinimizeCommand'):
+        write(name + '.swift', without_imports(production(f'command/impl/{name}.swift').text)
+              .replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+
+    mac_window = production('tree/MacWindow.swift')
+    write('AutomaticDetection.swift', mac_window.between('func runOnWindowDetected(', 'extension WindowDetectedCallback {'))
+    write('RegistrationInitialization.swift',
+          'extension MacWindow {\nstatic func initializeRegistered(_ window: MacWindow) async throws {\n'
+          'let windowId = window.windowId\n' +
+          mac_window.statements('let initialization = WindowDiscoveryInitialization(window)', 'return window') + '\n}\n}\n')
+    write('WindowRelayout.swift', 'import Foundation\nextension Window {\n' + mac_window.decl('func relayoutWindow(') +
+          '}\n\n' + mac_window.decl('func unbindAndGetBindingDataForNewWindow('))
+    before_bind = production('tree/TreeNode.swift').body_until('func bind(to newParent:', 'let result = unbindIfBound()')
+    write('ReplayBeforeBind.swift', 'extension MacWindow {\nfunc beforeBind() {\n' +
+          before_bind.replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n}\n')
+    for relative in ('model/WindowRestorationMutation.swift', 'model/WindowDiscoveryInitialization.swift'):
+        write(relative.split('/')[-1], production(relative).text.replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
+
+    package.copy(source + 'ReplaySupport.swift', FIXTURES / 'ReplaySupport.swift')
+    for name in TESTS:
+        package.copy(f'{tests}{name}.swift', FIXTURES / f'{name}.swift')
+    fixture = json.loads((FIXTURES / 'captured-inventory.json').read_text())
     rows = [f'    DiscoveryFixture(pid: {r["pid"]}, retained: {r["retained_ids"]}, exposed: {r["exposed_ids"]})' for r in fixture['apps']]
-    (source / 'CapturedFixture.swift').write_text('let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')
-    (package / 'source-record.json').write_text(json.dumps(dict(stock_revision=subprocess.check_output(
-        ['git', '-C', str(root), 'rev-parse', 'v0.21.3-Beta^{commit}'], text=True).strip(),
-        fork_revision=subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
+    write('CapturedFixture.swift', 'let capturedFixtures: [DiscoveryFixture] = [\n' + ',\n'.join(rows) + '\n]\n')
+    fork = git('rev-parse', 'HEAD')
+    package.write('source-record.json', json.dumps(dict(
+        stock_revision=STOCK_COMMIT, stock_source=stock_origin,
+        fork_revision=fork.stdout.strip() if fork.returncode == 0 else None,
         extracted_method_sha256=bodies), indent=2) + '\n')
-    (package / 'Package.swift').write_text('''// swift-tools-version: 6.2
-import PackageDescription
-let package = Package(name: "WindowDiscoveryReplay", platforms: [.macOS(.v13)], targets: [
-    .target(name: "WindowDiscoveryReplay"),
-    .testTarget(name: "WindowDiscoveryReplayTests", dependencies: ["WindowDiscoveryReplay"]),
-])
-''')
-    env = dict(os.environ)
-    env['CLANG_MODULE_CACHE_PATH'] = str(package / 'clang-cache')
-    plugin = Path('/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib')
-    flags = ['-Xswiftc', '-load-plugin-library', '-Xswiftc', str(plugin)] if plugin.exists() else []
-    return subprocess.run(['swift', 'test', '--package-path', str(package), '--scratch-path',
-        str(package / 'build'), '--disable-sandbox', '--disable-automatic-resolution',
-        '--skip-update', '--jobs', '2', *flags], env=env).returncode
+    package.write('Package.swift', PACKAGE)
+    return package, {}
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(harness.main(prepare, __doc__))

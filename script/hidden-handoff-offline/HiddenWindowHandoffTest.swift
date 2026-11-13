@@ -4,16 +4,16 @@ import Testing
 @Suite(.serialized) @MainActor
 struct HiddenWindowHandoffTest {
     func window(_ id: UInt32, subrole: String = kAXStandardWindowSubrole) -> AXUIElement {
-        let result = AXUIElement(id)
-        result.put(Ax.subroleAttr, subrole)
-        result.put(Ax.titleAttr, "Zen Browser")
-        result.put(Ax.isFocused, false)
-        result.put(Ax.isMainAttr, false)
+        let result = AXUIElement(owner: id)
+        result.set(Ax.subroleAttr, subrole)
+        result.set(Ax.titleAttr, "Zen Browser")
+        result.set(Ax.isFocused, false)
+        result.set(Ax.isMainAttr, false)
         let button = AXUIElement()
-        button.put(Ax.enabledAttr, true)
-        result.put(Ax.closeButtonAttr, button)
-        result.put(Ax.fullscreenButtonAttr, button)
-        result.put(Ax.minimizeButtonAttr, button)
+        button.set(Ax.enabledAttr, true)
+        result.set(Ax.closeButtonAttr, button)
+        result.set(Ax.fullscreenButtonAttr, button)
+        result.set(Ax.minimizeButtonAttr, button)
         return result
     }
 
@@ -84,11 +84,11 @@ struct HiddenWindowHandoffTest {
 
     @Test func normalLayerDoesNotTurnButtonlessTooltipIntoWindow() async throws {
         ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: 0, onScreen: false)])
-        let tooltip = AXUIElement(12)
-        tooltip.put(Ax.subroleAttr, "AXUnknown")
-        tooltip.put(Ax.titleAttr, "Hover tooltip")
-        tooltip.put(Ax.isFocused, false)
-        tooltip.put(Ax.isMainAttr, false)
+        let tooltip = AXUIElement(owner: 12)
+        tooltip.set(Ax.subroleAttr, "AXUnknown")
+        tooltip.set(Ax.titleAttr, "Hover tooltip")
+        tooltip.set(Ax.isFocused, false)
+        tooltip.set(Ax.isMainAttr, false)
         #expect(tooltip.getWindowType(axApp: AXUIElement(), .zenBrowser, .regular, try await getWindowLevel(for: 12, .cancellable)) == .popup)
     }
 

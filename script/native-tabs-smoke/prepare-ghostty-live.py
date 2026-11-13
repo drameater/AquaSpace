@@ -78,14 +78,14 @@ func nativeTabLiveTestAllows(_ id: UInt32, _ window: AXUIElement) -> Bool {
     env = dict(os.environ)
     env.setdefault("CLANG_MODULE_CACHE_PATH", str(args.scratch_path / "clang-cache"))
     env.setdefault("SWIFTPM_MODULECACHE_OVERRIDE", str(args.scratch_path / "swift-cache"))
-    subprocess.run(["swift", "build", *flags, "--product", "AquaSpaceApp"], check=True, env=env)
+    subprocess.run(["swift", "build", *flags, "--product", "AeroSpaceApp"], check=True, env=env)
     binary_dir = Path(subprocess.check_output(["swift", "build", *flags, "--show-bin-path"], text=True, env=env).strip())
     target = args.output / "AeroSpace Native Tabs.app"
     executable = target / "Contents/MacOS/AquaSpaceApp"
     executable.parent.mkdir(parents=True, exist_ok=True)
     resources = target / "Contents/Resources"
     resources.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary_dir / "AquaSpaceApp", executable)
+    shutil.copy2(binary_dir / "AeroSpaceApp", executable)
     shutil.copy2(root / "docs/config-examples/default-config.toml", resources / "default-config.toml")
     with (target / "Contents/Info.plist").open("wb") as file:
         plistlib.dump({"CFBundleIdentifier": "local.aquaspace.debug", "CFBundleExecutable": "AquaSpaceApp",
