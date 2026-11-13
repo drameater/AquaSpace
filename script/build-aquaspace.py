@@ -77,9 +77,9 @@ def main():
     macos = app / "Contents/MacOS"
     shutil.rmtree(macos)
     macos.mkdir()
-    shutil.copy2(binaries / "AquaSpaceApp", macos / "AquaSpace")
+    shutil.copy2(binaries / "AeroSpaceApp", macos / "AquaSpace")
     # AquaSpace and aquaspace collide on the default case-insensitive filesystem.
-    shutil.copy2(binaries / "aquaspace", macos / "aquaspace-cli")
+    shutil.copy2(binaries / "aerospace", macos / "aquaspace-cli")
     helpers = app / "Contents/Helpers"
     helpers.mkdir(exist_ok=True)
     legacy_cli = helpers / "aerospace"

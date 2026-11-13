@@ -7,6 +7,7 @@ source ./script/setup.sh
 ./generate.sh --ignore-xcodeproj --ignore-cmd-help
 swift build --build-tests "$@"
 
-mkdir -p .debug/aquaspace-debug
-cp .build/debug/aquaspace .debug/aquaspace-debug/aquaspace
-cp .build/debug/AquaSpaceApp .debug/aquaspace-debug/AquaSpaceApp
+# Keep .debug/aquaspace: it holds the staged release and its build cache
+mkdir -p .debug
+cp -r .build/debug/aerospace .debug
+cp -r .build/debug/AeroSpaceApp .debug
