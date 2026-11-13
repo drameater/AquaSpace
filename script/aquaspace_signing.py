@@ -22,6 +22,11 @@ SIGNING_DIRECTORY = Path.home() / 'Library/Application Support/AquaSpace/Signing
 CERTIFICATE_NAME = 'AquaSpace Local Development'
 SECURITY, OPENSSL, CODESIGN = '/usr/bin/security', '/usr/bin/openssl', '/usr/bin/codesign'
 COMMAND_TIMEOUT = 120
+# Inside a double-quoted word of `security -i`, only these characters depend on rules
+# that security(1) does not document (see security_with_secret).
+UNPASSABLE = '"\\\n\r\0'
+# security.c reads interactive lines into a 4096-byte buffer.
+MAX_INTERACTIVE_LINE = 4095
 
 
 class SigningError(RuntimeError):
@@ -41,18 +46,36 @@ def run(arguments, input=None, timeout=COMMAND_TIMEOUT):
     return result
 
 
+def check_passable(path):
+    """Refuse a signing path that `security -i` might not receive unchanged."""
+    if any(character in str(path) for character in UNPASSABLE):
+        raise SigningError(f'The signing directory {str(path)!r} contains a double quote, a backslash, or a line '
+                           'break. security(1) does not document how it reads these characters, so AquaSpace '
+                           'signing cannot use this path. Use a home folder path without them.')
+
+
 def security_with_secret(*arguments):
     """Run one security(1) command read from standard input, so no secret is in argv.
 
-    `security -i` splits each line at spaces and keeps double-quoted words
-    together; it has no escape character.
+    security(1)'s man page documents no quoting rules for interactive mode.
+    Apple's published source (SecurityTool security.c, split_line) splits a line
+    at white space, keeps a word that starts with a double or single quote
+    together up to the same quote, and lets a backslash make the next character
+    literal. Every word here is double-quoted, so white space and single quotes
+    are plain characters. Inside double quotes, only a double quote and a
+    backslash depend on the escape rule, so they are refused instead of escaped.
+    Never print an argument: one of them is a secret.
     """
     words = []
     for argument in map(str, arguments):
-        if any(character in argument for character in '"\n\r\0'):
-            raise SigningError('A signing path contains a character that cannot be passed safely.')
-        words.append(f'"{argument}"' if not argument or any(c.isspace() for c in argument) else argument)
-    result = run([SECURITY, '-i'], input=(' '.join(words) + '\n').encode())
+        if any(character in argument for character in UNPASSABLE):
+            raise SigningError('A signing argument contains a double quote, a backslash or a line break, '
+                               'which security(1) cannot take safely.')
+        words.append(f'"{argument}"')
+    line = ' '.join(words) + '\n'
+    if len(line.encode()) > MAX_INTERACTIVE_LINE:
+        raise SigningError('A signing command is too long for security(1) interactive mode; use a shorter path.')
+    result = run([SECURITY, '-i'], input=line.encode())
     # Interactive mode can exit 0 after a failed command; it still prints "security: <error>".
     failure = re.search(rb'^security: .*$', result.stderr + b'\n' + result.stdout, re.MULTILINE)
     if failure:
@@ -65,6 +88,7 @@ def local_identity(directory=SIGNING_DIRECTORY):
     keychain = directory / 'AquaSpace.keychain-db'
     certificate = directory / 'certificate.pem'
     password = directory / 'keychain-password'
+    check_passable(directory)
     if not all(p.is_file() for p in (keychain, certificate, password)):
         raise SigningError('Persistent AquaSpace signing is not configured. Run python3 script/aquaspace_signing.py --setup. '
                            'Existing signing material will not be replaced automatically.')
@@ -90,6 +114,7 @@ def _set_aside_incomplete(directory, present, report):
 
 def setup(directory=SIGNING_DIRECTORY, report=print):
     directory = Path(directory)
+    check_passable(directory)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
     keychain = directory / 'AquaSpace.keychain-db'
