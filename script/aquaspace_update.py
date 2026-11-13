@@ -691,7 +691,12 @@ class Installer:
                 self._close_aborted(record, state)
             if state['phase'] not in TERMINAL_PHASES: continue
             terminal.append(record)
-            _remove_tree(record / 'new.app')
+            staged = record / 'new.app'
+            if self._holds_other_bundle(staged, state):
+                # An interrupted exchange can leave the previous bundle here. Keep it.
+                archive_bundle(staged)
+            else:
+                _remove_tree(staged)
             for name in ('previous.app', 'unconfirmed.app'):
                 bundle = record / name
                 if bundle.exists():
@@ -704,6 +709,18 @@ class Installer:
         terminal.sort(key=lambda record: ((record / 'journal.json').stat().st_mtime_ns, record.name))
         for record in terminal[:-KEEP_COMPLETED_RECORDS]:
             if _owned_directory(record): shutil.rmtree(record)
+
+    @staticmethod
+    def _holds_other_bundle(staged, state):
+        """True if new.app is a complete bundle that is not this update's staged copy."""
+        executable = staged / 'Contents/MacOS/AquaSpace'
+        if staged.is_symlink() or not executable.is_file() or not state.get('main_sha256'):
+            return False
+        try:
+            bundle_metadata(staged)
+            return sha256(executable) != state['main_sha256']
+        except (UpdateError, OSError):
+            return False
 
     def archive_completed_backups(self):
         with self._lock():
@@ -723,26 +740,61 @@ class Installer:
 
     def _locate(self, transaction, state):
         """Return the paths of the update's (new, old) bundles, or None where absent."""
-        staged, previous = transaction / 'new.app', transaction / 'previous.app'
-        candidates = [self.target, staged, previous, transaction / 'unconfirmed.app']
-        if state.get('new_bundle'):
-            # Renames keep a directory's inode, so this finds each bundle after any interruption.
-            found = {}
-            for path in candidates:
-                try: key = _inode(path)
-                except FileNotFoundError: continue
-                for role in ('new', 'old'):
-                    if state.get(role + '_bundle') == key: found[role] = path
-            return found.get('new'), found.get('old')
-        # Records from older updaters used two renames and no inodes.
-        target_present = self.target.exists() and not self.target.is_symlink()
-        if staged.exists(): new = staged
-        elif target_present and sha256(self.target / 'Contents/MacOS/AquaSpace') == state.get('main_sha256'): new = self.target
-        else: new = None
-        if previous.exists(): old = previous
-        elif state.get('had_target') and target_present and new != self.target: old = self.target
-        else: old = None
-        return new, old
+        if 'new_bundle' not in state:
+            return self._identify_by_content(transaction, state)
+        # Renames and exchanges keep a directory's inode, so this finds each bundle
+        # after any interruption.
+        found = {}
+        for path in (self.target, transaction / 'new.app', transaction / 'previous.app', transaction / 'unconfirmed.app'):
+            try: key = _inode(path)
+            except FileNotFoundError: continue
+            for role in ('new', 'old'):
+                if state.get(role + '_bundle') == key: found[role] = path
+        return found.get('new'), found.get('old')
+
+    def _identify_by_content(self, transaction, state):
+        """Name the bundles of a record without inodes by their main executable's hash.
+
+        Updaters before 2026-11 wrote no inodes. A path is not proof: an exchange by an
+        interrupted later updater can leave the previous bundle in new.app. The order
+        below matches the old updater's renames, and decides only when both copies
+        hold the same build.
+        """
+        candidates = (transaction / 'new.app', transaction / 'unconfirmed.app',
+                      self.target, transaction / 'previous.app')
+        new, old = [], []
+        for path in candidates:
+            if path.is_symlink() or not path.exists(): continue
+            try: digest = sha256(path / 'Contents/MacOS/AquaSpace')
+            except OSError as error:
+                raise UpdateError(f'Cannot read the bundle {path}; no files were changed.') from error
+            (new if digest == state.get('main_sha256') else old).append(path)
+        if len(new) > 2 or len(old) > 1 or (len(new) == 2 and old):
+            raise UpdateError(f'The update record {transaction} holds more bundles than one update can leave. '
+                              'The updater cannot tell which one is the previous AquaSpace; no files were changed.')
+        if len(new) == 2:
+            return new[0], (new[1] if state.get('had_target') else None)
+        return (new[0] if new else None), (old[0] if old else None)
+
+    def _record_bundles(self, transaction, state):
+        """Before the first file change, save each bundle's inode and the previous bundle's hash.
+
+        After this write, every later step finds the bundles by inode, so no crash
+        can make the updater mistake one bundle for the other.
+        """
+        needs_inodes = 'new_bundle' not in state
+        needs_hash = bool(state.get('had_target')) and not state.get('old_sha256')
+        if not (needs_inodes or needs_hash): return
+        new, old = self._locate(transaction, state)
+        fields = {}
+        if needs_inodes:
+            fields.update(new_bundle=_inode(new) if new else None, old_bundle=_inode(old) if old else None)
+        if needs_hash and old is not None:
+            fields['old_sha256'] = sha256(old / 'Contents/MacOS/AquaSpace')
+        if fields:
+            state.update(fields)
+            atomic_json(transaction / 'journal.json', state)
+            self.checkpoint('upgraded')
 
     def _check_new(self, path, state):
         bundle_metadata(path)
@@ -799,6 +851,9 @@ class Installer:
                 replace_directory(new, unconfirmed)
             return
         bundle_metadata(old)
+        if sha256(old / 'Contents/MacOS/AquaSpace') != state.get('old_sha256'):
+            raise UpdateError(f'The previous AquaSpace bundle in this record changed on disk: {old}\n'
+                              'No files were changed.')
         self.system.verify_bundle(old)
         if not target_present:
             replace_directory(old, self.target)
@@ -806,6 +861,19 @@ class Installer:
             self._swap_into_target(old, unconfirmed)
         else:
             raise UpdateError('The installation changed after this update; refusing to overwrite it.')
+
+    def _check_restored(self, transaction, state):
+        """Prove by content that the target holds the previous bundle before reporting it."""
+        if not state.get('had_target'): return
+        executable = self.target / 'Contents/MacOS/AquaSpace'
+        try:
+            restored = (not self.target.is_symlink() and executable.is_file()
+                        and sha256(executable) == state.get('old_sha256'))
+        except OSError:
+            restored = False
+        if not restored:
+            raise UpdateError(f'{self.target} does not hold the previous AquaSpace from this update. '
+                              f'The record stays open: {transaction}')
 
     # Processes -------------------------------------------------------------
 
@@ -960,7 +1028,8 @@ class Installer:
                 identity_changed = self._check_identity(requirement, retry)
             state = dict(schema=1, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),
                          had_target=had_target, old=old.record() if old else None, requirement=requirement,
-                         identity_changed=identity_changed, old_bundle=_inode(self.target) if had_target else None)
+                         identity_changed=identity_changed, old_bundle=_inode(self.target) if had_target else None,
+                         old_sha256=sha256(self.target / 'Contents/MacOS/AquaSpace') if had_target else None)
             transaction = self._begin(state)
             signaled = False
             try:
@@ -1032,6 +1101,7 @@ class Installer:
                                       f'Wait {LAUNCH_SETTLE_SECONDS - waited:.0f} s, then run this command again:\n  '
                                       + self.command('--resume', transaction))
             try:
+                self._record_bundles(transaction, state)
                 new, _ = self._locate(transaction, state)
                 if new is None:
                     raise UpdateError('The bundle from this update is missing; it cannot be resumed.')
@@ -1090,13 +1160,18 @@ class Installer:
                 self.summary = f'Closed the update record; no process or installed file was changed.\nRecord: {transaction}'
                 return transaction
             self._require_no_manager(transaction, state, 'restore the previous files')
+            self._record_bundles(transaction, state)
             self._restore_previous(transaction, state)
+            self._check_restored(transaction, state)
             self._phase(transaction, state, 'recovered')
             if state.get('had_target'):
                 self.summary = ('Restored the previous AquaSpace files; no app was started. To start AquaSpace:\n  '
                                 + shlex.join(['open', str(self.target)]))
-            else:
+            elif self.target.exists():
                 self.summary = 'Closed the update record; the new files stay installed. No app was started.'
+            else:
+                self.summary = ('Closed the update record. No AquaSpace is installed, as before this update. '
+                                'No app was started.')
             self.summary += f'\nRecord: {transaction}'
             return transaction
 
