@@ -199,4 +199,12 @@ deprecated `--skip-update` option. Neither changes the behavior of the app, so
 the installed build does not need a reinstall. All six offline suites passed
 again after these commits.
 
-Checks 4, 5, 6, 7, 9, 11 and 12 remain.
+- **Check 12.** Passed. The owner ran `python3 script/installer-smoke/live.py
+  --run-live`: 53 assertions, at most one manager at a time. It made real
+  updates of `/Applications/AquaSpace.app` with the same build, one of them
+  recovered. All six records closed, and AquaSpace runs `9dd20318` again.
+  These updates pruned the record that held the backup of the build from
+  before this change set. Every remaining backup holds `9dd20318`. A return
+  to the earlier build now needs a build of `main`.
+
+Checks 4, 5, 6, 7, 9 and 11 remain.
