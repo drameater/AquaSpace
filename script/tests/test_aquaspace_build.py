@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPT))
 spec = importlib.util.spec_from_file_location('build_aquaspace', SCRIPT / 'build-aquaspace.py')
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+import aquaspace_update as update
 
 REVISION = '79e53f21' + '0' * 32
 COMMIT_TIME = int(datetime(2026, 10, 26, 23, 3, 44, tzinfo=timezone.utc).timestamp())
@@ -129,8 +130,11 @@ class BuilderTest(unittest.TestCase):
             patcher = patch.object(build, target, side_effect=value) if target != 'run' else patch.object(build, 'run', value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # The installer replaces the builder process; record the call instead.
+        self.exec_calls = []
         for patcher in (patch.object(build.platform, 'machine', return_value='arm64'),
-                        patch.object(build.shutil, 'which', side_effect=lambda tool: '/fake/' + tool)):
+                        patch.object(build.shutil, 'which', side_effect=lambda tool: '/fake/' + tool),
+                        patch.object(build.os, 'execv', side_effect=lambda *call: self.exec_calls.append(call))):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -331,6 +335,57 @@ class FailureTests(BuilderTest):
         link.symlink_to('/usr/local/bin/aerospace')
         with self.assertRaisesRegex(build.BuildError, 'must be a symlink to ../MacOS/aquaspace-cli'):
             build.validate_bundle(app, version.short, 'SNAPSHOT', 'arm64', signed=False)
+
+
+class InstallerOptionTests(BuilderTest):
+    def installer_command(self, *options):
+        return [sys.executable, str(self.root / 'script/install-aquaspace.py'), '--source', str(self.app), '--restart',
+                *options]
+
+    def test_install_and_restart_replaces_the_builder_with_the_installer(self):
+        self.main('--install-and-restart')
+        self.assertEqual(self.exec_calls, [(sys.executable, self.installer_command())])
+
+    def test_installer_options_are_forwarded(self):
+        self.main('--install-and-restart', '--ready-timeout', '120', '--allow-identity-change')
+        self.assertEqual(self.exec_calls, [(sys.executable, self.installer_command(
+            '--allow-identity-change', '--ready-timeout', '120'))])
+
+    def test_build_without_install_and_restart_starts_no_installer(self):
+        self.main()
+        self.assertEqual(self.exec_calls, [])
+
+    def test_invalid_installer_options_stop_before_signing_or_compile(self):
+        for options in (['--allow-identity-change'], ['--ready-timeout', '60'],
+                        ['--install-and-restart', '--ready-timeout', '0'],
+                        ['--install-and-restart', '--ready-timeout', '-5'],
+                        ['--install-and-restart', '--ready-timeout', '3601'],
+                        ['--install-and-restart', '--ready-timeout', 'soon']):
+            with self.subTest(options=options):
+                with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                    self.main(*options)
+                self.assertEqual(stopped.exception.code, 2)
+                build.local_identity.assert_not_called()
+                self.assertEqual(self.tools.calls, [])
+                self.assertEqual(self.exec_calls, [])
+
+    def test_builder_and_installer_reject_the_same_ready_timeouts(self):
+        for value in ('0', '-5', '3601', 'soon'):
+            with self.subTest(value=value), patch('sys.stderr', io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:
+                    update.main(['--restart', '--ready-timeout', value])  # Stops while parsing.
+                self.assertEqual(stopped.exception.code, 2)
+        for value in ('0.5', '3600'):
+            self.assertEqual(build.ready_timeout(value), value)
+
+    def test_failed_build_starts_no_installer(self):
+        def failing_compile(package):
+            raise build.BuildError('swift build failed with exit code 1')
+        self.tools.compile = failing_compile
+        with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit) as stopped:
+            self.main('--install-and-restart', '--allow-identity-change')
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertEqual(self.exec_calls, [])
 
 
 class SourceStagingTests(BuilderTest):

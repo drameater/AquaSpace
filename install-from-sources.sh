@@ -22,11 +22,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$rebuild" == 1 ]]; then
-    if [[ ${#install_args[@]} != 0 ]]; then
-        echo 'Installer options need a staged build: run ./build-release.sh, then ./install-from-sources.sh --dont-rebuild with these options.' >&2
-        exit 2
-    fi
-    exec python3 script/build-aquaspace.py --install-and-restart "${build_args[@]}"
+    # The builder checks every option before it compiles, then passes the installer options on.
+    exec python3 script/build-aquaspace.py --install-and-restart "${build_args[@]}" "${install_args[@]}"
 fi
 if [[ ${#build_args[@]} != 0 ]]; then
     echo 'Build options cannot be combined with --dont-rebuild.' >&2

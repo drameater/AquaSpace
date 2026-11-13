@@ -46,8 +46,14 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(args, ['script/install-aquaspace.py', '--restart',
                                 '--allow-identity-change', '--ready-timeout', '120'])
 
-    def test_installer_options_with_a_rebuild_fail_without_invoking_anything(self):
-        for options in (['--allow-identity-change'], ['--ready-timeout', '60'], ['--dont-rebuild', '--ready-timeout']):
+    def test_installer_options_with_a_rebuild_go_to_the_builder(self):
+        result, args = self.invoke('--sdk', 'SDK', '--ready-timeout', '120', '--jobs', '1', '--allow-identity-change')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args, ['script/build-aquaspace.py', '--install-and-restart', '--sdk', 'SDK', '--jobs', '1',
+                                '--ready-timeout', '120', '--allow-identity-change'])
+
+    def test_ready_timeout_without_a_value_fails_without_invoking_anything(self):
+        for options in (['--ready-timeout'], ['--dont-rebuild', '--ready-timeout']):
             with self.subTest(options=options):
                 result, args = self.invoke(*options)
                 self.assertEqual(result.returncode, 2)
@@ -57,7 +63,6 @@ class EntrypointTests(unittest.TestCase):
         result, args = self.invoke('--dont-rebuild', '--sdk', 'unused')
         self.assertEqual(result.returncode, 2)
         self.assertIsNone(args)
-
 
     def test_release_entrypoint_builds_without_install_or_restart(self):
         self.wrapper = self.wrapper.with_name('build-release.sh')
