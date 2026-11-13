@@ -39,8 +39,9 @@ SCHEMA = 1
 TERMINAL_PHASES = frozenset(('committed', 'recovered', 'aborted'))
 # A record in these phases proves that no process was stopped and no file was replaced.
 PRE_STOP_PHASES = frozenset(('staging', 'prepared'))
+# --recover writes 'recovering' before its first file change. From then on, only --recover continues.
 PHASES = TERMINAL_PHASES | PRE_STOP_PHASES | frozenset((
-    'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started'))
+    'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started', 'recovering'))
 # In these phases the new bundle is in place, so a running AquaSpace can be confirmed.
 CONFIRMABLE_PHASES = frozenset(('replaced', 'launch_attempted', 'child_started'))
 # script/build-aquaspace.py creates this lock in its output folder and never removes it.
@@ -665,6 +666,12 @@ class Installer:
         if phase in PRE_STOP_PHASES:
             return ('No process was stopped and no file was replaced. Close this record, then run the update again:\n  '
                     + recover)
+        if phase == 'recovering':
+            return self._recover_only(transaction, state, 'A recovery of this update started but did not finish.')
+        if phase in CONFIRMABLE_PHASES and not self._target_holds_new(transaction, state):
+            return self._recover_only(transaction, state, f'{self.target} does not hold the new bundle from this update '
+                                      '(for example, a recovery was interrupted), so the update cannot be resumed '
+                                      'or confirmed.')
         restore = self._restore_hint(transaction, state)
         if not self._restart_requested(state):
             return ('This update was file-only: it starts no app. To finish it (no app is started), run:\n  ' + resume +
@@ -691,6 +698,18 @@ class Installer:
                    + confirm if phase == 'replaced' else '')
         return ('The new AquaSpace was not started. When no window manager is running, finish the update '
                 'and start the new AquaSpace once:\n  ' + resume + started + '\n' + restore)
+
+    def _recover_only(self, transaction, state, why):
+        """Guidance for a record that only --recover can continue."""
+        recover = self.command('--recover', transaction)
+        kept = ('' if self._restart_requested(state) or not state.get('retained')
+                else ' (a stock AeroSpace that the update kept running can stay)')
+        if state.get('had_target'):
+            return (f'{why} Only --recover can continue it. To finish putting the previous version back (files only; '
+                    f'no app is started), quit every window manager{kept}, then run:\n  ' + recover +
+                    '\nThen start AquaSpace yourself:\n  ' + shlex.join(['open', str(self.target)]))
+        return (f'{why} Only --recover can continue it. To close this record (no app is started), quit every window '
+                f'manager{kept}, then run:\n  ' + recover)
 
     def _restore_hint(self, transaction, state):
         recover = self.command('--recover', transaction)
@@ -996,6 +1015,8 @@ class Installer:
         self._phase(transaction, state, 'replaced', replaced_at=self.system.time())
 
     def _restore_previous(self, transaction, state):
+        """Put the previous bundle at the target. Every check runs before the first file
+        change, and the journal records that a recovery began before that change."""
         unconfirmed = transaction / 'unconfirmed.app'
         new, old = self._locate(transaction, state)
         target_present = self.target.exists() or self.target.is_symlink()
@@ -1005,6 +1026,7 @@ class Installer:
             return  # A first installation has no old bundle; leave its files available.
         if old == self.target:
             if new is not None and new != transaction / 'new.app' and new != unconfirmed:
+                self._begin_recovery(transaction, state)
                 replace_directory(new, unconfirmed)
             return
         bundle_metadata(old)
@@ -1012,12 +1034,18 @@ class Installer:
             raise UpdateError(f'The previous AquaSpace bundle in this record changed on disk: {old}\n'
                               'No files were changed.')
         self.system.verify_bundle(old)
+        if target_present and new != self.target:
+            raise UpdateError('The installation changed after this update; refusing to overwrite it.')
+        self._begin_recovery(transaction, state)
         if not target_present:
             replace_directory(old, self.target)
-        elif new == self.target:
-            self._swap_into_target(old, unconfirmed)
         else:
-            raise UpdateError('The installation changed after this update; refusing to overwrite it.')
+            self._swap_into_target(old, unconfirmed)
+
+    def _begin_recovery(self, transaction, state):
+        """After this journal write, every command knows that the target may hold either bundle."""
+        if state['phase'] != 'recovering':
+            self._phase(transaction, state, 'recovering', recovering_from=state['phase'])
 
     def _check_restored(self, transaction, state):
         """Prove by content that the target holds the previous bundle before reporting it."""
@@ -1062,15 +1090,25 @@ class Installer:
             if isinstance(state.get(key), (int, float)): return state[key]
         return self._journal_time(transaction)
 
+    def _target_holds_new(self, transaction, state):
+        """Whether the target is this update's new bundle: the same directory and main executable."""
+        try:
+            new, _ = self._locate(transaction, state)
+            return new == self.target and sha256(self.target / 'Contents/MacOS/AquaSpace') == state.get('main_sha256')
+        except (UpdateError, OSError):
+            return False
+
     def _runs_installed_update(self, process, transaction, state):
         """True for the recorded child, or for any instance of the target that started
-        after the new bundle was in place (for example, after a restart of the Mac)."""
+        after the new bundle was in place (for example, after a restart of the Mac).
+        Never while a recovery runs, or while the target holds another bundle."""
         if (process.bundle_id != 'local.aquaspace' or process.uid != os.getuid()
                 or process.executable != self.target / 'Contents/MacOS/AquaSpace'):
             return False
+        if state['phase'] not in CONFIRMABLE_PHASES or not self._target_holds_new(transaction, state):
+            return False
         if state.get('child') and self._same_process(process, state['child']):
             return True
-        if state['phase'] not in CONFIRMABLE_PHASES: return False
         # The kernel's start time and time.time() read the same clock.
         return process.started[0] + process.started[1] / 1e6 >= self._installed_since(transaction, state)
 
@@ -1296,6 +1334,9 @@ class Installer:
                 self.summary = (self._close_unchanged(transaction, state) + '\nThere was nothing to resume. '
                                 f'The record is closed: {transaction}\nRun the update again.')
                 return transaction
+            if phase == 'recovering' or (phase in CONFIRMABLE_PHASES and not self._target_holds_new(transaction, state)):
+                raise UpdateError('This update cannot be resumed; nothing was changed.\n'
+                                  + self.next_steps(transaction, state))
             restart = self._restart_requested(state)
             retained = self._allowed_managers(transaction, state, 'resume',
                                               'start the new AquaSpace' if restart else 'finish the update')
@@ -1337,12 +1378,16 @@ class Installer:
             phase = state['phase']
             if phase in TERMINAL_PHASES:
                 raise UpdateError('This update is already complete; there is nothing to confirm.')
+            if phase == 'recovering':
+                raise UpdateError('This update cannot be confirmed; nothing was changed.\n'
+                                  + self.next_steps(transaction, state))
             if phase not in CONFIRMABLE_PHASES:
                 raise UpdateError('This update has not finished replacing the files, so there is nothing to confirm.\n'
                                   + self.next_steps(transaction, state))
-            new, _ = self._locate(transaction, state)
-            if new != self.target or sha256(self.target / 'Contents/MacOS/AquaSpace') != state.get('main_sha256'):
-                raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm.')
+            if not self._target_holds_new(transaction, state):
+                raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm. '
+                                  'Nothing was changed.\n' + self._recover_only(
+                                      transaction, state, f'{self.target} does not hold the new bundle from this update.'))
             managers = self.system.managers()
             if len(managers) != 1 or not self._runs_installed_update(managers[0], transaction, state):
                 raise UpdateError(self._confirm_refusal(transaction, state, managers))
@@ -1450,10 +1495,14 @@ class Installer:
                                 f'The update record is closed: {transaction}')
                 return transaction
             self._allowed_managers(transaction, state, 'recover', 'restore the previous files')
-            self._record_bundles(transaction, state)
-            self._restore_previous(transaction, state)
-            self._check_restored(transaction, state)
-            self._phase(transaction, state, 'recovered')
+            try:
+                self._record_bundles(transaction, state)
+                self._restore_previous(transaction, state)
+                self._check_restored(transaction, state)
+                self._phase(transaction, state, 'recovered')
+            except BaseException as error:
+                if state['phase'] != 'recovering': raise  # Nothing was changed; the error says why.
+                raise self._failure(transaction, state, error, nothing_stopped=False)
             if state.get('had_target'):
                 self.summary = ('Restored the previous AquaSpace files; no app was started. To start AquaSpace:\n  '
                                 + shlex.join(['open', str(self.target)]))
