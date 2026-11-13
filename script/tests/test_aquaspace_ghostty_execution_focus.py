@@ -1,6 +1,7 @@
 """Execution focus safety using the real policy/runner functions and fake APIs."""
 import ast
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -294,16 +295,19 @@ class HelperAdmissionTests(unittest.TestCase):
                 exec(code,{'ScriptDriver':admit,'HERE':Path('/fake')})
 
     def test_helper_mutation_sites_require_grant_and_only_explicit_activation_activates_app(self):
-        source = (SOURCE / 'ScriptDriver.m').read_text()
-        main = source[source.index('static NSDictionary *performOperation('):]
-        self.assertNotIn('int main(',source)
-        self.assertIn('application:sourceApp window:sourceWindow',main)
-        self.assertLess(main.index('initWithSnapshot:'),main.index('SBApplication applicationWithProcessIdentifier:'))
-        self.assertIn('[foreground check];\n        requireProcessIdentity(pid, targetBirth);\n        id tab =', main)
-        self.assertIn('[foreground check];\n            requireProcessIdentity(pid, targetBirth);\n            [(GhosttyObject *)targetTab selectTab]', main)
+        # Source-text guard: the native helper runs only in a live harness. Matching
+        # ignores whitespace, so reformatting the helper cannot fail this check.
+        compact = lambda text: re.sub(r'\s+','',text)
+        source = compact((SOURCE / 'ScriptDriver.m').read_text())
+        main = source[source.index(compact('static NSDictionary *performOperation(')):]
+        self.assertNotIn('intmain(',source)
+        self.assertIn(compact('application:sourceApp window:sourceWindow'),main)
+        self.assertLess(main.index('initWithSnapshot:'),main.index(compact('SBApplication applicationWithProcessIdentifier:')))
+        self.assertIn(compact('[foreground check]; requireProcessIdentity(pid, targetBirth); id tab ='), main)
+        self.assertIn(compact('[foreground check]; requireProcessIdentity(pid, targetBirth); [(GhosttyObject *)targetTab selectTab]'), main)
         self.assertEqual(main.count('activateWithOptions:'),1)
-        self.assertIn('[foreground check];\n            requireProcessIdentity(pid, targetBirth);\n            if (![native activateWithOptions:', main)
-        self.assertNotIn('targetWindow activateWindow', main)
+        self.assertIn(compact('[foreground check]; requireProcessIdentity(pid, targetBirth); if (![native activateWithOptions:'), main)
+        self.assertNotIn(compact('targetWindow activateWindow'), main)
 
 
 if __name__ == '__main__':
