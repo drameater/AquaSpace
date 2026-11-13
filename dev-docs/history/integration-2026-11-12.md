@@ -156,7 +156,8 @@ Make these checks after the first installation of this change set:
    native tab in it. Its existing windows are not treated as new.
 7. **Native tabs.** Tab switch, merge and detach behave as before.
 8. **Lifecycle log.** The log stays silent in normal use:
-   `log stream --predicate 'subsystem == "local.aquaspace" AND category == "Lifecycle"'`.
+   `/usr/bin/log stream --predicate 'subsystem == "local.aquaspace" AND category == "Lifecycle"'`.
+   Use the full path: zsh has a `log` builtin that hides the macOS tool.
 9. **Warning icon.** After a config reload with warnings, the warning icon
    appears in the menu bar.
 10. **App icon.** The icon looks right in Finder and System Settings. It now
@@ -166,3 +167,36 @@ Make these checks after the first installation of this change set:
 12. **Installer live harness.** With authorization:
     `python3 script/installer-smoke/live.py --run-live`. It was changed for the
     new updater and has not run since.
+
+## First installation, 2026-11-13
+
+The owner built and installed `9dd20318` with `./build-release.sh` and
+`./install-from-sources.sh --dont-rebuild`. The installer reported sole
+ownership. The integrator then made these read-only checks. None of them sent
+a command to AquaSpace.
+
+- **Update.** The journal phase is `committed`. The new process (PID 59046)
+  replaced PID 37813. The version is `0.21.3-aquaspace.174.g9dd20318`, not
+  dirty. `codesign --verify --deep --strict` passes.
+- **Check 1.** The installer did not wait: the designated requirement did not
+  change, so the Accessibility permission stayed valid. The status 3 path and
+  `--confirm` did not run.
+- **Check 2.** Passed. Six update records remain in `/Applications`.
+- **Check 3.** Passed. About 3 minutes after start, in normal use, AquaSpace
+  used 0.08 s of CPU in 15 s, about 0.5% of one core.
+- **Check 8.** No AquaSpace log entries in the first 15 minutes.
+- **Check 10, in part.** The bundle has `AppIcon.icns`, and `CFBundleIconFile`
+  is `AppIcon`. The visual check remains.
+
+The build output had three classes of warnings that this change set did not
+cause: unsafe code in upstream `NWConnectionEx.swift` (unchanged on upstream
+`main`), `ld` search paths that SwiftPM adds with the Command Line Tools only,
+and stale-file entries that the build cache in `.debug/aquaspace/build` kept
+from the old repository path `/Users/aidan/Developer/AeroSpace`. Two warnings
+came from this change set. Commit `9bfe0664` adds the missing `unsafe` marker
+in `windowManagerProcesses.swift`. Commit `d3328c0e` stops passing the
+deprecated `--skip-update` option. Neither changes the behavior of the app, so
+the installed build does not need a reinstall. All six offline suites passed
+again after these commits.
+
+Checks 4, 5, 6, 7, 9, 11 and 12 remain.
