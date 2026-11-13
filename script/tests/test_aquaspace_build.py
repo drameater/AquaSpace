@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -729,22 +730,52 @@ class InstallerExitStatusTests(BuilderTest):
                 self.assertNotIn('Traceback', err)
                 self.assertEqual(json.loads(record.read_text()), ['--source', str(self.app), '--restart'])
 
-    def test_interrupt_waits_for_the_installer_instead_of_killing_it(self):
-        self.fake_installer(130)
-        real_popen = build.subprocess.Popen
-        class InterruptedOnce(real_popen):
-            interrupted = False
+    def interrupted(self, moment):
+        """A Popen that receives a real SIGINT (Ctrl-C) at this moment: 'started' or 'wait'."""
+        real_popen, starts = build.subprocess.Popen, []
+        class Interrupted(real_popen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                starts.append(self.pid)
+                if moment == 'started': signal.raise_signal(signal.SIGINT)  # Before the wait begins.
             def wait(self, timeout=None):
-                if not InterruptedOnce.interrupted:
-                    InterruptedOnce.interrupted = True
-                    raise KeyboardInterrupt
+                if moment == 'wait' and len(starts) == 1 and not getattr(self, 'interrupted', False):
+                    self.interrupted = True
+                    signal.raise_signal(signal.SIGINT)
                 return super().wait(timeout)
             def kill(self):
                 raise AssertionError('The builder must never kill the installer')
-        with patch.object(build.subprocess, 'Popen', InterruptedOnce):
+        return patch.object(build.subprocess, 'Popen', Interrupted), starts
+
+    def test_interrupt_waits_for_the_installer_instead_of_killing_it(self):
+        self.fake_installer(130)
+        popen, starts = self.interrupted('wait')
+        with popen:
             code, err = self.install()
         self.assertEqual(code, 130)
+        self.assertEqual(len(starts), 1)
         self.assertNotIn('Traceback', err)
+
+    def test_interrupt_before_the_wait_still_returns_the_installers_status(self):
+        self.fake_installer(3)
+        popen, starts = self.interrupted('started')
+        with popen:
+            code, err = self.install()
+        self.assertEqual(code, 3)
+        self.assertEqual(len(starts), 1, 'The installer must run exactly once')
+        self.assertNotIn('Traceback', err)
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+
+    def test_installer_keeps_its_own_ctrl_c(self):
+        # The installer reports what remains when Ctrl-C reaches it, so it must not inherit an ignored SIGINT.
+        script = self.root / 'script/install-aquaspace.py'
+        script.parent.mkdir(parents=True, exist_ok=True)
+        record = self.root / 'installer-sigint'
+        script.write_text(f'import signal\nopen({str(record)!r}, "w").write('
+                          'str(signal.getsignal(signal.SIGINT) is signal.default_int_handler))\n')
+        code, err = self.install()
+        self.assertEqual(code or 0, 0, err)
+        self.assertEqual(record.read_text(), 'True')
 
 
 class VersionOverrideTests(BuilderTest):

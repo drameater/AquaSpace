@@ -17,6 +17,7 @@ import platform
 import plistlib
 import re
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -463,15 +464,16 @@ def run_installer(arguments):
     Ctrl-C reaches the installer directly, because it is in the same process
     group. Wait for it to report what remains: never kill it while it may be
     changing files (subprocess.run would send SIGKILL after 0.25 s).
+    The builder ignores Ctrl-C from before the start until the installer exits,
+    so no interrupt can leave the installer without a parent that reports its
+    status. A handler, not SIG_IGN: the installer must not inherit it.
     """
     sys.stdout.flush()
-    process = subprocess.Popen(arguments)
-    while True:
-        try:
-            code = process.wait()
-            break
-        except KeyboardInterrupt:
-            continue
+    previous = signal.signal(signal.SIGINT, lambda number, frame: None)
+    try:
+        code = subprocess.Popen(arguments).wait()
+    finally:
+        signal.signal(signal.SIGINT, previous)
     return code if code >= 0 else 128 - code  # Killed by a signal: report it as a shell does.
 
 
