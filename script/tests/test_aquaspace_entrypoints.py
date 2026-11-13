@@ -106,5 +106,24 @@ class InstallerLiveHarnessOptInTests(unittest.TestCase):
                     self.assertEqual(stopped.exception.code, 2)
             self.assertEqual(os.listdir(temporary), [])
 
+    def test_harness_builds_its_installer_with_the_same_locks_as_the_command_line(self):
+        spec = importlib.util.spec_from_file_location('installer_live', ROOT / 'script/installer-smoke/live.py')
+        live = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(live)  # Defines functions only.
+        update, system, built = live.update, object(), []
+        # The command line builds its installer, then runs the mode; record it there. Nothing is locked.
+        with patch.object(update, 'NativeSystem', return_value=system), \
+                patch.object(update.Installer, 'archive_completed_backups', autospec=True,
+                             side_effect=lambda installer: built.append(installer)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(update.main(['--archive-backups']), 0)
+        cli, = built
+        harness = live.installer_for(system)
+        def configuration(installer):
+            lock = installer._lock()
+            return dict(source=installer.source, target=installer.target, system=installer.system,
+                        ready_timeout=installer.ready_timeout, lock=lock.path, legacy=lock.legacy)
+        self.assertEqual(configuration(harness), configuration(cli))
+
 
 if __name__ == '__main__': unittest.main()

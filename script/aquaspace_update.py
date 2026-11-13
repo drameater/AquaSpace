@@ -1419,6 +1419,17 @@ class Installer:
             return transaction
 
 
+def command_line_installer(source, target, system, ready_timeout=READY_TIMEOUT):
+    """The Installer of install-aquaspace.py, with its locks. Other tools that act on a
+    real installation build theirs here too, so that they cannot overlap with it."""
+    # One lock for all of this user's updates, with any --target directory or spelling.
+    # Older updaters locked /tmp (created there at each boot) or the target folder
+    # (locked only if the file is there; this updater never creates it).
+    return Installer(source, target, system, lock_parent=USER_STATE_DIRECTORY, ready_timeout=ready_timeout,
+                     legacy_lock_parents=LEGACY_LOCK_DIRECTORIES,
+                     existing_legacy_lock_parents=(canonical(target).parent,))
+
+
 EXIT_CODES = f'''exit status:
   0    success
   1    stopped; the message says what state remains and which command comes next
@@ -1456,11 +1467,8 @@ def main(argv=None):
         if not 0 < args.ready_timeout <= 3600:
             parser.error('--ready-timeout must be between 0 and 3600 seconds')
     try:
-        # One lock for all of this user's updates, with any --target directory or spelling.
-        installer = Installer(args.source, args.target, NativeSystem(), lock_parent=USER_STATE_DIRECTORY,
-                              ready_timeout=args.ready_timeout or READY_TIMEOUT,
-                              legacy_lock_parents=LEGACY_LOCK_DIRECTORIES,
-                              existing_legacy_lock_parents=(canonical(args.target).parent,))
+        installer = command_line_installer(args.source, args.target, NativeSystem(),
+                                           ready_timeout=args.ready_timeout or READY_TIMEOUT)
         if args.archive_backups:
             installer.archive_completed_backups()
             installer.summary = 'Completed update backups archived and old records pruned; no app launched or stopped.'
