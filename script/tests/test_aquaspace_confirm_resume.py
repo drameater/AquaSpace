@@ -202,4 +202,46 @@ class FileOnlyRecordTests(GuidanceFixture):
         self.assertIn('open', self.installer.summary)
 
 
+
+class SignaledStopTests(GuidanceFixture):
+    """Finding 9: a stop signal that was sent is reported, even if the process outlived the wait."""
+
+    def signaled_but_running(self):
+        old = self.system.add(100)
+        self.system.stop_never_exits = True  # SIGKILL sent; the process has not exited yet.
+        with self.assertRaises(update.UpdateError): self.activate()
+        return old, self.pending()[0]
+
+    def test_journal_records_that_the_signal_was_sent(self):
+        _, record = self.signaled_but_running()
+        state = json.loads((record / 'journal.json').read_text())
+        self.assertEqual(state['phase'], 'stop_requested')
+        self.assertIs(state['stop_signaled'], True)
+
+    def test_closing_the_record_reports_the_sent_signal_truthfully(self):
+        for mode in ('resume', 'recover'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                old, record = self.signaled_but_running()
+                getattr(self.installer, mode)(record)
+                summary = self.installer.summary
+                self.assertNotIn('No process was stopped', summary)
+                self.assertIn('stop signal', summary)
+                self.assertIn(f'pid {old.pid}', summary)
+                self.assertIn('No file was replaced', summary)
+                self.assertEqual(phase_of(record), 'aborted')
+                self.assertEqual(self.system.launches, [])
+                self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'old')
+
+    def test_record_without_the_signal_flag_reports_only_what_is_known(self):
+        # The updater can die after the signal and before the flag, so make no claim about it.
+        old = self.system.add(100)
+        with base.hard_crash(self.installer, self.system, 'stop_requested'): self.activate()
+        record = self.pending()[0]
+        self.installer.resume(record)
+        self.assertIn(f'The old AquaSpace (pid {old.pid}) is still running', self.installer.summary)
+        self.assertIn('No file was replaced', self.installer.summary)
+        self.assertEqual(self.system.running, {100: old})
+
+
 if __name__ == '__main__': unittest.main()

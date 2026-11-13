@@ -721,6 +721,18 @@ class Installer:
         # An unused staging copy is never evidence of an installed app; do not archive it.
         _remove_tree(transaction / 'new.app')
 
+    def _close_unchanged(self, transaction, state):
+        """Close a record that replaced no file; return what is known about the old manager."""
+        old, phase = state.get('old') or {}, state['phase']
+        self._close_aborted(transaction, state)
+        if phase in PRE_STOP_PHASES:
+            return 'No process was stopped and no file was replaced.'
+        if state.get('stop_signaled'):
+            return (f'No file was replaced. The updater sent a stop signal to the old AquaSpace (pid {old.get("pid")}), '
+                    'but it was still running. It can still exit; if it does, start AquaSpace yourself:\n  '
+                    + shlex.join(['open', str(self.target)]))
+        return f'No file was replaced. The old AquaSpace (pid {old.get("pid")}) is still running.'
+
     def _tidy_records(self):
         parent = self.target.parent
         for draft in parent.glob(NEW_RECORD_PREFIX + '*'):
@@ -1140,6 +1152,10 @@ class Installer:
                     except NotSignaled:
                         signaled = False
                         raise
+                    # Later commands then report the signal, even if the process outlives the wait.
+                    state['stop_signaled'] = True
+                    atomic_json(transaction / 'journal.json', state)
+                    self.checkpoint('stop_signaled')
                     deadline = self.system.monotonic() + self.timeout
                     while True:
                         current = self.system.inspect(old.pid)
@@ -1168,8 +1184,7 @@ class Installer:
             if phase in TERMINAL_PHASES:
                 raise UpdateError('This update is already complete; there is nothing to resume.')
             if phase in PRE_STOP_PHASES or self._old_still_running(state):
-                self._close_aborted(transaction, state)
-                self.summary = ('No process was stopped and no file was replaced, so there was nothing to resume.\n'
+                self.summary = (self._close_unchanged(transaction, state) + '\nThere was nothing to resume. '
                                 f'The record is closed: {transaction}\nRun the update again.')
                 return transaction
             restart = self._restart_requested(state)
@@ -1263,9 +1278,9 @@ class Installer:
             if state['phase'] in TERMINAL_PHASES:
                 raise UpdateError('This update is already complete; it is not a pending recovery.')
             if state['phase'] in PRE_STOP_PHASES or self._old_still_running(state):
-                # Nothing was stopped or replaced, so a running manager is not affected.
-                self._close_aborted(transaction, state)
-                self.summary = f'Closed the update record; no process or installed file was changed.\nRecord: {transaction}'
+                # No file was replaced, so a running manager is not affected.
+                self.summary = (self._close_unchanged(transaction, state) + '\nNo installed file was changed. '
+                                f'The update record is closed: {transaction}')
                 return transaction
             self._allowed_managers(transaction, state, 'recover', 'restore the previous files')
             self._record_bundles(transaction, state)
