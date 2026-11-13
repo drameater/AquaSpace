@@ -52,6 +52,7 @@ final class WindowManagerController {
     private let watchInterval: Duration
     private let effects: Effects
     private var watch: Task<(), Never>?
+    private var isStopping = false
 
     init(admission: WindowManagerAdmission, gate: WindowWriteGate = WindowWriteGate(), build: WindowManagerAdmission.Build = .current,
          watchInterval: Duration = .milliseconds(200), effects: Effects) {
@@ -129,6 +130,9 @@ final class WindowManagerController {
     /// The launch notification already froze writes. Yield only to a confirmed peer.
     /// Otherwise resume control; polling still catches a peer that appears later.
     func observedPeerLaunch() async {
+        // A handoff or a stop already runs, and writes are frozen. Stock sends launch and
+        // activation notifications during a handoff; a scan that fails then must not end it.
+        guard !isYielding else { return }
         if let peers = try? observedPeers(), !peers.isEmpty {
             await yield(to: peers)
         } else if admission.ownership == .controlling {
@@ -147,9 +151,11 @@ final class WindowManagerController {
     }
 
     /// Fail closed. The report comes before the first suspension point, so the
-    /// reason is saved even if a later wait never ends.
+    /// reason is saved even if a later wait never ends. A second stop during the
+    /// drain of the first does nothing.
     func stop(_ error: any Error, phase: WindowManagerFailureReport.Phase = .monitoring) async {
-        guard !effects.isReadOnly() else { return }
+        guard !effects.isReadOnly(), !isStopping else { return }
+        isStopping = true
         admission.yield()
         effects.forgetRestoration()
         gate.freeze()

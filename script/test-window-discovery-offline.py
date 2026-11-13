@@ -60,10 +60,9 @@ COORDINATOR_HEADER = '''import Foundation
     static var canControlWindows: Bool { Simulation.controls }
     static var canInitializeWindows: Bool { !isYielding && Simulation.permission.permitsInitialization }
     static var controlGeneration: UUID { Simulation.permission.generation }
-    static var isYielding: Bool { Simulation.yields > 0 || Simulation.stops > 0 }
+    static var isYielding: Bool { Simulation.yields > 0 }
     static let controller = ReplayController()
     static func freezeAXWrites() { Simulation.permission.freeze() }
-    static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
     enum HandoffError: Error { case message(String) }
 '''
 HANDOFF_HEADER = '''@MainActor enum ReplayHandoff {

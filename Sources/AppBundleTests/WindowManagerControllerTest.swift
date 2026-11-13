@@ -108,6 +108,14 @@ private func manager(_ bundle: String?, pid: Int32 = 42) -> WindowManagerProcess
     }
 }
 
+/// A stock handoff that waits until the test lets it finish.
+@MainActor private final class PausedHandOff {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isPaused: Bool { continuation != nil }
+    func pause() async { await withCheckedContinuation { continuation = $0 } }
+    func resume() { continuation?.resume(); continuation = nil }
+}
+
 /// Lets other main-actor work run until `condition` holds; false after 5 s.
 @MainActor private func eventually(_ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(5)
@@ -287,6 +295,32 @@ struct WindowManagerControllerTest {
         #expect(probe.exits == [EXIT_FAILURE])
         // A yielding controller never hands off twice.
         await probe.controller.switchToOriginal()
+        #expect(probe.exits == [EXIT_FAILURE])
+    }
+
+    @Test func aFailedScanDuringAStockHandoffLeavesTheHandoffAlone() async {
+        let probe = await Probe.started()
+        let handOff = PausedHandOff()
+        probe.handOff = { await handOff.pause() }
+        let switching = Task { @MainActor in await probe.controller.switchToOriginal() }
+        #expect(await eventually { handOff.isPaused })
+        // Stock keeps sending launch and activation notifications while it restores the session.
+        probe.scanError = Fixture.unreadable
+        await probe.controller.observedPeerLaunch()
+        #expect(probe.reports.isEmpty)
+        #expect(probe.exits.isEmpty)
+        handOff.resume()
+        await switching.value
+        #expect(probe.reports.isEmpty)
+        #expect(probe.exits == [EXIT_SUCCESS])
+    }
+
+    @Test func aSecondStopWhileTheFirstDrainsReportsAndExitsOnce() async {
+        let probe = await Probe.started()
+        async let first: Void = probe.controller.stop(Fixture.unreadable)
+        async let second: Void = probe.controller.stop(Fixture.unreadable)
+        _ = await (first, second)
+        #expect(probe.reports.count == 1)
         #expect(probe.exits == [EXIT_FAILURE])
     }
 

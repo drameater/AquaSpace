@@ -28,7 +28,6 @@ enum WindowManagerHandoff {
     private static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
     nonisolated static var permitsAXWrites: Bool { writeGate.permitsWrites }
     nonisolated static var controlGeneration: UUID { writeGate.generation }
-    nonisolated static func freezeAXWrites() { writeGate.freeze() }
     /// Freezes writes at once when another manager launches or activates.
     nonisolated static func freezeIfPeerLaunched(_ app: NSRunningApplication?) -> Bool {
         writeGate.freezeIfPeerLaunched(bundleId: app?.bundleIdentifier, pid: app?.processIdentifier, ownPid: myPid)

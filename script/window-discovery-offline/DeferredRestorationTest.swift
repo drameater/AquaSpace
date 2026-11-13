@@ -126,7 +126,7 @@ extension OfflineWindowDiscoveryTests {
         Simulation.owners = [42: [9]]; Simulation.processes = [9: owner()]
         Simulation.permission = WindowControlPermission()
         Simulation.controls = true; Simulation.peers = []; Simulation.inventoryError = false
-        Simulation.yields = 0; Simulation.stops = 0; Simulation.mutations = []; Simulation.foreground = 99
+        Simulation.yields = 0; Simulation.mutations = []; Simulation.foreground = 99
         Simulation.detectedRule = nil; Simulation.callbacks = nil; Simulation.beforeDetection = nil
         Simulation.awaitSize = nil; Simulation.awaitType = nil; Simulation.awaitFullscreen = nil
         Simulation.awaitMinimized = nil; Simulation.awaitWindowCount = nil
@@ -240,7 +240,7 @@ extension OfflineWindowDiscoveryTests {
         let (next, _, _) = setup(); next.thread?.afterRead = { Simulation.inventoryError = true }
         await ReplayCoordinator.restorePendingAssignments()
         #expect(Simulation.mutations.isEmpty)
-        #expect(Simulation.stops == 0) // A failed scan is retried; it does not stop AquaSpace.
+        #expect(Simulation.yields == 0) // A failed scan is retried; it does not yield or stop AquaSpace.
         #expect(!ReplayCoordinator.pendingRestoration.assignments.isEmpty)
     }
     @Test func disabledControllerAndModelReplacementCannotCommit() async {

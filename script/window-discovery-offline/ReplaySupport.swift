@@ -78,7 +78,6 @@ extension AXUIElement {
     static var peers: [Int] = []
     static var inventoryError = false
     static var yields = 0
-    static var stops = 0
     static var mutations: [UInt32] = []
     static var foreground: Int32? = 99
     static var detectedRule: ((MacWindow) async -> Void)?

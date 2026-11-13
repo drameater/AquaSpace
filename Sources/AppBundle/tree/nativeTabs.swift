@@ -28,9 +28,10 @@ final class AxNativeTabState {
     }
     var inactiveWindowIds: Set<UInt32> { Set(representatives.keys).subtracting(exposedWindowIds) }
 
-    /// `serverIds` is the WindowServer inventory already read for this refresh. When it
-    /// does not list this application, the application can have launched after that read,
-    /// so the baseline is read here, on the AX thread, at registration time.
+    /// `serverIds` is the WindowServer inventory already read for this refresh. It lists only
+    /// applications that had a window at that time. When it does not list this application,
+    /// the application launched after that read or had no window then, so the baseline is
+    /// read here, on the AX thread, at registration time.
     init(pid: Int32 = getpid(), serverIds: [Int32: Set<UInt32>]? = nil) {
         self.pid = pid
         knownWindowIds = serverIds?[pid] ?? getWindowServerWindowIdsByPid().map { $0[pid] ?? [] }
