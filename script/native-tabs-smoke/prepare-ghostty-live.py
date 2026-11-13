@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build a copy of AeroSpace that can register only fresh, uniquely titled Ghostty fixtures.
 
-Does not launch apps, change permissions, or edit production sources. The live
-harness refuses a binary whose checksum does not match the emitted scope manifest.
+Does not launch apps, change permissions, or edit production sources. It writes a
+checksum manifest (scope.json) next to the app. The runner that checked that
+manifest (ghostty-live.py) was retired and removed; no harness in this repository
+uses this output now. The opt-in ghostty-topology harness uses the installed app.
 """
 import argparse
 import hashlib
@@ -30,12 +32,9 @@ def main():
     parser.add_argument("--scratch-path", type=Path, default=root / ".debug/ghostty-live-build")
     parser.add_argument("--output", type=Path, default=root / ".debug/native-tabs/ghostty-isolated")
     parser.add_argument("--source-path", type=Path, help="Reuse an isolated source copy for incremental QA builds")
-    parser.add_argument("--handoff-qa", action="store_true", help="Retired; this option fails before building or modifying files")
     parser.add_argument("--peer-socket", type=Path)
     parser.add_argument("--jobs", type=int, default=2)
     args = parser.parse_args()
-    if args.handoff_qa:
-        parser.error("The pause/resume handoff harness is retired; ownership checks cannot be bypassed.")
     source = args.source_path or Path(tempfile.mkdtemp(prefix="aerospace-ghostty-source-", dir="/private/tmp"))
     source.mkdir(parents=True, exist_ok=True)
     for name in ("Package.swift", "Package.resolved"):
@@ -95,7 +94,7 @@ func nativeTabLiveTestAllows(_ id: UInt32, _ window: AXUIElement) -> Bool {
     subprocess.run(["codesign", "--force", "--sign", "-", str(target)], check=True)
     subprocess.run(["codesign", "--verify", "--strict", str(target)], check=True)
     (args.output / "scope.json").write_text(json.dumps({"kind": "ghostty-prefix-and-baseline-exclusion", "application_id": args.application_id,
-        "handoff_qa": args.handoff_qa, "peer_socket": str(args.peer_socket) if args.peer_socket else None,
+        "peer_socket": str(args.peer_socket) if args.peer_socket else None,
         "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(), "source_copy": str(source)}, indent=2) + "\n")
     print(f"Scoped test app: {target}")
 
