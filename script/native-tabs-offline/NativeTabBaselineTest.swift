@@ -21,6 +21,36 @@ struct NativeTabBaselineTest {
         state.observations[id].map { $0.snapshot.isNewWindow || $0.snapshot.isRecentWindowCreation }
     }
 
+    // An application that registers during a refresh can have launched after
+    // that refresh's WindowServer snapshot. Its existing windows must not count
+    // as newly created on its first reconciliation.
+    @Test func applicationMissingFromTheRefreshSnapshotReadsItsOwnBaseline() throws {
+        let reads = ReplayDesktop.ReadCounter()
+        try ReplayDesktop.$reads.withValue(reads) {
+            try ReplayDesktop.$windowIdsByPid.withValue([pid: [1, 2]]) {
+                let state = AxNativeTabState(pid: pid, serverIds: [99: [7]])
+                #expect(reads.count == 1)
+                _ = try state.reconcile([bareWindow(1), bareWindow(2)], RunLoopJob(), isAppHidden: false, windowServerIds: [1, 2, 3])
+                #expect(created(state, 1) == false)
+                #expect(created(state, 2) == false)
+                // A window that appears after the baseline is still a creation.
+                _ = try state.reconcile([bareWindow(1), bareWindow(2), bareWindow(3)], RunLoopJob(), isAppHidden: false, windowServerIds: [1, 2, 3])
+                #expect(created(state, 3) == true)
+            }
+        }
+    }
+
+    @Test func applicationListedInTheRefreshSnapshotUsesItWithoutAnotherRead() throws {
+        let reads = ReplayDesktop.ReadCounter()
+        try ReplayDesktop.$reads.withValue(reads) {
+            let state = AxNativeTabState(pid: pid, serverIds: [pid: [1, 2], 99: [7]])
+            #expect(reads.count == 0)
+            _ = try state.reconcile([bareWindow(1), bareWindow(2), bareWindow(3)], RunLoopJob(), isAppHidden: false, windowServerIds: [1, 2, 3])
+            #expect(created(state, 1) == false)
+            #expect(created(state, 3) == true)
+        }
+    }
+
     // While the left mouse button is down the refresh skips its snapshot, and
     // reconciliation keeps its state and reads nothing.
     @Test func reconciliationDuringADragReadsNothingAndKeepsItsState() throws {

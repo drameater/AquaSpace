@@ -28,10 +28,12 @@ final class AxNativeTabState {
     }
     var inactiveWindowIds: Set<UInt32> { Set(representatives.keys).subtracting(exposedWindowIds) }
 
-    /// `serverIds` is the WindowServer inventory already read for this refresh; nil reads one here.
+    /// `serverIds` is the WindowServer inventory already read for this refresh. When it
+    /// does not list this application, the application can have launched after that read,
+    /// so the baseline is read here, on the AX thread, at registration time.
     init(pid: Int32 = getpid(), serverIds: [Int32: Set<UInt32>]? = nil) {
         self.pid = pid
-        knownWindowIds = (serverIds ?? getWindowServerWindowIdsByPid()).map { $0[pid] ?? [] }
+        knownWindowIds = serverIds?[pid] ?? getWindowServerWindowIdsByPid().map { $0[pid] ?? [] }
     }
 
     func reconcile(_ liveWindows: [WindowIdAndAxUiElement]?, _ job: RunLoopJob, isAppHidden: Bool, windowServerIds: Set<UInt32>? = nil) throws -> [UInt32: UInt32] {
