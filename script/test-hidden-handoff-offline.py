@@ -29,8 +29,8 @@ def prepare(args):
         text = harness.retarget_imports(harness.SwiftSource('Sources/' + relative).text,
                                         drop=('CoreGraphics', 'AppKit', 'Common'))
         if relative.endswith('/windowLevelCache.swift'):
-            # Private cache reset is exposed only inside this isolated copy.
-            text += '\n@MainActor func resetReplayCache() { cache = [:] }\n'
+            # Private cache state is reset only inside this isolated copy.
+            text += '\n@MainActor func resetReplayCache() { cache = [:]; wip = nil }\n'
         package.write(source + relative.split('/')[-1], text)
     handoff = harness.SwiftSource('Sources/AppBundle/WindowManagerHandoff.swift')
     package.write(source + 'WindowManagerSession.swift', handoff.decl('struct WindowManagerSession:'))
