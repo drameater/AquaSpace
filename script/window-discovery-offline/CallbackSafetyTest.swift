@@ -77,6 +77,30 @@ extension OfflineWindowDiscoveryTests {
         #expect(window.discoveryInitialization?.mayContinue == false) // finished, not a leaked lifetime
     }
 
+    // The setter itself refuses automatic focus after a newer user focus, also
+    // when an automatic command reaches it without a command-level focus check.
+    @Test func setFocusRefusesAutomaticFocusAfterANewerUserFocus() async {
+        let (app, window, _) = DeferredRestorationAdapterTest().setup()
+        let user = MacWindow(44, app: app); MacWindow.allWindowsMap[44] = user
+        user.parent = Workspace.get(byName: "user").rootTilingContainer
+        let entered = ReplayGate(), resume = ReplayGate()
+        let input = Task { @MainActor in
+            await entered.wait()
+            _ = setFocus(to: ReplayFocus(windowOrNil: user)) // A native focus change, outside Shell.
+            resume.open()
+        }
+        var automaticFocus: Bool?
+        Simulation.callbacks = [WindowDetectedCallback(match: { _ in true }, run: .cmd(ReplayAwaitCommand {
+            entered.open()
+            await resume.wait()
+            automaticFocus = window.focusWindow()
+        }))]
+        await runOnWindowDetected(ifConventional: window)
+        await input.value
+        #expect(automaticFocus == false)
+        #expect(focus.windowOrNil === user)
+    }
+
     @Test func focusDuringMatchingBlocksLaterFocusButAllowsBackgroundAssignment() async {
         let (app, window, _) = DeferredRestorationAdapterTest().setup()
         let user = MacWindow(44, app: app); MacWindow.allWindowsMap[44] = user

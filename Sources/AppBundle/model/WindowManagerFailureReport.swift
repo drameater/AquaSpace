@@ -8,7 +8,8 @@ struct WindowManagerFailureReport {
     static var defaultDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/AquaSpace")
     }
-    private static let logger = Logger(subsystem: "local.aquaspace", category: "Lifecycle")
+    /// The "Lifecycle" category in the Console log.
+    static let logger = Logger(subsystem: "local.aquaspace", category: "Lifecycle")
     let text: String
 
     init(error: any Error, phase: Phase, version: String, executable: String, pid: Int32, date: Date = Date()) {

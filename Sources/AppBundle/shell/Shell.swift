@@ -101,18 +101,10 @@ extension Shell where T == any Command {
         switch self {
             case .cmd(let command):
                 let continuations = WindowAutomaticCommandContinuations(parent: WindowRestorationMutation.commandContinuations)
-                let exitCode = await WindowRestorationMutation.$commandContinuations.withValue(continuations) {
-                    await WindowRestorationMutation.$isUserCommand.withValue(!WindowRestorationMutation.isAutomaticDiscovery) {
-                        Int32ExitCode(rawValue: await command.run(env, io).rawValue)
-                    }
-                }
-                // Revoke before refresh or the next shell branch can resume the
-                // callback. Inspect even when a native read threw before its guard.
+                let exitCode = await continuations.run { Int32ExitCode(rawValue: await command.run(env, io).rawValue) }
                 continuations.cancelStaleInitialization()
                 if command.shouldResetClosedWindowsCache { resetClosedWindowsCache() }
                 await refreshModel_nonCancellable()
-                // Refresh suspends too; newer intent during it must not let a
-                // cross-window command fall through to another branch.
                 continuations.cancelStaleInitialization()
                 return exitCode
             case .and(let commands): return await runShellAnd(commands, env, io)

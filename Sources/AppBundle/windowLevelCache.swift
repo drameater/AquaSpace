@@ -36,6 +36,15 @@ func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
 
 @MainActor func getWindowLevel(for windowId: UInt32, _ cm: CancellationMode) async throws -> MacOsWindowLevel? {
     if let existing = cache[windowId] { return existing }
+    // AquaSpace deviates from upstream be3e58df and 0d498deb here. A read that is
+    // already in flight took its WindowServer list before this request, so it can
+    // miss a window created since. After it, a miss waits for, or starts, one read
+    // that began after this request, as every miss did before the async port.
+    if let wip {
+        try await wip.await(cm)
+        if let existing = cache[windowId] { return existing }
+    }
+    // A read in flight now began after the read above had finished.
     if let wip {
         try await wip.await(cm)
         return cache[windowId]
@@ -43,18 +52,19 @@ func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
     let latch = AwaitableOneTimeBroadcastLatch()
     defer { await latch.signalToAll() }
     wip = latch
-    cache = await computeCache()
+    // A failed read keeps the levels that are already known.
+    if let levels = await computeCache() { cache = levels }
     wip = nil
     return cache[windowId]
 }
 
-@concurrent private func computeCache() async -> [UInt32: MacOsWindowLevel] {
+@concurrent private func computeCache() async -> [UInt32: MacOsWindowLevel]? {
     var result: [UInt32: MacOsWindowLevel] = [:]
     // Hidden apps and windows on inactive native Spaces still need their real
     // layer at startup. An on-screen-only scan gives them nil, which makes the
     // strict browser classifier mistake ordinary windows for unbound popups.
     let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionAll)
-    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return [:] }
+    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return nil }
     for elem in cfArray {
         let dict = elem as NSDictionary
 

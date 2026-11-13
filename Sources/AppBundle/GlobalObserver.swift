@@ -9,12 +9,9 @@ enum GlobalObserver {
             return
         }
         let notifName = notification.name.rawValue
-        let appId = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-        let peerWasOpened = (appId.map(WindowManagerProcess.bundleIds.contains) == true) &&
-            (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier != myPid &&
-            (notification.name == NSWorkspace.willLaunchApplicationNotification ||
-             notification.name == NSWorkspace.didLaunchApplicationNotification || notification.name == NSWorkspace.didActivateApplicationNotification)
-        if peerWasOpened { WindowManagerHandoff.freezeAXWrites() }
+        let peerWasOpened = [NSWorkspace.willLaunchApplicationNotification, NSWorkspace.didLaunchApplicationNotification,
+                             NSWorkspace.didActivateApplicationNotification].contains(notification.name) &&
+            WindowManagerHandoff.freezeIfPeerLaunched(notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
         Task.startUnstructured { @MainActor in
             // Returns only when no peer took control; then refresh to apply writes the freeze skipped.
             if peerWasOpened { await WindowManagerHandoff.observedPeerLaunch() }

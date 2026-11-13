@@ -28,15 +28,13 @@ import Foundation
             assumeCancellable: false,
             layoutWorkspaces: false,
         )
-        do {
+        await WindowManagerHandoff.runFinalStartupSession {
             try await runLightSession(.startup, .forceRun) {
                 smartLayoutAtStartup()
                 _ = await config.afterStartupCommand.run(.defaultEnv, .emptyStdin)
                 await WindowManagerHandoff.restoreStartupSession()
                 await WindowManagerHandoff.finishStartup()
             }
-        } catch {
-            await WindowManagerHandoff.failStartup(error)
         }
     }
 }

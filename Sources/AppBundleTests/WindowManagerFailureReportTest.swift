@@ -1,5 +1,6 @@
 @testable import AppBundle
 import Foundation
+import OSLog
 import Testing
 
 struct WindowManagerFailureReportTest {
@@ -24,6 +25,39 @@ struct WindowManagerFailureReportTest {
             #expect((try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
             #expect((try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700)
         }
+    }
+
+    // The default sinks are the production ones: the Console log, without
+    // redaction, and standard error. Only the directory is a test directory.
+    @Test func defaultSinksLogTheReasonUnredactedAndWriteItToStandardError() throws {
+        let reason = "fixture-reason-\(UUID())"
+        let directory = FileManager.default.temporaryDirectory.appending(path: "aqua-report-defaults-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let started = Date()
+        let written = try capturingStandardError {
+            report(NSError(domain: "Fixture", code: 7, userInfo: [NSLocalizedDescriptionKey: reason])).publish(to: directory)
+        }
+        #expect(written.contains(reason))
+        // The same store redacts a private value, so it would show a redacted reason.
+        let hidden = "fixture-private-\(UUID())"
+        WindowManagerFailureReport.logger.error("\(hidden)")
+        let store = try OSLogStore(scope: .currentProcessIdentifier)
+        let messages = try store.getEntries(at: store.position(date: started)).compactMap { $0 as? OSLogEntryLog }
+            .filter { $0.subsystem == "local.aquaspace" && $0.category == "Lifecycle" }.map(\.composedMessage)
+        #expect(messages.contains { $0.contains(reason) && $0.contains("AquaSpace could not complete startup") })
+        #expect(!messages.isEmpty && !messages.contains { $0.contains(hidden) })
+    }
+
+    /// Runs `body` with file descriptor 2 sent to a pipe and returns what it wrote.
+    private func capturingStandardError(_ body: () -> Void) throws -> String {
+        let pipe = Pipe()
+        let saved = dup(STDERR_FILENO)
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        body()
+        dup2(saved, STDERR_FILENO)
+        close(saved)
+        try pipe.fileHandleForWriting.close()
+        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
 
     @Test func persistenceFailureStillReportsTheOriginalCauseAndWriteFailure() throws {

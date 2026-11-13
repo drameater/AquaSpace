@@ -61,8 +61,7 @@ private struct FrozenFocus: AeroAny, Equatable, Sendable {
 @MainActor var focus: LiveFocus { _focus.live }
 
 @MainActor func setFocus(to newFocus: LiveFocus) -> Bool {
-    guard WindowDiscoveryInitialization.mayRunAutomaticFocus else { return false }
-    WindowDiscoveryInitialization.recordUserFocus(changed: _focus != newFocus.frozen)
+    guard WindowDiscoveryInitialization.admitFocus(changed: _focus != newFocus.frozen) else { return false }
     if _focus == newFocus.frozen { return true }
     let oldFocus = focus
     // Normalize mruWindow when focus away from a workspace

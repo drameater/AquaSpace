@@ -112,9 +112,6 @@ class SwiftSourceTest(NoSubprocessTest):
         self.assertTrue(self.source.before('struct Session:').endswith('import Common\n\n'))
         self.assertNotIn('func helper', self.source.without('func helper('))
         self.assertIn('private func tail', self.source.without('func helper('))
-        self.assertEqual(self.source.statements('let initialization', 'return value'),
-                         '    let initialization = value\n    print("{")\n')
-        self.assertEqual(self.source.body_until('func helper(', 'print('), '\n    let initialization = value\n')
 
     def test_missing_or_repeated_declaration_names_the_file_and_the_signature(self):
         for signature, count in (('func renamed(', 0), ('func', 3)):
@@ -124,9 +121,6 @@ class SwiftSourceTest(NoSubprocessTest):
             self.assertIn('Sources/Sample.swift', message)
             self.assertIn(f'"{signature}"', message)
             self.assertIn(f'found {count}', message)
-        with self.assertRaises(harness.HarnessError) as raised:
-            self.source.body_until('func tail(', 'return value')
-        self.assertIn('"return value"', str(raised.exception))
 
     def test_imports_are_retargeted(self):
         text = harness.retarget_imports(SAMPLE, drop=('AppKit', 'Common'), add=('Foundation',))

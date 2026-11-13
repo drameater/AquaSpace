@@ -37,7 +37,29 @@ final class ReplayServerState: @unchecked Sendable {
     }
 }
 let replayServerState = ReplayServerState()
+/// A closed gate holds each WindowServer query after it has copied its rows, so a
+/// test can overlap readers deterministically. A held query waits at most 10 s,
+/// so a failing test cannot hang the run.
+final class ReplayServerGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var closed = false
+    func close() { condition.withLock { closed = true } }
+    func open() {
+        condition.withLock {
+            closed = false
+            condition.broadcast()
+        }
+    }
+    func pass() {
+        condition.withLock {
+            let deadline = Date(timeIntervalSinceNow: 10)
+            while closed && condition.wait(until: deadline) {}
+        }
+    }
+}
+let replayServerGate = ReplayServerGate()
 @MainActor enum ReplayServer {
+    static var gate: ReplayServerGate { replayServerGate }
     static var available: Bool {
         get { replayServerState.with { _, available, _ in available } }
         set { replayServerState.with { _, available, _ in available = newValue } }
@@ -49,7 +71,12 @@ let replayServerState = ReplayServerState()
             available = true
             queries = []
         }
+        replayServerGate.open()
         resetReplayCache()
+    }
+    /// A window that appears after earlier queries took their rows.
+    static func add(_ row: ReplayWindow) {
+        replayServerState.with { rows, _, _ in rows.append(row) }
     }
 }
 func CGWindowListCopyWindowInfo(_ options: CGWindowListOption, _ relative: CGWindowID) -> Any? {
@@ -58,6 +85,7 @@ func CGWindowListCopyWindowInfo(_ options: CGWindowListOption, _ relative: CGWin
         guard available else { return nil }
         return rows.filter { !options.contains(.optionOnScreenOnly) || $0.onScreen }
     }
+    replayServerGate.pass()
     return rows?.map { [kCGWindowLayer: $0.layer, kCGWindowNumber: $0.id, kCGWindowOwnerPID: $0.pid] as [String: Any] }
 }
 

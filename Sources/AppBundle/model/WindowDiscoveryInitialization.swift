@@ -42,6 +42,14 @@ final class WindowDiscoveryInitialization {
             (mayRunAutomaticCommand && WindowRestorationMutation.discoveryInitialization?.focusToken == userFocusToken)
     }
 
+    /// The entry check of setFocus: false when automatic discovery may not focus.
+    /// Otherwise it records an accepted user focus and returns true.
+    static func admitFocus(changed: @autoclosure () -> Bool) -> Bool {
+        guard mayRunAutomaticFocus else { return false }
+        recordUserFocus(changed: changed())
+        return true
+    }
+
     static func recordUserFocus(changed: Bool = false) {
         guard !WindowRestorationMutation.isAutomaticDiscovery, !WindowRestorationMutation.isSessionRestore,
               WindowRestorationMutation.isUserCommand || changed else { return }
@@ -79,6 +87,20 @@ final class WindowAutomaticCommandContinuations {
     private let parent: WindowAutomaticCommandContinuations?
 
     init(parent: WindowAutomaticCommandContinuations? = nil) { self.parent = parent }
+
+    /// Runs one shell command with these continuations, as a user command unless
+    /// automatic discovery runs it. Shell.run then calls cancelStaleInitialization()
+    /// twice: before the refresh, or the next shell branch can resume the callback
+    /// (even when a native read threw before its guard), and after the refresh,
+    /// which suspends too, so newer intent cannot let a cross-window command fall
+    /// through to another branch.
+    func run<T>(_ command: @MainActor () async -> T) async -> T {
+        await WindowRestorationMutation.$commandContinuations.withValue(self) {
+            await WindowRestorationMutation.$isUserCommand.withValue(!WindowRestorationMutation.isAutomaticDiscovery) {
+                await command()
+            }
+        }
+    }
 
     func register(_ continuation: WindowCommandContinuation) {
         continuations.append(continuation)

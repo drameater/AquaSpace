@@ -120,11 +120,21 @@ enum WindowManagerProcesses {
 final class WindowManagerProcessCache {
     private struct Entry {
         let generation: WindowManagerExecGeneration
-        /// Set when the Info.plist was unreadable: re-read it after this scan, not every tick.
-        let retryAfterScan: Int?
+        /// Set when the Info.plist was unreadable: read it again at this scan, not every tick.
+        let retryAtScan: Int?
+        /// Consecutive unreadable Info.plist reads of this image.
+        let metadataFailures: Int
     }
-    /// About 5 s at the 200 ms watch interval.
+    /// The longest retry delay: about 5 s at the 200 ms watch interval.
     static let metadataRetryScans = 25
+
+    /// An unreadable Info.plist is read again after 1, 2, 4, 8 and 16 scans, then
+    /// every 25 scans. So a transient failure delays detection by one scan (about
+    /// 200 ms). A bundle that stays unreadable is read at scans 1, 2, 4, 8, 16 and
+    /// 32 of its image, then once per 25 scans (about 5 s).
+    static func metadataRetryDelay(afterFailures failures: Int) -> Int {
+        min(1 << min(failures - 1, 5), metadataRetryScans)
+    }
     private let api: any WindowManagerProcessAPI
     private var unrelated: [Int32: Entry] = [:]
     private var scans = 0
@@ -138,16 +148,23 @@ final class WindowManagerProcessCache {
         var result: [WindowManagerProcess] = []
         for pid in pids where pid > 0 && pid != api.ownPid {
             let generation = try? api.generation(pid)
-            if let generation, let entry = unrelated[pid], entry.generation == generation,
-               entry.retryAfterScan.map({ scans <= $0 }) ?? true { continue }
-            unrelated[pid] = nil
+            let previous = unrelated.removeValue(forKey: pid)
+            if let generation, let previous, previous.generation == generation,
+               previous.retryAtScan.map({ scans < $0 }) ?? true
+            {
+                unrelated[pid] = previous
+                continue
+            }
             guard let candidate = WindowManagerProcesses.classify(pid, using: api) else { continue }
             if candidate.isManager {
                 if let peer = try WindowManagerProcesses.verifiedPeer(pid, candidate, using: api) { result.append(peer) }
             } else if let generation, (try? api.generation(pid)) == generation {
                 // Cache only a verdict whose image did not change while it was read.
+                let failures = candidate.metadataComplete ? 0
+                    : 1 + (previous?.generation == generation ? previous?.metadataFailures ?? 0 : 0)
                 unrelated[pid] = Entry(generation: generation,
-                    retryAfterScan: candidate.metadataComplete ? nil : scans + Self.metadataRetryScans)
+                    retryAtScan: failures == 0 ? nil : scans + Self.metadataRetryDelay(afterFailures: failures),
+                    metadataFailures: failures)
             }
         }
         return result

@@ -28,10 +28,12 @@ final class AxNativeTabState {
     }
     var inactiveWindowIds: Set<UInt32> { Set(representatives.keys).subtracting(exposedWindowIds) }
 
-    /// `serverIds` is the WindowServer inventory already read for this refresh; nil reads one here.
+    /// `serverIds` is the WindowServer inventory already read for this refresh. When it
+    /// does not list this application, the application can have launched after that read,
+    /// so the baseline is read here, on the AX thread, at registration time.
     init(pid: Int32 = getpid(), serverIds: [Int32: Set<UInt32>]? = nil) {
         self.pid = pid
-        knownWindowIds = (serverIds ?? getWindowServerWindowIdsByPid()).map { $0[pid] ?? [] }
+        knownWindowIds = serverIds?[pid] ?? getWindowServerWindowIdsByPid().map { $0[pid] ?? [] }
     }
 
     func reconcile(_ liveWindows: [WindowIdAndAxUiElement]?, _ job: RunLoopJob, isAppHidden: Bool, windowServerIds: Set<UInt32>? = nil) throws -> [UInt32: UInt32] {
@@ -237,36 +239,6 @@ func nativeTabReplacementHasManagedSuccessor(_ newId: UInt32, replacements: [UIn
         id = next
     }
     return false
-}
-
-/// Read the binding at the instant of replacement: normalization may have changed the parent.
-@MainActor
-func transferNativeTabState(from previous: Window, to current: Window) {
-    if current.isBound { current.unbindFromParent() }
-    let binding = previous.unbindFromParent()
-    current.bind(to: binding.parent, adaptiveWeight: binding.adaptiveWeight, index: binding.index)
-    current.lastFloatingSize = previous.lastFloatingSize
-    current.isFullscreen = previous.isFullscreen
-    current.noOuterGapsInFullscreen = previous.noOuterGapsInFullscreen
-    current.layoutReason = previous.layoutReason
-    current.lastAppliedLayoutVirtualRect = previous.lastAppliedLayoutVirtualRect
-    current.lastAppliedLayoutPhysicalRect = previous.lastAppliedLayoutPhysicalRect
-    replaceNativeTabFocusId(previous.windowId, current.windowId)
-}
-
-@MainActor
-func absorbNativeTabState(from previous: Window, into current: Window) {
-    if focus.windowOrNil === previous { _ = current.focusWindow() }
-    replaceNativeTabFocusId(previous.windowId, current.windowId)
-    previous.unbindFromParent()
-}
-
-/// Recovery can identify a split after its window was registered elsewhere.
-/// Keep its existing floating/fullscreen state and avoid new-window callbacks.
-@MainActor
-func inheritNativeTabWorkspace(_ window: Window, on workspace: Workspace) {
-    guard window.nodeWorkspace !== workspace else { return }
-    _ = moveWindowToWorkspace(window, workspace, CmdIoImpl.emptyStdinIgnoringOut, focusFollowsWindow: false, failIfNoop: false)
 }
 
 /// AX objects stay on their application's AX thread; only the replacement IDs cross threads.

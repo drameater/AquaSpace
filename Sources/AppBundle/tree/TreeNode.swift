@@ -67,9 +67,7 @@ open class TreeNode: Equatable, AeroAny {
     @MainActor
     @discardableResult
     func bind(to newParent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) -> BindingData? {
-        if WindowRestorationMutation.isUserCommand && !WindowRestorationMutation.isSessionRestore {
-            WindowManagerHandoff.cancelPendingForUserMutation(allLeafWindowsRecursive)
-        }
+        cancelPendingRestorationForUserBind()
         let result = unbindIfBound()
 
         if newParent === NilTreeNode.instance {

@@ -1,26 +1,6 @@
 import Foundation
 import Darwin
 
-/// Startup may initialize the model before claim, but a frozen controller must
-/// never be mistaken for that initial state. A freeze also revokes old work if
-/// a later successful admission grants a new control period.
-struct WindowControlPermission: Sendable {
-    private(set) var permitsWrites = false
-    private(set) var permitsInitialization = true
-    private(set) var generation = UUID()
-
-    mutating func freeze() {
-        permitsWrites = false
-        permitsInitialization = false
-        generation = UUID()
-    }
-
-    mutating func claim() {
-        permitsWrites = true
-        permitsInitialization = true
-    }
-}
-
 enum WindowManagerOwnership: String, Sendable {
     case preparing, controlling, yielding
 
@@ -97,7 +77,18 @@ final class WindowManagerControllerLock {
 /// The same admission path is used by both build configurations. Dependencies are
 /// injectable so regressions exercise the real policy without native processes.
 final class WindowManagerAdmission {
-    enum Build { case release, debug }
+    enum Build {
+        case release, debug
+
+        /// The kind of this build. Startup admission always uses it.
+        static var current: Build {
+            #if DEBUG
+                .debug
+            #else
+                .release
+            #endif
+        }
+    }
     private(set) var ownership = WindowManagerOwnership.preparing
     private let lock: WindowManagerControllerLock
     private let inventory: () throws -> [WindowManagerProcess]

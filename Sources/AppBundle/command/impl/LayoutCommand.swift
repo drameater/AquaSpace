@@ -40,14 +40,7 @@ struct LayoutCommand: Command {
         let targetDescription = args.toggleBetween.val.first(where: { !node.matchesDescription($0) })
             ?? args.toggleBetween.val.first.orDie()
         if node.matchesDescription(targetDescription) {
-            switch node {
-                case .tilingContainer(let parent):
-                    WindowManagerHandoff.cancelPendingForUserMutation(parent.allLeafWindowsRecursive)
-                case .floatingWindowsContainer:
-                    if let window = target.windowOrNil {
-                        WindowManagerHandoff.cancelPendingForUserMutation([window])
-                    }
-            }
+            WindowManagerHandoff.cancelPendingForUserMutation(node.windowsOfLayoutCommand(target.windowOrNil))
             switch args.failIfNoop {
                 case true: return .fail
                 case false:

@@ -61,9 +61,8 @@ COORDINATOR_HEADER = '''import Foundation
     static var canInitializeWindows: Bool { !isYielding && Simulation.permission.permitsInitialization }
     static var controlGeneration: UUID { Simulation.permission.generation }
     static var isYielding: Bool { Simulation.yields > 0 || Simulation.stops > 0 }
-    static let admission = ReplayAdmission()
+    static let controller = ReplayController()
     static func freezeAXWrites() { Simulation.permission.freeze() }
-    static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
     static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
     enum HandoffError: Error { case message(String) }
 '''
@@ -116,19 +115,18 @@ def prepare(args):
         body = body.replace('private func', 'func', 1)
         bodies[name] = hashlib.sha256(body.encode()).hexdigest()
         write(f'Replay{name}App.swift', APP_WRAPPER.replace('NAME', name).replace('BODY', body + extra))
-    # Whole files. nativeTabs.swift binds windows through the local tree stubs.
+    # Whole files. nativeTabSlotTransfer.swift binds windows through the local tree stubs.
     for relative in ('model/NativeTabReplacement.swift', 'tree/nativeTabTopology.swift', 'tree/nativeTabs.swift',
-                     'util/AxUiElementMock.swift', 'model/KnownBundleId.swift', 'model/PendingWindowRestoration.swift'):
+                     'tree/nativeTabSlotTransfer.swift', 'util/AxUiElementMock.swift', 'model/KnownBundleId.swift',
+                     'model/PendingWindowRestoration.swift', 'model/WindowControlPermission.swift',
+                     'model/WindowManagerSession.swift'):
         write(relative.split('/')[-1], harness.retarget_imports(
             production(relative).text, drop=('AppKit', 'Common'), add=('Foundation', 'CoreFoundation')))
     write('DictionaryEx.swift', harness.SwiftSource('Sources/Common/util/DictionaryEx.swift').text)
     for name in ('ReplayAX.swift', 'ReplayRuntime.swift', 'ReplayNativeTabEnvironment.swift'):
         package.copy(source + name, harness.SHARED_SWIFT / name)
 
-    admission = production('model/WindowManagerAdmission.swift')
-    write('WindowControlPermission.swift', 'import Foundation\n' + admission.decl('struct WindowControlPermission:'))
     handoff = production('WindowManagerHandoff.swift')
-    write('WindowManagerSession.swift', handoff.decl('struct WindowManagerSession:'))
     write('ReplayHandoff.swift', HANDOFF_HEADER + handoff.decl('static func restoreStartupSession(') + '}\n')
     anchor = handoff.between('struct RestorationAnchor:', 'static func captureOwners(').replace('private ', '')
     capture_owners = handoff.between('static func captureOwners(', 'static func reconcilePendingRestoration(')
@@ -137,7 +135,7 @@ def prepare(args):
     write('ReplayCoordinator.swift', COORDINATOR_HEADER + anchor + capture_owners + coordinator + '}\n')
 
     # Exercise the real shell command entrypoint and movement helper. Only tree
-    # storage/AX are replaced; the pre-bind policy is extracted from production.
+    # storage/AX are replaced; the pre-bind policy is in WindowRestorationMutation.swift.
     shell = production('shell/Shell.swift')
     write('ReplayCommandRunner.swift', 'extension Shell where T == any Command {\n' +
           shell.decl('func run(_ env: CmdEnv, _ io: CmdIo) async -> Int32ExitCode') + '}\n' +
@@ -161,15 +159,10 @@ def prepare(args):
 
     mac_window = production('tree/MacWindow.swift')
     write('AutomaticDetection.swift', mac_window.between('func runOnWindowDetected(', 'extension WindowDetectedCallback {'))
-    write('RegistrationInitialization.swift',
-          'extension MacWindow {\nstatic func initializeRegistered(_ window: MacWindow) async throws {\n'
-          'let windowId = window.windowId\n' +
-          mac_window.statements('let initialization = WindowDiscoveryInitialization(window)', 'return window') + '\n}\n}\n')
+    write('RegistrationInitialization.swift', 'extension MacWindow {\n' +
+          mac_window.decl('static func initializeRegistered(').replace('private static', 'static') + '}\n')
     write('WindowRelayout.swift', 'import Foundation\nextension Window {\n' + mac_window.decl('func relayoutWindow(') +
           '}\n\n' + mac_window.decl('func unbindAndGetBindingDataForNewWindow('))
-    before_bind = production('tree/TreeNode.swift').body_until('func bind(to newParent:', 'let result = unbindIfBound()')
-    write('ReplayBeforeBind.swift', 'extension MacWindow {\nfunc beforeBind() {\n' +
-          before_bind.replace('WindowManagerHandoff.', 'ReplayCoordinator.') + '\n}\n}\n')
     for relative in ('model/WindowRestorationMutation.swift', 'model/WindowDiscoveryInitialization.swift'):
         write(relative.split('/')[-1], production(relative).text.replace('WindowManagerHandoff.', 'ReplayCoordinator.'))
 

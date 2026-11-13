@@ -18,13 +18,17 @@ private final class ProcessAPIStub: WindowManagerProcessAPI {
     var metadataReads: [String: Int] = [:]
     var generations: [Int32: WindowManagerExecGeneration] = [:]
     var deniedGenerations: Set<Int32> = []
+    /// Runs after a path read has taken its result, before the caller sees it.
+    var afterPathRead: ((Int32) -> Void)?
 
     func pids() throws -> [Int32] { Array(paths.keys) + [ownPid, 0] }
     func executable(_ pid: Int32) throws -> String? {
         if deniedPaths.contains(pid) { throw NSError(domain: NSPOSIXErrorDomain, code: 1) }
         pathReads[pid, default: 0] += 1
         if changedExecutable == pid && pathReads[pid, default: 0] > 1 { return "/a/replacement/AeroSpaceApp" }
-        return paths[pid]
+        let path = paths[pid]
+        afterPathRead?(pid)
+        return path
     }
     func identity(_ pid: Int32) throws -> WindowManagerProcessBirth? {
         identityReads.append(pid)
@@ -224,22 +228,43 @@ struct WindowManagerProcessCacheTest {
         #expect(try cache.peers().map(\.pid) == [11])
     }
 
+    // A manager behind a renamed executable is known only by its bundle. One
+    // failed Info.plist read must delay its detection by one scan (about 200 ms).
+    @Test func transientlyUnreadableBundleIsReadAgainOnTheNextScan() throws {
+        let api = desktop()
+        let renamed = "/Applications/Renamed.app/Contents/MacOS/Renamed"
+        api.paths[13] = renamed
+        api.bundles[renamed] = WindowManagerBundleMetadata(identifier: "bobko.aerospace", executable: "Renamed")
+        api.deniedMetadata = [renamed]
+        let cache = WindowManagerProcessCache(api: api)
+        #expect(try cache.peers().isEmpty)
+        api.deniedMetadata = []
+        #expect(try cache.peers().map(\.pid) == [13])
+    }
+
+    // A bundle that stays unreadable must cost almost nothing: after a short
+    // back-off, at most one read per `metadataRetryScans` scans (about 5 s).
     @Test func unreadableBundleIsRetriedRarelyNotEveryScan() throws {
         let api = desktop()
         let renamed = "/Applications/Renamed.app/Contents/MacOS/Renamed"
         api.paths[13] = renamed
         api.deniedMetadata = [renamed]
         let cache = WindowManagerProcessCache(api: api)
-        #expect(try cache.peers().isEmpty)
-        for _ in 0 ..< WindowManagerProcessCache.metadataRetryScans - 1 { #expect(try cache.peers().isEmpty) }
-        #expect(api.metadataReads[renamed] == 1)
-        // The bundle becomes readable and is a manager: the bounded retry finds it.
+        let scans = 8 * WindowManagerProcessCache.metadataRetryScans
+        var readsBySecondHalf = 0
+        for scan in 1 ... scans {
+            #expect(try cache.peers().isEmpty)
+            if scan == scans / 2 { readsBySecondHalf = api.metadataReads[renamed] ?? 0 }
+        }
+        let total = api.metadataReads[renamed] ?? 0
+        #expect(total - readsBySecondHalf <= scans / 2 / WindowManagerProcessCache.metadataRetryScans)
+        #expect(total <= scans / WindowManagerProcessCache.metadataRetryScans + 6)
+        // The bundle becomes readable and is a manager: the capped retry finds it.
         api.deniedMetadata = []
         api.bundles[renamed] = WindowManagerBundleMetadata(identifier: "bobko.aerospace", executable: "Renamed")
         var found: [WindowManagerProcess] = []
-        for _ in 0 ..< 2 where found.isEmpty { found = try cache.peers() }
+        for _ in 0 ..< WindowManagerProcessCache.metadataRetryScans where found.isEmpty { found = try cache.peers() }
         #expect(found.map(\.pid) == [13])
-        #expect(api.metadataReads[renamed] == 2)
     }
 
     @Test func unreadableGenerationIsClassifiedOnEveryScan() throws {
@@ -252,6 +277,37 @@ struct WindowManagerProcessCacheTest {
         #expect(api.pathReads[10] == 1)
         api.paths[11] = "/tmp/build/AeroSpaceApp" // A path change with no readable generation.
         #expect(try cache.peers().map(\.pid) == [11])
+    }
+
+    // The process execs into a manager after its old path was read. The verdict
+    // about the old image must not hide the manager on the next scan.
+    @Test func execDuringClassificationIsClassifiedAgainOnTheNextScan() throws {
+        let api = desktop()
+        let cache = WindowManagerProcessCache(api: api)
+        api.afterPathRead = { [unowned api] pid in
+            guard pid == 11 else { return }
+            api.afterPathRead = nil
+            api.exec(11, "/tmp/build/AeroSpaceApp")
+        }
+        #expect(try cache.peers().isEmpty)
+        #expect(try cache.peers().map(\.pid) == [11])
+    }
+
+    // An inventory error ends the scan partway. The verdicts it already cached
+    // stay valid, and the next scan still finds every peer and every later exec.
+    @Test func scanThatThrowsPartwayLeavesTheCacheConsistent() throws {
+        let api = desktop()
+        api.paths[20] = "/tmp/build/AeroSpaceApp"
+        api.reusedPid = 20 // Birth identity changes during verification: the scan throws.
+        let cache = WindowManagerProcessCache(api: api)
+        #expect(throws: (any Error).self) { try cache.peers() }
+        api.reusedPid = nil
+        #expect(try cache.peers().map(\.pid) == [20])
+        // Each unrelated process was classified once over both scans.
+        for pid: Int32 in [10, 12] { #expect(api.metadataReads[api.paths[pid]!] == 1) }
+        #expect(api.pathReads[11] == 1)
+        api.exec(11, "/Users/me/AquaSpace/.debug/AquaSpaceApp")
+        #expect(Set(try cache.peers().map(\.pid)) == [11, 20])
     }
 
     @Test func changedIdentityDuringVerificationStillFailsClosed() {
