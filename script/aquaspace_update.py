@@ -1067,10 +1067,13 @@ class Installer:
                           'The running window manager is not the AquaSpace that this update started.')
                 raise UpdateError(f'{reason} Nothing was confirmed.\n' + self.next_steps(transaction, state))
             child = managers[0]
-            if not state.get('child'):
-                self._phase(transaction, state, 'child_started', child=child.record())
-            self._await_ready(transaction, child)
-            self._commit(transaction, state)
+            try:
+                if not state.get('child'):
+                    self._phase(transaction, state, 'child_started', child=child.record())
+                self._await_ready(transaction, child)
+                self._commit(transaction, state)
+            except BaseException as error:
+                raise self._failure(transaction, state, error, nothing_stopped=False)
             self.summary = f'Confirmed the running AquaSpace; the update is complete.\nUpdate record: {transaction}'
             return transaction
 

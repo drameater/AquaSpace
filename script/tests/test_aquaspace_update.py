@@ -750,6 +750,18 @@ class ReadinessTests(InstallerFixture):
         self.assertIn('--resume', str(caught.exception))
         self.assertEqual(phase_of(record), 'child_started')
 
+    def test_child_exiting_during_confirm_names_the_next_commands(self):
+        self.system.add(100)
+        self.system.status_fault = lambda system, child: None
+        with self.assertRaises(update.AwaitingConfirmation): self.activate()
+        record = self.pending()[0]
+        def exits(system, child):
+            system.running.pop(child.pid, None); return None
+        self.system.status_fault = exits
+        with self.assertRaises(update.UpdateError) as caught: self.installer.confirm(record)
+        self.assertIn(self.installer.command('--resume', record), str(caught.exception))
+        self.assertEqual(phase_of(record), 'child_started')
+
     def test_confirm_adopts_child_started_after_the_recorded_launch_intent(self):
         self.system.add(100)
         with hard_crash(self.installer, self.system, 'launched'): self.activate()
