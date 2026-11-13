@@ -92,12 +92,21 @@ enum WindowManagerHandoff {
     static func watchForOriginal() {
         guard !serverArgs.isReadOnly, applicationWatch == nil else { return }
         applicationWatch = Task.startUnstructured { @MainActor in
+            var health = WindowManagerWatchHealth()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 // A failed scan is retried on the next tick; only a detected peer stops control.
                 // The incremental scan reads only changed processes, so an unbundled peer
                 // is still found within one interval (about 200 ms) of its exec.
-                guard let peers = try? admission.watchedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
+                let peers: [WindowManagerProcess]
+                do {
+                    peers = try admission.watchedPeers(freeze: freezeAXWrites)
+                    if let message = health.scanSucceeded() { WindowManagerFailureReport.logger.notice("\(message, privacy: .public)") }
+                } catch {
+                    if let message = health.scanFailed(error) { WindowManagerFailureReport.logger.error("\(message, privacy: .public)") }
+                    continue
+                }
+                guard !peers.isEmpty else { continue }
                 await yieldToPeers(peers)
                 return
             }

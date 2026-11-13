@@ -28,7 +28,8 @@ int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
 def prepare(args):
     package = harness.package_for(args, 'ownership-offline')
     for path in ('model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift',
-                 'model/PendingWindowRestoration.swift', 'model/WindowManagerFailureReport.swift'):
+                 'model/PendingWindowRestoration.swift', 'model/WindowManagerFailureReport.swift',
+                 'model/WindowManagerWatchHealth.swift'):
         package.copy('Sources/Ownership/' + path.split('/')[-1], harness.ROOT / 'Sources/AppBundle' / path)
     # Only process declarations, no AppKit/AX or app entrypoint in this test.
     package.copy('Sources/PrivateApi/include/process_inventory.h', harness.ROOT / 'Sources/PrivateApi/include/process_inventory.h')
@@ -36,7 +37,7 @@ def prepare(args):
                   '#include <libproc.h>\n#include <sys/proc_info.h>\n#include "process_inventory.h"\n')
     package.write('Sources/PrivateApi/process.c', PROCESS_STUBS)
     for name in ('WindowManagerAdmissionTest.swift', 'WindowManagerProcessScanTest.swift', 'WindowRestorationProcessTest.swift',
-                 'WindowManagerFailureReportTest.swift'):
+                 'WindowManagerFailureReportTest.swift', 'WindowManagerWatchHealthTest.swift'):
         text = (harness.ROOT / 'Sources/AppBundleTests' / name).read_text()
         package.write('Tests/OwnershipTests/' + name, text.replace('@testable import AppBundle', '@testable import Ownership'))
     package.write('Package.swift', PACKAGE)
