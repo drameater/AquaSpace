@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 from aquaspace_signing import SigningError, local_identity, sign_app
-from aquaspace_update import ExchangeUnsupported, exchange_paths, full_sync, sync_directory
+from aquaspace_update import BUILD_LOCK_NAME, ExchangeUnsupported, exchange_paths, full_sync, sync_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 # Used only when no upstream release tag (v<major>.<minor>.<patch>...) is reachable from HEAD.
@@ -51,7 +51,8 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # --version is written into Swift source and Info.plist. These characters need no
 # escape in a Swift or JSON string literal, a plist, or a file name.
 VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
-LOCK_NAME = ".aquaspace-build.lock"
+# The installer requires build.json in a folder that has this lock file.
+LOCK_NAME = BUILD_LOCK_NAME
 # The previous build's manifest, carried in the staging folder with the previous app during a publish.
 PREVIOUS_MANIFEST = "previous-build.json"
 UNSIGNED_LAYOUT = frozenset((

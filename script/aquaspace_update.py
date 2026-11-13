@@ -40,6 +40,9 @@ PHASES = TERMINAL_PHASES | PRE_STOP_PHASES | frozenset((
     'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started'))
 # In these phases the new bundle is in place, so a running AquaSpace can be confirmed.
 CONFIRMABLE_PHASES = frozenset(('replaced', 'launch_attempted', 'child_started'))
+# script/build-aquaspace.py creates this lock in its output folder and never removes it.
+# Every builder that creates it also writes build.json beside the app.
+BUILD_LOCK_NAME = '.aquaspace-build.lock'
 RECORD_PREFIX = '.aquaspace-update-'
 # A record is created under this name and renamed after its first journal write.
 NEW_RECORD_PREFIX = '.aquaspace-new-update-'
@@ -1138,6 +1141,17 @@ class Installer:
         failure.__cause__ = error
         return failure
 
+    def _check_manifest_present(self):
+        """A build output of script/build-aquaspace.py must have its manifest; other sources may lack one."""
+        manifest = self.source.parent / 'build.json'
+        if manifest.exists(): return
+        if (self.source.parent / BUILD_LOCK_NAME).exists():
+            raise UpdateError(f'{self.source.parent} is an output folder of the AquaSpace builder, but it has no '
+                              f'build manifest ({manifest.name}). The builder writes the manifest before the app, so '
+                              'a build was interrupted or the manifest was removed. Build again, then install again. '
+                              'Nothing was changed.')
+        self.report(f'Note: {manifest} does not exist, so the build manifest check was skipped.')
+
     def _check_identity(self, requirement, retry):
         installed = self.system.requirement(self.target)
         if installed == requirement:
@@ -1167,6 +1181,7 @@ class Installer:
             metadata = bundle_metadata(self.source)
             if self.target == self.source or self.target in self.source.parents or self.source in self.target.parents:
                 raise UpdateError('Build and installation paths must be separate.')
+            self._check_manifest_present()
             requirement = self.system.verify_bundle(self.source)
             existing = self.system.managers()
             old = existing[0] if len(existing) == 1 else None
