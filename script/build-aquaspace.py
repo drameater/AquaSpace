@@ -47,6 +47,9 @@ ICON_SIZES = (16, 32, 128, 256, 512)
 ICONSET_MEMBERS = {f"icon_{points}x{points}{suffix}.png": points * scale
                    for points in ICON_SIZES for scale, suffix in ((1, ""), (2, "@2x"))}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# --version is written into Swift source and Info.plist. These characters need no
+# escape in a Swift or JSON string literal, a plist, or a file name.
+VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
 LOCK_NAME = ".aquaspace-build.lock"
 UNSIGNED_LAYOUT = frozenset((
     "Contents",
@@ -403,6 +406,9 @@ def main(argv=None, root=ROOT):
         parser.error('--signing-keychain requires --signing-identity')
     if args.signing_identity == '-':
         parser.error('Ad-hoc signing resets privacy grants; use a persistent signing certificate.')
+    if args.version is not None and not VERSION_PATTERN.fullmatch(args.version):
+        parser.error('--version must be 1 to 64 characters: ASCII letters, digits, ".", "_", "+" and "-", '
+                     'starting with a letter or digit.')
     try:
         app = build(args, root)
     except (BuildError, SigningError, OSError) as error:

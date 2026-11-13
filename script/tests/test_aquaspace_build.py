@@ -569,5 +569,23 @@ class InstallerExitStatusTests(BuilderTest):
         self.assertNotIn('Traceback', err)
 
 
+class VersionOverrideTests(BuilderTest):
+    """Pre-existing issue d: --version reaches Swift source, so only plain characters are allowed."""
+
+    def test_unsafe_version_overrides_are_refused_before_any_tool_runs(self):
+        for version in ('', 'a b', 'quote"', 'back\\slash', 'caf\u00e9', '$(id)', '-leading', 'x' * 65, 'new\nline'):
+            with self.subTest(version=version):
+                with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                    self.main('--version', version)
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertEqual(self.tools.calls, [])
+
+    def test_plain_version_overrides_are_accepted(self):
+        for version in ('local-test', '1.2.3', '0.21.3-aquaspace.71.g79e53f21.dirty', '1.0+build_7'):
+            with self.subTest(version=version):
+                self.main('--version', version)
+                self.assertEqual(self.info()['CFBundleShortVersionString'], version)
+
+
 if __name__ == '__main__':
     unittest.main()
