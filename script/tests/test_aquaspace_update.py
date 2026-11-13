@@ -189,6 +189,10 @@ class InstallerFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='aquaspace-offline-')
         self.addCleanup(self.tmp.cleanup)
+        # F_FULLFSYNC flushes the drive's cache at every journal write, which makes
+        # hundreds of transactions slow. DurableWriteTests cover the real flush.
+        fast = patch.object(update, 'full_sync', side_effect=os.fsync)
+        fast.start(); self.addCleanup(fast.stop)
         # The kernel reports canonical paths (/private/var, not /var), so the fake does too.
         self.root = Path(self.tmp.name).resolve()
         self.source = bundle(self.root / 'build/AquaSpace.app', 'new')
@@ -952,6 +956,41 @@ class SmallerDefectTests(InstallerFixture):
         self.system.unsigned.add('previous.app')
         with self.assertRaises(update.UpdateError): self.installer.recover(self.pending()[0])
         self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
+
+
+class DurableWriteTests(unittest.TestCase):
+    """Pre-existing issue b: on macOS, fsync can leave data in the drive's cache."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def synced(self, fcntl_effect=None):
+        flushed, fsynced = [], []
+        real_fcntl = fcntl.fcntl
+        def record_fcntl(fd, command, *args):
+            if command == getattr(fcntl, 'F_FULLFSYNC', None):
+                flushed.append(os.fstat(fd).st_ino)
+                if fcntl_effect: raise fcntl_effect
+                return 0
+            return real_fcntl(fd, command, *args)
+        def record_fsync(fd): fsynced.append(os.fstat(fd).st_ino)
+        with patch.object(update.fcntl, 'fcntl', side_effect=record_fcntl), \
+             patch.object(update.os, 'fsync', side_effect=record_fsync):
+            update.atomic_json(self.root / 'journal.json', {'phase': 'staging'})
+        return flushed, fsynced
+
+    @unittest.skipUnless(hasattr(fcntl, 'F_FULLFSYNC'), 'F_FULLFSYNC is a macOS fcntl')
+    def test_journal_and_its_directory_are_flushed_to_the_drive(self):
+        flushed, _ = self.synced()
+        journal = (self.root / 'journal.json').stat().st_ino
+        self.assertIn(journal, flushed)
+        self.assertIn(self.root.stat().st_ino, flushed)
+        self.assertEqual(json.loads((self.root / 'journal.json').read_text()), {'phase': 'staging'})
+
+    def test_file_system_without_full_flush_falls_back_to_fsync(self):
+        flushed, fsynced = self.synced(OSError(errno.ENOTSUP, 'not supported'))
+        self.assertIn((self.root / 'journal.json').stat().st_ino, fsynced)
+        self.assertIn(self.root.stat().st_ino, fsynced)
 
 
 class LockTests(unittest.TestCase):

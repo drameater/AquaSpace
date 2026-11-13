@@ -300,9 +300,25 @@ def sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest() if hasattr(hashlib, 'file_digest') else hashlib.sha256(stream.read()).hexdigest()
 
 
+def full_sync(fd):
+    """Write a file's data to the drive itself.
+
+    On macOS, fsync can leave data in the drive's cache, where a power loss
+    can lose it. F_FULLFSYNC flushes that cache. Fall back to fsync where the
+    file system does not support it.
+    """
+    if hasattr(fcntl, 'F_FULLFSYNC'):
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return
+        except OSError:
+            pass
+    os.fsync(fd)
+
+
 def sync_directory(path):
     fd = os.open(path, os.O_RDONLY)
-    try: os.fsync(fd)
+    try: full_sync(fd)
     finally: os.close(fd)
 
 
@@ -310,7 +326,7 @@ def atomic_json(path, value):
     temporary = path.with_name(path.name + '.tmp')
     with temporary.open('w') as stream:
         json.dump(value, stream, indent=2); stream.write('\n')
-        stream.flush(); os.fsync(stream.fileno())
+        stream.flush(); full_sync(stream.fileno())
     temporary.replace(path)
     sync_directory(path.parent)
 
@@ -353,7 +369,7 @@ def archive_bundle(bundle):
         temporary = archive.with_name(archive.name + '.tmp')
         with tarfile.open(temporary, 'w:gz') as stream:
             stream.add(bundle, arcname=bundle.name)
-        with temporary.open('rb') as stream: os.fsync(stream.fileno())
+        with temporary.open('rb') as stream: full_sync(stream.fileno())
         temporary.replace(archive)
         sync_directory(bundle.parent)
     shutil.rmtree(bundle)
