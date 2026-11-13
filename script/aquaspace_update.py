@@ -1114,6 +1114,7 @@ class Installer:
                 retry = None if allow_identity_change else shlex.join(
                     ['python3', str(INSTALLER_SCRIPT), '--source', str(self.source), '--target', str(self.target),
                      *(['--restart'] if restart else []), *(['--allow-running-stock'] if allow_running_stock else []),
+                     *(['--ready-timeout', repr(float(self.ready_timeout))] if restart and self.ready_timeout != READY_TIMEOUT else []),
                      '--allow-identity-change'])
                 identity_changed = self._check_identity(requirement, retry)
             state = dict(schema=1, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),

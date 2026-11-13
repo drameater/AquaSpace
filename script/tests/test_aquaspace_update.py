@@ -1079,6 +1079,21 @@ class CommandLineTests(InstallerFixture):
         self.assertEqual(self.main('--resume', record)[0], 0)
         self.assertEqual(len(self.system.launches), 1)
 
+    def test_identity_change_retry_reproduces_every_option_of_the_invocation(self):
+        shutil.rmtree(self.source)
+        bundle(self.source, 'new', 'identifier "local.aquaspace" and certificate leaf = H"BBBB"')
+        self.system.add(100)
+        # The replacement takes control 100 s after its launch: only the longer timeout waits for it.
+        self.system.status_fault = lambda system, child: ready(child) if system.now - system.launched_at >= 100 else None
+        code, err = self.main('--restart', '--ready-timeout', '120')
+        self.assertEqual(code, 1)
+        self.assertNotIn('stop', self.system.events)
+        retry = [shlex.split(line) for line in err.splitlines() if '--allow-identity-change' in line][0]
+        self.assertEqual(retry[:2], ['python3', str(update.INSTALLER_SCRIPT)])
+        code, _ = self.main(*retry[2:])
+        self.assertEqual(code, 0)
+        self.assertEqual(phase_of(self.target.parent.glob('.aquaspace-update-*').__next__()), 'committed')
+
     def test_conflicting_modes_are_usage_errors(self):
         for args in (['--restart', '--resume', 'x'], ['--confirm', 'x', '--recover', 'y'],
                      ['--recover', 'x', '--allow-identity-change'], ['--ready-timeout', '5'],
