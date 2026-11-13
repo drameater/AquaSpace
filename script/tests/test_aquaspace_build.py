@@ -3,6 +3,7 @@ import contextlib
 from datetime import datetime, timezone
 import fcntl
 import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -662,6 +663,42 @@ class PublishTests(FailureTests):
     def assert_previous_build_kept_except(self, leftover):
         self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
         self.assertEqual((self.output / 'build.json').read_text(), 'previous manifest')
+
+
+class ManifestOrderTests(FailureTests):
+    """The output never holds an app without the manifest of that app."""
+
+    def test_manifest_of_the_new_app_is_in_place_before_the_app(self):
+        seen = {}
+        real_publish = build.publish
+        def publish(staged, app):
+            seen['manifest'] = json.loads((self.output / 'build.json').read_text())
+            seen['staged_hash'] = hashlib.sha256((staged / 'Contents/MacOS/AquaSpace').read_bytes()).hexdigest()
+            seen['app_existed'] = app.exists()
+            real_publish(staged, app)
+        with patch.object(build, 'publish', publish):
+            self.main()
+        self.assertFalse(seen['app_existed'])
+        self.assertEqual(seen['manifest']['app_sha256'], seen['staged_hash'])
+
+    def test_failed_publish_puts_the_previous_manifest_back(self):
+        self.stage_previous_build()
+        def publish(staged, app):
+            raise OSError('publish failed')
+        with patch.object(build, 'publish', publish), patch('sys.stderr', io.StringIO()), \
+                self.assertRaises(SystemExit) as stopped:
+            self.main()
+        self.assertEqual(stopped.exception.code, 1)
+        self.assert_previous_build_kept()
+
+    def test_failed_first_publish_leaves_no_manifest(self):
+        def publish(staged, app):
+            raise OSError('publish failed')
+        with patch.object(build, 'publish', publish), patch('sys.stderr', io.StringIO()), \
+                self.assertRaises(SystemExit):
+            self.main()
+        self.assertFalse((self.output / 'build.json').exists())
+        self.assertFalse(self.app.exists())
 
 
 class InstallerExitStatusTests(BuilderTest):

@@ -380,9 +380,20 @@ def build_locked(args, root, identity, keychain, source):
             "cli_sha256": hashlib.sha256((macos / CLI_EXECUTABLE).read_bytes()).hexdigest(),
             "designated_requirement": requirement}, indent=2) + "\n")
         app = args.output / "AquaSpace.app"
-        publish(staged, app)
-        # An interruption here leaves a manifest that the installer rejects as mismatched.
-        os.replace(work / "build.json", args.output / "build.json")
+        # The manifest goes first: the output never holds an app without the manifest of that
+        # app. After an interruption between the two steps, the installer rejects the mismatch.
+        published = args.output / "build.json"
+        previous = published.read_bytes() if published.exists() else None
+        os.replace(work / "build.json", published)
+        try:
+            publish(staged, app)
+        except BaseException:
+            if previous is None:
+                published.unlink()
+            else:
+                (work / "previous-build.json").write_bytes(previous)
+                os.replace(work / "previous-build.json", published)
+            raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return app
