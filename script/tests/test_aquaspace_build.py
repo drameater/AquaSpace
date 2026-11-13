@@ -3,10 +3,12 @@ import contextlib
 from datetime import datetime, timezone
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,7 @@ sys.path.insert(0, str(SCRIPT))
 spec = importlib.util.spec_from_file_location('build_aquaspace', SCRIPT / 'build-aquaspace.py')
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+import aquaspace_signing as signing
 import aquaspace_update as update
 
 REVISION = '79e53f21' + '0' * 32
@@ -386,6 +389,83 @@ class InstallerOptionTests(BuilderTest):
             self.main('--install-and-restart', '--allow-identity-change')
         self.assertEqual(stopped.exception.code, 1)
         self.assertEqual(self.exec_calls, [])
+
+
+class FakeCodesign:
+    """Answers codesign like a certificate signature whose leaf is the signing identity."""
+
+    def __call__(self, args, **kwargs):
+        args = [str(a) for a in args]
+        if args[0] != signing.CODESIGN:
+            raise AssertionError('Unexpected command: ' + ' '.join(args))
+        output = ''
+        if args[1] == '--force':
+            target = Path(args[-1])
+            if target.name.endswith('.app'):
+                (target / 'Contents/_CodeSignature').mkdir()
+                (target / 'Contents/_CodeSignature/CodeResources').write_text(args[args.index('--sign') + 1])
+        elif args[1] == '-d':
+            leaf = (Path(args[-1]) / 'Contents/_CodeSignature/CodeResources').read_text()
+            output = f'Executable={args[-1]}\ndesignated => identifier "local.aquaspace" and certificate leaf = H"{leaf}"\n'
+        elif args[1] != '--verify':
+            raise AssertionError('Unexpected codesign call: ' + ' '.join(args))
+        if not kwargs.get('text'):
+            output = output.encode()
+        return subprocess.CompletedProcess(args, 0, output, '' if kwargs.get('text') else b'')
+
+
+class ManifestSystem:
+    """No running manager; the bundle checks are the updater's real ones."""
+    CODESIGN = update.NativeSystem.CODESIGN
+    run = staticmethod(update.NativeSystem.run)
+    verify_bundle = update.NativeSystem.verify_bundle
+    requirement = update.NativeSystem.requirement
+
+    def managers(self):
+        return []
+
+
+class ManifestCompatibilityTests(BuilderTest):
+    """The updater accepts the manifest that the builder writes, and only that one."""
+
+    def setUp(self):
+        super().setUp()
+        build.sign_app.side_effect = signing.sign_app  # The real signing step, with codesign faked.
+        codesign = patch('subprocess.run', FakeCodesign())
+        codesign.start()
+        self.addCleanup(codesign.stop)
+
+    def install(self, name):
+        applications = self.root / name
+        applications.mkdir()
+        installer = update.Installer(self.app, applications / 'AquaSpace.app', ManifestSystem(),
+                                     lock_parent=self.root / 'lock')
+        installer.report = lambda text: None
+        return installer, installer.install()
+
+    def test_updater_accepts_the_builders_manifest(self):
+        for name, dirty, options in (('clean', False, []), ('dirty', True, []), ('override', False, ['--version', 'local-test'])):
+            with self.subTest(name):
+                self.tools.dirty = dirty
+                self.main(*options)
+                manifest = json.loads((self.output / 'build.json').read_text())
+                self.assertEqual(manifest['version'], self.info()['CFBundleShortVersionString'])
+                self.assertEqual(manifest['designated_requirement'],
+                                 'identifier "local.aquaspace" and certificate leaf = H"FINGERPRINT"')
+                installer, record = self.install(name)
+                self.assertEqual(installer.journal(record)['phase'], 'committed')
+                self.assertEqual(json.loads((record / 'build.json').read_text()), manifest)
+
+    def test_updater_rejects_a_manifest_that_does_not_match_the_build(self):
+        self.main()
+        published = json.loads((self.output / 'build.json').read_text())
+        for number, (key, value) in enumerate((('version', 'other'), ('app_sha256', '0' * 64), ('cli_sha256', '0' * 64),
+                                               ('designated_requirement', 'identifier "local.aquaspace" and certificate leaf = H"OTHER"'))):
+            with self.subTest(key):
+                (self.output / 'build.json').write_text(json.dumps(dict(published, **{key: value})))
+                with self.assertRaisesRegex(update.UpdateError, 'does not match its build manifest'):
+                    self.install(f'target-{number}')
+                self.assertFalse((self.root / f'target-{number}/AquaSpace.app').exists())
 
 
 class SourceStagingTests(BuilderTest):
