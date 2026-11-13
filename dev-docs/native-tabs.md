@@ -65,6 +65,11 @@ no other new window IDs in the same refresh.
   last observations, a short pre-transition baseline (AX lists, tab bars and
   frames can settle in different reads), pending replacements, and the known
   independent windows.
+- When an app registers, its window IDs in the WindowServer list are the
+  *known windows*: none of them counts as a new window. A refresh reads that
+  list once, off the main actor. If the list of that refresh does not have the
+  app (it launched after the read, or had no window then), the app reads its
+  own list on its AX thread.
 - [nativeTabTopology.swift](../Sources/AppBundle/tree/nativeTabTopology.swift)
   computes replacements, absorptions (merges), inheritances (detaches) and
   continuations from those observations.
@@ -76,8 +81,9 @@ no other new window IDs in the same refresh.
   now (`nativeTabTransferPlan`), not onto an inactive tab in between.
 - The main actor moves the slot in `MacWindow.getOrRegister` with
   `transferNativeTabState`, `absorbNativeTabState` and
-  `inheritNativeTabWorkspace`. The first two also move focus with
-  `replaceNativeTabFocusId`.
+  `inheritNativeTabWorkspace`
+  ([nativeTabSlotTransfer.swift](../Sources/AppBundle/tree/nativeTabSlotTransfer.swift)).
+  The first two also move focus with `replaceNativeTabFocusId`.
   The binding is read at the moment of transfer, because tree normalization can
   change it between refreshes.
 - A macOS Space change (`activeSpaceDidChangeNotification`) clears the AX
@@ -98,13 +104,14 @@ change or screen-recording permission.
 
 | Test | What it covers | Needs |
 | --- | --- | --- |
-| `python3 script/test-native-tabs-offline.py` | The production state machine and matchers, replayed with in-memory AX elements. Includes the recovery, ambiguity and Space-reset cases. | Swift toolchain, cached package dependencies. No app. |
+| `python3 script/test-native-tabs-offline.py` | The production state machine and matchers, replayed with in-memory AX elements. Includes the recovery, ambiguity and Space-reset cases, and the known-window baseline. | Swift toolchain. No app. |
 | `python3 script/test-native-tab-model-offline.py --sdk <SDK>` | Recovered workspace bindings against the real in-memory tree (`TestWindow`, `TestApp`). | Swift toolchain, an SDK that builds the app, cached dependencies. No app. |
 | [NativeTabReplacementTest.swift](../Sources/AppBundleTests/tree/NativeTabReplacementTest.swift), [NativeTabWorkspaceRecoveryTest.swift](../Sources/AppBundleTests/tree/NativeTabWorkspaceRecoveryTest.swift) | Classification and real tree/workspace transfers. | The full Swift test target (`./swift-test.sh`). Upstream's XCTest cases need Xcode. |
 | `swift run --package-path script/native-tabs-smoke NativeTabSmoke` | Real AppKit tab groups in a test process that reads only its own AX tree. | An active desktop. No Accessibility grant. |
 | [ghostty-topology](../script/native-tabs-smoke/ghostty-topology/README.md) `live.py --run-live` | Real Ghostty merges and detaches through the installed AquaSpace. | Explicit authorization, an idle desktop, dedicated test workspaces. |
 
-The [AquaSpace guide](aquaspace.md#tests) lists every suite and its safety rules.
+`python3 script/test-offline.py` runs both offline suites with the others. The
+[AquaSpace guide](aquaspace.md#tests) lists every suite and its safety rules.
 
 ## Known limits
 
