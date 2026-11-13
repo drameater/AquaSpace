@@ -36,6 +36,29 @@ branch. Its output after the first line lists the files that conflict.
 3. Do **not merge unreleased `upstream/main`**. It contains work in progress
    (see the next section) that is active with no feature flag.
 
+## Upstream commits the fork already carries
+
+These upstream commits were cherry-picked onto the fork on 2026-11-12. Each fork
+commit names its source in a `(cherry picked from commit ...)` line. Do not
+apply them again. At the next merge, Git sees them as changes on both sides, so
+their files can conflict (see the list below); keep upstream's later version
+unless the fork changed the same lines.
+
+| Upstream | Fork | Change |
+| --- | --- | --- |
+| `80092f30` | `c520f452` | Fix `balance-sizes` and `resize` interop. |
+| `bc6be84a` | `58a35a1f` | Show a warning icon after a config reload with warnings. |
+| `0921fb81` | `3347d5e7` | Show the menu images of the Experimental UI Settings menu on macOS 27. |
+| `be3e58df` | `27f4c2df` | `getWindowLevel`: do not block the main thread. |
+| `0d498deb` | `e34cb3af` | `getWindowLevel`: signal the callers that wait for a fetch in progress. |
+| `7a3f2e34` | `3355ae50` | `getWindowLevel`: return a cached value before the suspension point. |
+
+To list them again:
+
+```sh
+git log --grep='cherry picked from commit' --format='%h %s' 74a1bf17..HEAD
+```
+
 ## Upstream native tabs
 
 Upstream is adding its own native tab support on `main`. The commit series is
@@ -105,8 +128,8 @@ When upstream releases this work:
 
 ### Files that conflict in a trial merge today
 
-`git merge-tree` of `HEAD` and `upstream/main` (`6ed6af62`) on 2026-11-12 listed
-these conflicts:
+`git merge-tree` of `upstream/main` (`6ed6af62`) with the branch that merged the
+2026-11-12 changes listed these conflicts:
 
 - `Sources/AppBundle/tree/MacApp.swift`
 - `Sources/AppBundle/tree/MacWindow.swift`
@@ -114,14 +137,20 @@ these conflicts:
 - `Sources/AppBundle/tree/TreeNode.swift`
 - `Sources/AppBundle/tree/TilingContainer.swift`
 - `Sources/AppBundle/layout/refresh.swift`
+- `Sources/AppBundle/normalizeLayoutReason.swift`
 - `Sources/AppBundle/windowLevelCache.swift`
+- `Sources/AppBundle/command/impl/BalanceSizesCommand.swift` and
+  `Sources/AppBundleTests/command/BalanceSizesCommandTest.swift`
 - `Sources/AppBundle/command/impl/CloseAllWindowsButCurrentCommand.swift`
+- `Sources/AppBundle/command/impl/DebugWindowsCommand.swift`
 - `Sources/Common/util/NWConnectionEx.swift`
-- `build-debug.sh`, `build-release.sh`
-- `README.md`
+- `build-debug.sh`, `build-release.sh`, `script/setup.sh`
+- `README.md`, `dev-docs/development.md`
 - `.github/workflows/build.yml`
-- `xcode/AquaSpace.xcodeproj/project.pbxproj` (the fork renamed the project; a
-  later change may rename it back to `xcode/AeroSpace.xcodeproj`)
+
+The app target, the Xcode project (`xcode/AeroSpace.xcodeproj`) and the
+entitlements (`resources/AeroSpace.entitlements`) have upstream's names again,
+so they no longer conflict.
 
 Run the trial merge again before you plan the work; the list changes as both
 sides move.
