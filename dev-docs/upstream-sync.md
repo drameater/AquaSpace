@@ -152,14 +152,13 @@ When upstream releases this work:
 
 ### Files that conflict in a trial merge today
 
-`git merge-tree` of `upstream/main` (`6ed6af62`) with the branch that merged the
-2026-11-12 changes listed these conflicts:
+On 2026-11-13, `git merge-tree` of `upstream/main` (`6ed6af62`) with the branch
+that holds the 2026-11-12 change set listed these conflicts:
 
 - `Sources/AppBundle/tree/MacApp.swift`
 - `Sources/AppBundle/tree/MacWindow.swift`
 - `Sources/AppBundle/tree/Window.swift`
 - `Sources/AppBundle/tree/TreeNode.swift`
-- `Sources/AppBundle/tree/TilingContainer.swift`
 - `Sources/AppBundle/layout/refresh.swift`
 - `Sources/AppBundle/normalizeLayoutReason.swift`
 - `Sources/AppBundle/windowLevelCache.swift`
