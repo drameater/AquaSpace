@@ -409,9 +409,27 @@ def main(argv=None, root=ROOT):
         parser.exit(1, f"AquaSpace build stopped: {error}\n")
     print(f"Built {app}; CLI: {app / 'Contents/MacOS' / CLI_EXECUTABLE}")
     if args.install_and_restart:
-        subprocess.run([sys.executable, str(root / "script/install-aquaspace.py"),
-                        "--source", str(app), "--restart"], check=True)
+        return run_installer([sys.executable, str(root / "script/install-aquaspace.py"),
+                              "--source", str(app), "--restart"])
+
+
+def run_installer(arguments):
+    """Run the installer and return its exit status unchanged; it prints its own messages.
+
+    Ctrl-C reaches the installer directly, because it is in the same process
+    group. Wait for it to report what remains: never kill it while it may be
+    changing files (subprocess.run would send SIGKILL after 0.25 s).
+    """
+    sys.stdout.flush()
+    process = subprocess.Popen(arguments)
+    while True:
+        try:
+            code = process.wait()
+            break
+        except KeyboardInterrupt:
+            continue
+    return code if code >= 0 else 128 - code  # Killed by a signal: report it as a shell does.
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

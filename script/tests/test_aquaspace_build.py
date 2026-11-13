@@ -524,5 +524,50 @@ class PublishTests(FailureTests):
         self.assertEqual((self.output / 'build.json').read_text(), 'previous manifest')
 
 
+class InstallerExitStatusTests(BuilderTest):
+    """Finding 6: the installer's exit status reaches the caller unchanged, with no traceback."""
+
+    def fake_installer(self, code):
+        script = self.root / 'script/install-aquaspace.py'
+        script.parent.mkdir(parents=True, exist_ok=True)
+        record = self.root / 'installer-arguments'
+        script.write_text(f'import json, sys\nopen({str(record)!r}, "w").write(json.dumps(sys.argv[1:]))\n'
+                          f'sys.exit({code})\n')
+        return record
+
+    def install(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch'),
+                               '--install-and-restart'], root=self.root)
+        return code, err.getvalue()
+
+    def test_installer_status_is_returned_unchanged(self):
+        for status in (0, 1, 3, 130):
+            with self.subTest(status=status):
+                record = self.fake_installer(status)
+                code, err = self.install()
+                self.assertEqual(code or 0, status)
+                self.assertNotIn('Traceback', err)
+                self.assertEqual(json.loads(record.read_text()), ['--source', str(self.app), '--restart'])
+
+    def test_interrupt_waits_for_the_installer_instead_of_killing_it(self):
+        self.fake_installer(130)
+        real_popen = build.subprocess.Popen
+        class InterruptedOnce(real_popen):
+            interrupted = False
+            def wait(self, timeout=None):
+                if not InterruptedOnce.interrupted:
+                    InterruptedOnce.interrupted = True
+                    raise KeyboardInterrupt
+                return super().wait(timeout)
+            def kill(self):
+                raise AssertionError('The builder must never kill the installer')
+        with patch.object(build.subprocess, 'Popen', InterruptedOnce):
+            code, err = self.install()
+        self.assertEqual(code, 130)
+        self.assertNotIn('Traceback', err)
+
+
 if __name__ == '__main__':
     unittest.main()
