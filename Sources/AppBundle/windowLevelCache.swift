@@ -52,18 +52,19 @@ func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
     let latch = AwaitableOneTimeBroadcastLatch()
     defer { await latch.signalToAll() }
     wip = latch
-    cache = await computeCache()
+    // A failed read keeps the levels that are already known.
+    if let levels = await computeCache() { cache = levels }
     wip = nil
     return cache[windowId]
 }
 
-@concurrent private func computeCache() async -> [UInt32: MacOsWindowLevel] {
+@concurrent private func computeCache() async -> [UInt32: MacOsWindowLevel]? {
     var result: [UInt32: MacOsWindowLevel] = [:]
     // Hidden apps and windows on inactive native Spaces still need their real
     // layer at startup. An on-screen-only scan gives them nil, which makes the
     // strict browser classifier mistake ordinary windows for unbound popups.
     let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionAll)
-    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return [:] }
+    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return nil }
     for elem in cfArray {
         let dict = elem as NSDictionary
 

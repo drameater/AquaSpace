@@ -147,6 +147,17 @@ struct HiddenWindowHandoffTest {
         #expect(try second.level() == .alwaysOnTopWindow)
     }
 
+    // A failed WindowServer read must not discard levels that are already known.
+    @Test func failedReadKeepsKnownLevels() async throws {
+        ReplayServer.reset([ReplayWindow(id: 10, pid: 7, layer: 0, onScreen: true)])
+        #expect(try await getWindowLevel(for: 10, .cancellable) == .normalWindow)
+        ReplayServer.available = false
+        #expect(try await getWindowLevel(for: 11, .cancellable) == nil)
+        #expect(ReplayServer.queries.count == 2)
+        #expect(try await getWindowLevel(for: 10, .cancellable) == .normalWindow)
+        #expect(window(10).getWindowType(axApp: AXUIElement(), .chrome, .regular, try await getWindowLevel(for: 10, .cancellable)) == .window)
+    }
+
     @Test func hiddenHighLayerWindowsRemainPopups() async throws {
         for layer in [3, 8, 25] {
             ReplayServer.reset([ReplayWindow(id: 12, pid: 7, layer: layer, onScreen: false)])
