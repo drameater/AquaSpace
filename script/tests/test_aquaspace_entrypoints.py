@@ -1,9 +1,15 @@
 """Exercise the shell wrapper using a fake Python executable: no builds/apps."""
+import contextlib
+import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class EntrypointTests(unittest.TestCase):
@@ -75,6 +81,30 @@ class EntrypointTests(unittest.TestCase):
         result, args = self.invoke('--build-version', 'local-test', '--sdk', 'folder with spaces/SDK')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(args, ['script/build-aquaspace.py', '--version', 'local-test', '--sdk', 'folder with spaces/SDK'])
+
+
+class InstallerLiveHarnessOptInTests(unittest.TestCase):
+    """script/installer-smoke/live.py does nothing at all without --run-live."""
+
+    def test_harness_stops_before_any_action_without_its_opt_in_flag(self):
+        spec = importlib.util.spec_from_file_location('installer_live', ROOT / 'script/installer-smoke/live.py')
+        live = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(live)  # Defines functions only.
+        forbidden = AssertionError('The live harness acted without --run-live')
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(live, 'ROOT', Path(temporary)), \
+                patch.object(live.update, 'NativeSystem', side_effect=forbidden), \
+                patch.object(live.update, 'DarwinProcesses', side_effect=forbidden), \
+                patch.object(live.update, 'Installer', side_effect=forbidden), \
+                patch.object(live.update, 'InstallLock', side_effect=forbidden), \
+                patch.object(live.subprocess, 'run', side_effect=forbidden), \
+                patch.object(live.subprocess, 'Popen', side_effect=forbidden):
+            for argv in ([], ['--run'], ['--run-live=yes']):
+                with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as stopped:
+                        live.main(argv)
+                    self.assertEqual(stopped.exception.code, 2)
+            self.assertEqual(os.listdir(temporary), [])
 
 
 if __name__ == '__main__': unittest.main()
