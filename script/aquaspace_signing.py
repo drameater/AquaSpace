@@ -7,6 +7,7 @@ codesign. No system trust settings or privacy grants are changed here.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -112,11 +114,36 @@ def _set_aside_incomplete(directory, present, report):
            'Creating the signing identity now.')
 
 
+def _remove_setup_leftovers(directory):
+    """Remove setup-* directories that a hard crash left; they can hold a plain private key.
+
+    The caller holds the setup lock, so no other setup uses them.
+    """
+    for leftover in directory.glob('setup-*'):
+        info = os.lstat(leftover)
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+            shutil.rmtree(leftover)
+
+
 def setup(directory=SIGNING_DIRECTORY, report=print):
     directory = Path(directory)
     check_passable(directory)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
+    # Never unlink the lock file: a new inode would let a second setup in.
+    lock = os.open(directory / '.setup.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise SigningError('Another AquaSpace signing setup is running. Wait for it to finish, then try again.') from error
+        _remove_setup_leftovers(directory)
+        return _setup_locked(directory, report)
+    finally:
+        os.close(lock)
+
+
+def _setup_locked(directory, report):
     keychain = directory / 'AquaSpace.keychain-db'
     password_file = directory / 'keychain-password'
     certificate_file = directory / 'certificate.pem'
@@ -136,6 +163,7 @@ def setup(directory=SIGNING_DIRECTORY, report=print):
     if present:
         # The certificate is published last, so no build was signed with this material.
         _set_aside_incomplete(directory, present, report)
+    # The context removes the plain private key on any exception or interrupt.
     with tempfile.TemporaryDirectory(prefix='setup-', dir=directory) as temporary:
         temporary = Path(temporary)
         config = temporary / 'openssl.cnf'

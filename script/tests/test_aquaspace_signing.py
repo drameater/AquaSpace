@@ -153,7 +153,9 @@ class SigningTests(unittest.TestCase):
         self.assertIn('AquaSpace.keychain-db', str(caught.exception))
         self.assertIn('mv ', str(caught.exception))
         self.assertEqual(self.tools.calls, [])
-        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), ['certificate.pem', 'keychain-password'])
+        # Setup holds a lock file here (never unlinked); no signing material was added or changed.
+        self.assertEqual(sorted(p.name for p in self.directory.iterdir() if p.name != '.setup.lock'),
+                         ['certificate.pem', 'keychain-password'])
 
     def test_complete_identity_is_reused_unchanged(self):
         self.material('AquaSpace.keychain-db', 'keychain-password', 'certificate.pem')
@@ -227,6 +229,45 @@ class InteractiveQuotingTests(unittest.TestCase):
         with self.assertRaises(signing.SigningError) as caught: signing.local_identity(directory)
         self.assertNotIn('do-not-print-me', str(caught.exception))
         self.assertEqual(self.tools.calls, [])
+
+
+class SetupLeftoverTests(unittest.TestCase):
+    """Pre-existing issue c: no plain private key stays behind after a failed setup."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='aquaspace-signing-offline-')
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name) / 'Signing'
+        self.tools = FakeTools()
+        guard = patch.object(signing.subprocess, 'run', side_effect=self.tools)
+        guard.start(); self.addCleanup(guard.stop)
+
+    def leftovers(self):
+        return sorted(p.name for p in self.directory.glob('setup-*'))
+
+    def test_hard_crash_leftover_with_a_private_key_is_removed_by_the_next_setup(self):
+        leftover = self.directory / 'setup-k3j_x9a1'
+        leftover.mkdir(parents=True)
+        (leftover / 'private.pem').write_text('-----BEGIN PRIVATE KEY-----')
+        signing.setup(self.directory, report=lambda text: None)
+        self.assertEqual(self.leftovers(), [])
+        self.assertTrue((self.directory / 'certificate.pem').is_file())
+
+    def test_leftover_that_is_a_symlink_or_owned_elsewhere_is_never_followed(self):
+        outside = Path(self.tmp.name) / 'outside'
+        outside.mkdir()
+        (outside / 'keep').write_text('kept')
+        self.directory.mkdir()
+        (self.directory / 'setup-linked').symlink_to(outside)
+        signing.setup(self.directory, report=lambda text: None)
+        self.assertEqual((outside / 'keep').read_text(), 'kept')
+
+    def test_interrupt_during_setup_removes_the_temporary_private_key(self):
+        def interrupted(argv, input=None, **kwargs):
+            if argv[1:2] == ['pkcs12']: raise KeyboardInterrupt
+            return FakeTools.__call__(self.tools, argv, input=input, **kwargs)
+        with patch.object(signing.subprocess, 'run', side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt): signing.setup(self.directory, report=lambda text: None)
+        self.assertEqual(self.leftovers(), [])
 
 
 if __name__ == '__main__': unittest.main()
