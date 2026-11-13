@@ -33,10 +33,25 @@ LEGACY_LAYOUTS = {
     'exchanged-by-new-updater': ('replacing', {'new.app': 'old', 'target': 'new'}),
 }
 
-# Every boundary between two disk changes in --resume and --recover.
-RESUME_CRASH_POINTS = ['upgraded', 'stopped', 'replacing', 'exchange', 'exchanged', 'replaced',
-                       'launch_attempted', 'launched', 'child_started']
-RECOVER_CRASH_POINTS = ['upgraded', 'exchange', 'exchanged', 'recovered']
+# Every boundary between two disk changes that --resume and --recover reach from each
+# layout. 'renamed:<name>' follows each rename of a bundle to <name>. A matrix below fails
+# if a point named here is never reached, so a change of the steps cannot hide a gap.
+RESUME_CRASH_POINTS = {
+    'before-renames': ('upgraded', 'replacing', 'exchange', 'exchanged', 'renamed:previous.app', 'replaced',
+                       'launch_attempted', 'launch', 'launched', 'child_started', 'committed'),
+    'between-renames': ('upgraded', 'renamed:AquaSpace.app', 'replaced',
+                        'launch_attempted', 'launch', 'launched', 'child_started', 'committed'),
+    'after-renames': ('upgraded', 'launch_attempted', 'launch', 'launched', 'child_started', 'committed'),
+    'exchanged-by-new-updater': ('upgraded', 'renamed:previous.app', 'replaced',
+                                 'launch_attempted', 'launch', 'launched', 'child_started', 'committed'),
+}
+RECOVER_CRASH_POINTS = {
+    'before-renames': ('upgraded', 'recovered'),
+    'between-renames': ('upgraded', 'recovering', 'renamed:AquaSpace.app', 'recovered'),
+    'after-renames': ('upgraded', 'recovering', 'exchange', 'exchanged', 'renamed:unconfirmed.app', 'recovered'),
+    'exchanged-by-new-updater': ('upgraded', 'recovering', 'exchange', 'exchanged', 'renamed:unconfirmed.app',
+                                 'recovered'),
+}
 
 
 class LegacyFixture(InstallerFixture):
@@ -88,13 +103,13 @@ class LegacyFixture(InstallerFixture):
         return (self.target / 'Contents/MacOS/AquaSpace').read_text() if self.target.is_dir() else None
 
     def crash(self, point, call):
-        """Run call with a hard crash at point; return False if the point was never reached."""
-        try:
+        """Run call with a hard crash at point. Fail if call never reaches that point."""
+        real = update.replace_directory
+        def rename(source, target):
+            real(source, target)
+            self.system.event('renamed:' + target.name)
+        with patch.object(update, 'replace_directory', rename):
             with base.hard_crash(self.installer, self.system, point): call()
-        except AssertionError as error:
-            if 'never reached' in str(error): return False
-            raise
-        return True
 
 
 class LegacyLaunchTests(LegacyFixture):
@@ -169,12 +184,12 @@ class LegacyBundleIdentityTests(LegacyFixture):
 
     def test_every_resume_crash_on_a_legacy_record_keeps_both_bundles_and_recovers(self):
         for layout in LEGACY_LAYOUTS:
-            for point in RESUME_CRASH_POINTS:
+            for point in RESUME_CRASH_POINTS[layout]:
                 for then in ('recover', 'resume'):
                     with self.subTest(layout=layout, point=point, then=then):
                         self.setUp()
                         record = self.legacy_record(layout)
-                        if not self.crash(point, lambda: self.installer.resume(record)): continue
+                        self.crash(point, lambda: self.installer.resume(record))
                         self.assert_both_bundles_kept()
                         self.system.running.clear()
                         self.system.now += update.LAUNCH_SETTLE_SECONDS
@@ -188,11 +203,11 @@ class LegacyBundleIdentityTests(LegacyFixture):
 
     def test_every_recover_crash_on_a_legacy_record_keeps_both_bundles_and_finishes(self):
         for layout in LEGACY_LAYOUTS:
-            for point in RECOVER_CRASH_POINTS:
+            for point in RECOVER_CRASH_POINTS[layout]:
                 with self.subTest(layout=layout, point=point):
                     self.setUp()
                     record = self.legacy_record(layout)
-                    if not self.crash(point, lambda: self.installer.recover(record)): continue
+                    self.crash(point, lambda: self.installer.recover(record))
                     self.assert_both_bundles_kept()
                     if phase_of(record) not in update.TERMINAL_PHASES:
                         self.installer.recover(record)
