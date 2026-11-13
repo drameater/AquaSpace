@@ -15,6 +15,9 @@ func getWindowServerWindowIdsByPid() -> [Int32: Set<UInt32>]? {
     return result
 }
 
+/// The read is WindowServer IPC that takes milliseconds; keep it off the main actor.
+@concurrent func readWindowServerWindowIdsByPid() async -> [Int32: Set<UInt32>]? { getWindowServerWindowIdsByPid() }
+
 /// Strict ownership inventory for delayed restoration. Malformed/partial rows
 /// revoke pending intent instead of authorizing a later numeric-ID match.
 func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
