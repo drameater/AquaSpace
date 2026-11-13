@@ -717,8 +717,7 @@ class Installer:
 
     def _for_target(self, target):
         """The same updater for another installation in this directory, for its guidance."""
-        other = Installer(self.source, target, self.system, self.timeout, self.lock_parent, self.ready_timeout)
-        return other
+        return Installer(self.source, target, self.system, self.timeout, self.lock_parent, self.ready_timeout)
 
     def _set_aside_hint(self, record):
         return ('If no update of AquaSpace is running, set this record aside. It is renamed in the same '
@@ -1054,7 +1053,7 @@ class Installer:
                                            for r in retained)]
         others = [m for m in managers if m not in kept]
         if not others: return kept
-        if len(others) == 1 and self._runs_installed_update(others[0], transaction, state):
+        if len(managers) == 1 and self._runs_installed_update(others[0], transaction, state):
             raise UpdateError(f'The new AquaSpace from this update is running (pid {others[0].pid}). '
                               'To keep it, confirm the update (this stops nothing):\n  '
                               + self.command('--confirm', transaction)
@@ -1324,7 +1323,8 @@ class Installer:
             step = f'To {finish}, run:\n  {resume}'
         else:
             installed = self.target / 'Contents/MacOS/AquaSpace'
-            if len(others) == 1 and others[0].executable == installed:
+            if (len(others) == 1 and others[0].executable == installed
+                    and not self._runs_installed_update(others[0], transaction, state)):
                 reason = (f'The running AquaSpace (pid {others[0].pid}) started before this update installed its '
                           'files, so it can still run the previous version.')
             else:
