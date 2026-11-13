@@ -16,6 +16,7 @@ import platform
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,10 @@ DEFAULT_CONFIG = "docs/config-examples/default-config.toml"
 BUILD_INPUTS = ("Package.swift", "Package.resolved", "Sources", INFO_TEMPLATE, ICON_SOURCE, DEFAULT_CONFIG)
 REQUIRED_TOOLS = ("swift", "git", "/usr/bin/sips", "/usr/bin/iconutil", "/usr/bin/lipo", "/usr/bin/codesign")
 ICON_SIZES = (16, 32, 128, 256, 512)
+# Each Finder icon size at 1x and 2x, with its edge length in pixels.
+ICONSET_MEMBERS = {f"icon_{points}x{points}{suffix}.png": points * scale
+                   for points in ICON_SIZES for scale, suffix in ((1, ""), (2, "@2x"))}
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 UNSIGNED_LAYOUT = frozenset((
     "Contents",
     "Contents/Info.plist",
@@ -172,15 +177,46 @@ def info_plist(template, short_version, bundle_version):
     return plistlib.dumps(metadata)
 
 
+def png_size(path):
+    """Return a PNG file's (width, height) from its IHDR header, or None if it is not a PNG."""
+    try:
+        with open(path, "rb") as stream:
+            head = stream.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != PNG_SIGNATURE or head[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
+def check_png(path, pixels, what):
+    size = png_size(path)
+    if size != (pixels, pixels):
+        found = "is not a readable PNG image" if size is None else f"is {size[0]}x{size[1]} pixels"
+        raise BuildError(f"{what} {path} {found}; expected {pixels}x{pixels} pixels.")
+
+
 def make_icon(png, icns, work):
-    """Render every Finder icon size from the asset catalog's 1024-pixel image."""
+    """Render every Finder icon size from the asset catalog's 1024-pixel image.
+
+    sips exits 0 when it skips an unreadable input, and iconutil packs an
+    incomplete iconset, so check each image and unpack the result again.
+    """
+    largest = max(ICONSET_MEMBERS.values())
+    size = png_size(png)
+    if size is None or size[0] != size[1] or size[0] < largest:
+        found = "is not a readable PNG image" if size is None else f"is {size[0]}x{size[1]} pixels"
+        raise BuildError(f"The icon source {png} {found}; expected a square PNG of at least {largest}x{largest} pixels.")
     iconset = Path(tempfile.mkdtemp(dir=work)) / "AppIcon.iconset"
     iconset.mkdir()
-    for points in ICON_SIZES:
-        for scale, suffix in ((1, ""), (2, "@2x")):
-            pixels = points * scale
-            run(["/usr/bin/sips", "-z", pixels, pixels, png, "--out", iconset / f"icon_{points}x{points}{suffix}.png"])
+    for name, pixels in ICONSET_MEMBERS.items():
+        run(["/usr/bin/sips", "-z", pixels, pixels, png, "--out", iconset / name])
+        check_png(iconset / name, pixels, "The rendered icon")
     run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", icns])
+    unpacked = Path(tempfile.mkdtemp(dir=work)) / "check.iconset"
+    run(["/usr/bin/iconutil", "-c", "iconset", icns, "-o", unpacked])
+    for name, pixels in ICONSET_MEMBERS.items():
+        check_png(unpacked / name, pixels, f"The icon file {icns} has a bad member:")
 
 
 def assemble_bundle(app, binaries, root, version, work):

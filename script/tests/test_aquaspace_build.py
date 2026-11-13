@@ -3,13 +3,16 @@ import contextlib
 from datetime import datetime, timezone
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1]
@@ -30,6 +33,22 @@ EXPECTED_LAYOUT = {
 }
 
 
+def png(width, height):
+    """A PNG header with these dimensions: enough for every size check."""
+    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IEND', b'')
+
+
+def png_size(path):
+    data = Path(path).read_bytes()
+    return struct.unpack('>II', data[16:24]) if data[:8] == b'\x89PNG\r\n\x1a\n' else None
+
+
+ICONSET_MEMBERS = {f'icon_{p}x{p}{suffix}.png': p * scale
+                   for p in (16, 32, 128, 256, 512) for scale, suffix in ((1, ''), (2, '@2x'))}
+
+
 def layout(app):
     return {str(p.relative_to(app)) for p in app.rglob('*')}
 
@@ -41,6 +60,15 @@ class FakeTools:
         self.root, self.tag, self.distance, self.dirty, self.arch = root, tag, distance, dirty, arch
         self.calls = []
         self.bin = root / 'fake-bin'
+        self.sips_skips, self.sips_wrong_size, self.drop_from_icns = set(), set(), set()
+
+    def sips(self, pixels, source, out):
+        # Like sips: a missing or unreadable input is skipped with a warning and exit status 0.
+        if not source.is_file() or png_size(source) is None or out.name in self.sips_skips:
+            return ''
+        size = pixels // 2 if out.name in self.sips_wrong_size else pixels
+        out.write_bytes(png(size, size))
+        return ''
 
     def __call__(self, args, env=None, capture=True):
         args = [str(a) for a in args]
@@ -54,10 +82,16 @@ class FakeTools:
             self.compile(Path(args[args.index('--package-path') + 1]))
             return ''
         if tool == 'sips':
-            shutil.copyfile(args[4], args[6])
-            return ''
+            return self.sips(int(args[2]), Path(args[4]), Path(args[6]))
         if tool == 'iconutil':
-            Path(args[5]).write_bytes(b'icns')
+            if args[2] == 'icns':
+                # Like iconutil, pack whatever the iconset holds, complete or not.
+                members = {p.name: p.read_bytes().hex() for p in Path(args[3]).iterdir() if p.name not in self.drop_from_icns}
+                Path(args[5]).write_text(json.dumps(members))
+            else:
+                out = Path(args[5]); out.mkdir()
+                for name, data in json.loads(Path(args[3]).read_text()).items():
+                    (out / name).write_bytes(bytes.fromhex(data))
             return ''
         if tool == 'lipo':
             return self.arch + '\n'
@@ -104,10 +138,12 @@ class Checkout:
         self.path = path
         real = SCRIPT.parent
         for name in ('Package.swift', 'Package.resolved', 'script/aquaspace-Info.plist',
-                     'docs/config-examples/default-config.toml',
-                     'resources/Assets.xcassets/AppIcon.appiconset/icon.png'):
+                     'docs/config-examples/default-config.toml'):
             (path / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(real / name, path / name)
+        icon = path / 'resources/Assets.xcassets/AppIcon.appiconset/icon.png'
+        icon.parent.mkdir(parents=True)
+        icon.write_bytes(png(1024, 1024))
         common = path / 'Sources/Common'
         common.mkdir(parents=True)
         (common / 'versionGenerated.swift').write_text('public let aeroSpaceAppVersion = "0.0.0-SNAPSHOT"\n')
@@ -356,6 +392,48 @@ class SourceStagingTests(BuilderTest):
         manifest, _ = build.stage_sources(self.root, source)
         self.assertFalse((source / 'Sources/Common/removed.swift').exists())
         self.assertNotIn('Sources/Common/removed.swift', manifest)
+
+
+
+class IconTests(FailureTests):
+    """Finding 7: a missing or partial icon fails the build with a precise message."""
+    ICON = 'resources/Assets.xcassets/AppIcon.appiconset/icon.png'
+
+    def test_missing_source_image_stops_the_build(self):
+        self.stage_previous_build()
+        (self.root / self.ICON).unlink()
+        self.assert_stops(r'icon\.png.*not a readable PNG')
+        self.assert_previous_build_kept()
+
+    def test_source_image_that_is_not_a_png_or_too_small_stops_the_build(self):
+        for data, message in ((b'not an image', 'not a readable PNG'), (png(512, 512), '512x512'),
+                              (png(1024, 768), '1024x768')):
+            with self.subTest(message=message):
+                (self.root / self.ICON).write_bytes(data)
+                self.assert_stops(message)
+
+    def test_size_that_sips_did_not_render_stops_the_build(self):
+        self.stage_previous_build()
+        self.tools.sips_skips.add('icon_32x32@2x.png')
+        self.assert_stops(r'icon_32x32@2x\.png')
+        self.assert_previous_build_kept()
+
+    def test_size_with_wrong_pixel_dimensions_stops_the_build(self):
+        self.tools.sips_wrong_size.add('icon_256x256.png')
+        self.assert_stops(r'icon_256x256\.png.*128x128.*expected 256x256')
+
+    def test_icon_file_missing_a_member_stops_the_build(self):
+        self.stage_previous_build()
+        self.tools.drop_from_icns.add('icon_512x512@2x.png')
+        self.assert_stops(r'AppIcon\.icns.*icon_512x512@2x\.png')
+        self.assert_previous_build_kept()
+
+    def test_complete_icon_has_every_member_at_its_size(self):
+        self.main()
+        check = self.root / 'check.iconset'
+        self.tools(['/usr/bin/iconutil', '-c', 'iconset', self.app / 'Contents/Resources/AppIcon.icns', '-o', check])
+        self.assertEqual({p.name: png_size(p) for p in check.iterdir()},
+                         {name: (pixels, pixels) for name, pixels in ICONSET_MEMBERS.items()})
 
 
 if __name__ == '__main__':
