@@ -8,6 +8,7 @@ iconutil, lipo and codesign. No other installed app is used.
 """
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -16,11 +17,14 @@ import platform
 import plistlib
 import re
 import shutil
+import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 from aquaspace_signing import SigningError, local_identity, sign_app
+from aquaspace_update import ExchangeUnsupported, exchange_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 # Used only when no upstream release tag (v<major>.<minor>.<patch>...) is reachable from HEAD.
@@ -39,6 +43,14 @@ DEFAULT_CONFIG = "docs/config-examples/default-config.toml"
 BUILD_INPUTS = ("Package.swift", "Package.resolved", "Sources", INFO_TEMPLATE, ICON_SOURCE, DEFAULT_CONFIG)
 REQUIRED_TOOLS = ("swift", "git", "/usr/bin/sips", "/usr/bin/iconutil", "/usr/bin/lipo", "/usr/bin/codesign")
 ICON_SIZES = (16, 32, 128, 256, 512)
+# Each Finder icon size at 1x and 2x, with its edge length in pixels.
+ICONSET_MEMBERS = {f"icon_{points}x{points}{suffix}.png": points * scale
+                   for points in ICON_SIZES for scale, suffix in ((1, ""), (2, "@2x"))}
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# --version is written into Swift source and Info.plist. These characters need no
+# escape in a Swift or JSON string literal, a plist, or a file name.
+VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}")
+LOCK_NAME = ".aquaspace-build.lock"
 UNSIGNED_LAYOUT = frozenset((
     "Contents",
     "Contents/Info.plist",
@@ -172,15 +184,46 @@ def info_plist(template, short_version, bundle_version):
     return plistlib.dumps(metadata)
 
 
+def png_size(path):
+    """Return a PNG file's (width, height) from its IHDR header, or None if it is not a PNG."""
+    try:
+        with open(path, "rb") as stream:
+            head = stream.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != PNG_SIGNATURE or head[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
+def check_png(path, pixels, what):
+    size = png_size(path)
+    if size != (pixels, pixels):
+        found = "is not a readable PNG image" if size is None else f"is {size[0]}x{size[1]} pixels"
+        raise BuildError(f"{what} {path} {found}; expected {pixels}x{pixels} pixels.")
+
+
 def make_icon(png, icns, work):
-    """Render every Finder icon size from the asset catalog's 1024-pixel image."""
+    """Render every Finder icon size from the asset catalog's 1024-pixel image.
+
+    sips exits 0 when it skips an unreadable input, and iconutil packs an
+    incomplete iconset, so check each image and unpack the result again.
+    """
+    largest = max(ICONSET_MEMBERS.values())
+    size = png_size(png)
+    if size is None or size[0] != size[1] or size[0] < largest:
+        found = "is not a readable PNG image" if size is None else f"is {size[0]}x{size[1]} pixels"
+        raise BuildError(f"The icon source {png} {found}; expected a square PNG of at least {largest}x{largest} pixels.")
     iconset = Path(tempfile.mkdtemp(dir=work)) / "AppIcon.iconset"
     iconset.mkdir()
-    for points in ICON_SIZES:
-        for scale, suffix in ((1, ""), (2, "@2x")):
-            pixels = points * scale
-            run(["/usr/bin/sips", "-z", pixels, pixels, png, "--out", iconset / f"icon_{points}x{points}{suffix}.png"])
+    for name, pixels in ICONSET_MEMBERS.items():
+        run(["/usr/bin/sips", "-z", pixels, pixels, png, "--out", iconset / name])
+        check_png(iconset / name, pixels, "The rendered icon")
     run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", icns])
+    unpacked = Path(tempfile.mkdtemp(dir=work)) / "check.iconset"
+    run(["/usr/bin/iconutil", "-c", "iconset", icns, "-o", unpacked])
+    for name, pixels in ICONSET_MEMBERS.items():
+        check_png(unpacked / name, pixels, f"The icon file {icns} has a bad member:")
 
 
 def assemble_bundle(app, binaries, root, version, work):
@@ -235,17 +278,71 @@ def validate_signature(app, requirement):
 
 
 def publish(staged, app):
-    """Move staged to app; the previous bundle stays in place until the new one is complete."""
-    previous = None
-    if app.exists() or app.is_symlink():
-        previous = staged.parent / "previous.app"
-        os.rename(app, previous)
-    try:
+    """Put staged at app. At no moment is app absent, unless the volume cannot exchange paths.
+
+    After an exchange, staged holds the previous bundle; the caller removes it.
+    Without exchange support, two renames are used: an interruption restores the
+    previous bundle, and after a crash the next build restores it.
+    """
+    if not (app.exists() or app.is_symlink()):
         os.rename(staged, app)
-    except OSError:
-        if previous:
+        return
+    try:
+        exchange_paths(staged, app)
+        return
+    except ExchangeUnsupported:
+        pass
+    previous = staged.parent / "previous.app"
+    try:
+        os.rename(app, previous)
+        os.rename(staged, app)
+    except BaseException:
+        if not (app.exists() or app.is_symlink()) and previous.is_dir():
             os.rename(previous, app)
         raise
+
+
+def restore_stranded_build(output):
+    """Put back a previous build that a crash left between the two renames of publish."""
+    app = output / "AquaSpace.app"
+    if app.exists() or app.is_symlink():
+        return
+    stranded = [p for p in output.glob(".staging-*/previous.app") if p.is_dir() and not p.is_symlink()]
+    if len(stranded) > 1:
+        raise BuildError(f"{app} is missing and several earlier builds are left in {output}: "
+                         + ", ".join(map(str, stranded)) + ". Move one of them to " + str(app) + ", then try again.")
+    if stranded:
+        os.rename(stranded[0], app)
+        print(f"Restored the previous build that an interrupted build left at {stranded[0]}.", file=sys.stderr)
+
+
+class BuildLock:
+    """A flock on a file that is never unlinked, so that two builds cannot overlap."""
+
+    def __init__(self, directory, name=LOCK_NAME):
+        self.path, self.fd = Path(directory) / name, None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            info = os.fstat(self.fd)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+                raise BuildError(f"The build lock {self.path} has an unexpected owner or file type.")
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BuildError) as error:
+            self.__exit__()
+            if isinstance(error, BuildError):
+                raise
+            raise BuildError(f"Another AquaSpace build is using {self.path.parent}. "
+                             "Wait for it to finish, then try again.") from error
+        return self
+
+    def __exit__(self, *args):
+        # Never unlink the lock file: a new inode would let a second build in.
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
 
 def build(args, root):
@@ -253,14 +350,20 @@ def build(args, root):
     if missing:
         raise BuildError("Missing required tools: " + ", ".join(missing))
     identity, keychain = ((args.signing_identity, args.signing_keychain) if args.signing_identity else local_identity())
-    version = derive_version(root, args.version)
     source = root / ".debug/aquaspace/source"
+    # Builds share the staged source copy, and builds into one output share its staging.
+    with BuildLock(source.parent, ".aquaspace-source.lock"), BuildLock(args.output):
+        return build_locked(args, root, identity, keychain, source)
+
+
+def build_locked(args, root, identity, keychain, source):
+    version = derive_version(root, args.version)
     manifest, digest = stage_sources(root, source)
     git_hash = write_legacy_version_sources(source / "Sources/Common", version.short, version.revision, digest)
-    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
-    args.output.mkdir(parents=True, exist_ok=True)
+    restore_stranded_build(args.output)
     for leftover in args.output.glob(".staging-*"):
-        shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build.
+        shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build; this build holds the lock.
+    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
     work = Path(tempfile.mkdtemp(prefix=".staging-", dir=args.output))
     try:
         staged = work / "AquaSpace.app"
@@ -325,6 +428,9 @@ def main(argv=None, root=ROOT):
         parser.error('--signing-keychain requires --signing-identity')
     if args.signing_identity == '-':
         parser.error('Ad-hoc signing resets privacy grants; use a persistent signing certificate.')
+    if args.version is not None and not VERSION_PATTERN.fullmatch(args.version):
+        parser.error('--version must be 1 to 64 characters: ASCII letters, digits, ".", "_", "+" and "-", '
+                     'starting with a letter or digit.')
     try:
         app = build(args, root)
     except (BuildError, SigningError, OSError) as error:
@@ -336,11 +442,26 @@ def main(argv=None, root=ROOT):
             command.append("--allow-identity-change")
         if args.ready_timeout:
             command += ["--ready-timeout", args.ready_timeout]
-        # The installer replaces this process: its exit status (for example 3, waiting for
-        # --confirm) reaches the caller, and Ctrl-C reaches only the installer, which
-        # closes or keeps its update record. A child process would be killed on Ctrl-C.
-        os.execv(sys.executable, command)
+        return run_installer(command)
     return 0
+
+
+def run_installer(arguments):
+    """Run the installer and return its exit status unchanged; it prints its own messages.
+
+    Ctrl-C reaches the installer directly, because it is in the same process
+    group. Wait for it to report what remains: never kill it while it may be
+    changing files (subprocess.run would send SIGKILL after 0.25 s).
+    """
+    sys.stdout.flush()
+    process = subprocess.Popen(arguments)
+    while True:
+        try:
+            code = process.wait()
+            break
+        except KeyboardInterrupt:
+            continue
+    return code if code >= 0 else 128 - code  # Killed by a signal: report it as a shell does.
 
 
 if __name__ == "__main__":

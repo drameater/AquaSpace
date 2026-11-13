@@ -103,8 +103,8 @@ class FakeSystem:
         self.launch_sessions = []
         self.launched_at = None
 
-    def add(self, pid, kind='local.aquaspace', path=None, birth=1):
-        process = update.Process(pid, (birth, pid), os.getuid(),
+    def add(self, pid, kind='local.aquaspace', path=None, birth=1, micro=None):
+        process = update.Process(pid, (birth, pid if micro is None else micro), os.getuid(),
                                  path or self.target / 'Contents/MacOS/AquaSpace', kind)
         self.running[pid] = process
         self.maximum_controllers = max(self.maximum_controllers, len(self.running))
@@ -160,8 +160,10 @@ class FakeSystem:
     def launch(self, executable, session, log):
         self.event('launch')
         self.launch_sessions.append(session)
+        self.now += .001  # The kernel records the start after `open` was called.
         self.launched_at = self.now
-        child = self.add(200, birth=int(self.time()))
+        started = self.time()
+        child = self.add(200, birth=int(started), micro=round(started % 1 * 1e6))
         self.launches.append(child)
         self.event('launched')
         if self.spawn_raises_after_start: raise OSError('Spawn outcome uncertain')
@@ -187,6 +189,10 @@ class InstallerFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='aquaspace-offline-')
         self.addCleanup(self.tmp.cleanup)
+        # F_FULLFSYNC flushes the drive's cache at every journal write, which makes
+        # hundreds of transactions slow. DurableWriteTests cover the real flush.
+        fast = patch.object(update, 'full_sync', side_effect=os.fsync)
+        fast.start(); self.addCleanup(fast.stop)
         # The kernel reports canonical paths (/private/var, not /var), so the fake does too.
         self.root = Path(self.tmp.name).resolve()
         self.source = bundle(self.root / 'build/AquaSpace.app', 'new')
@@ -952,6 +958,41 @@ class SmallerDefectTests(InstallerFixture):
         self.assertEqual((self.target / 'Contents/MacOS/AquaSpace').read_text(), 'new')
 
 
+class DurableWriteTests(unittest.TestCase):
+    """Pre-existing issue b: on macOS, fsync can leave data in the drive's cache."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def synced(self, fcntl_effect=None):
+        flushed, fsynced = [], []
+        real_fcntl = fcntl.fcntl
+        def record_fcntl(fd, command, *args):
+            if command == getattr(fcntl, 'F_FULLFSYNC', None):
+                flushed.append(os.fstat(fd).st_ino)
+                if fcntl_effect: raise fcntl_effect
+                return 0
+            return real_fcntl(fd, command, *args)
+        def record_fsync(fd): fsynced.append(os.fstat(fd).st_ino)
+        with patch.object(update.fcntl, 'fcntl', side_effect=record_fcntl), \
+             patch.object(update.os, 'fsync', side_effect=record_fsync):
+            update.atomic_json(self.root / 'journal.json', {'phase': 'staging'})
+        return flushed, fsynced
+
+    @unittest.skipUnless(hasattr(fcntl, 'F_FULLFSYNC'), 'F_FULLFSYNC is a macOS fcntl')
+    def test_journal_and_its_directory_are_flushed_to_the_drive(self):
+        flushed, _ = self.synced()
+        journal = (self.root / 'journal.json').stat().st_ino
+        self.assertIn(journal, flushed)
+        self.assertIn(self.root.stat().st_ino, flushed)
+        self.assertEqual(json.loads((self.root / 'journal.json').read_text()), {'phase': 'staging'})
+
+    def test_file_system_without_full_flush_falls_back_to_fsync(self):
+        flushed, fsynced = self.synced(OSError(errno.ENOTSUP, 'not supported'))
+        self.assertIn((self.root / 'journal.json').stat().st_ino, fsynced)
+        self.assertIn(self.root.stat().st_ino, fsynced)
+
+
 class LockTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -972,13 +1013,73 @@ class LockTests(unittest.TestCase):
                 with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
         with update.InstallLock(self.root / 'user', legacy=[legacy]): pass
 
-    def test_missing_or_symlinked_legacy_lock_is_ignored_and_not_created(self):
-        missing, linked = self.root / 'missing', self.root / 'linked'
-        missing.mkdir(); linked.mkdir()
+    @staticmethod
+    def older_updater_lock(directory):
+        """The lock of the pre-2026-11 updater: it creates the file, then locks it."""
+        path = directory / f'.aquaspace-install-{os.getuid()}.lock'
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(fd)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError('unexpected owner or file type')
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd); raise
+        return fd
+
+    def test_absent_legacy_lock_is_created_so_an_older_updater_cannot_overlap(self):
+        # The requirement changed: macOS clears /tmp at boot, so the file is often
+        # absent, and an older updater creates it. Create and hold it as that updater does.
+        legacy = self.root / 'legacy'; legacy.mkdir()
+        with update.InstallLock(self.root / 'user', legacy=[legacy]):
+            path = legacy / self.name
+            self.assertTrue(path.is_file())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            with self.assertRaises(OSError): self.older_updater_lock(legacy)
+        os.close(self.older_updater_lock(legacy))  # Released afterwards; never unlinked.
+        self.assertTrue((legacy / self.name).is_file())
+
+    def test_unusable_legacy_lock_is_skipped_with_a_warning_and_never_followed(self):
+        # An older updater refuses to start on each of these files, so it cannot overlap.
+        linked, directory, hardlinked = self.root / 'linked', self.root / 'directory', self.root / 'hardlinked'
+        for path in (linked, directory, hardlinked): path.mkdir()
         (linked / self.name).symlink_to(self.root / 'elsewhere')
-        with update.InstallLock(self.root / 'user', legacy=[missing, linked]): pass
-        self.assertFalse((missing / self.name).exists())
+        (directory / self.name).mkdir()
+        (self.root / 'original').write_text('')
+        os.link(self.root / 'original', hardlinked / self.name)
+        for legacy in (linked, directory, hardlinked):
+            with self.subTest(legacy=legacy.name):
+                reports = []
+                with update.InstallLock(self.root / 'user', legacy=[legacy], report=reports.append): pass
+                self.assertTrue(reports and str(legacy / self.name) in reports[0])
+                with self.assertRaises(OSError): os.close(self.older_updater_lock(legacy))
         self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_legacy_lock_planted_by_another_account_does_not_block_and_is_reported(self):
+        legacy = self.root / 'legacy'; legacy.mkdir()
+        planted = legacy / self.name
+        planted.write_text('')
+        planted_inode = planted.stat().st_ino
+        real_fstat = os.fstat
+        def other_owner(fd):
+            info = real_fstat(fd)
+            if info.st_ino != planted_inode: return info
+            values = list(info); values[stat.ST_UID] = os.getuid() + 1
+            return os.stat_result(values)
+        reports = []
+        with patch.object(update.os, 'fstat', side_effect=other_owner):
+            with update.InstallLock(self.root / 'user', legacy=[legacy], report=reports.append): pass
+        self.assertEqual(len(reports), 1)
+        self.assertIn('another account', reports[0])
+        self.assertIn('older AquaSpace installer cannot run', reports[0])
+
+    def test_legacy_lock_only_where_it_exists_is_never_created(self):
+        existing_only = self.root / 'applications'; existing_only.mkdir()
+        with update.InstallLock(self.root / 'user', legacy_existing=[existing_only]): pass
+        self.assertFalse((existing_only / self.name).exists())
+        (existing_only / self.name).write_text('')
+        with update.InstallLock(self.root / 'user', legacy_existing=[existing_only]):
+            with self.assertRaises(OSError): self.older_updater_lock(existing_only)
 
     def test_legacy_location_equal_to_the_user_lock_is_not_locked_twice(self):
         with update.InstallLock(self.root, legacy=[self.root]): pass
@@ -1016,6 +1117,21 @@ class CommandLineTests(InstallerFixture):
         self.system.on_event = None
         self.assertEqual(self.main('--resume', record)[0], 0)
         self.assertEqual(len(self.system.launches), 1)
+
+    def test_identity_change_retry_reproduces_every_option_of_the_invocation(self):
+        shutil.rmtree(self.source)
+        bundle(self.source, 'new', 'identifier "local.aquaspace" and certificate leaf = H"BBBB"')
+        self.system.add(100)
+        # The replacement takes control 100 s after its launch: only the longer timeout waits for it.
+        self.system.status_fault = lambda system, child: ready(child) if system.now - system.launched_at >= 100 else None
+        code, err = self.main('--restart', '--ready-timeout', '120')
+        self.assertEqual(code, 1)
+        self.assertNotIn('stop', self.system.events)
+        retry = [shlex.split(line) for line in err.splitlines() if '--allow-identity-change' in line][0]
+        self.assertEqual(retry[:2], ['python3', str(update.INSTALLER_SCRIPT)])
+        code, _ = self.main(*retry[2:])
+        self.assertEqual(code, 0)
+        self.assertEqual(phase_of(self.target.parent.glob('.aquaspace-update-*').__next__()), 'committed')
 
     def test_conflicting_modes_are_usage_errors(self):
         for args in (['--restart', '--resume', 'x'], ['--confirm', 'x', '--recover', 'y'],

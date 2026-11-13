@@ -1,6 +1,7 @@
 """Offline builder checks: fake git, swift, macOS tools and signer; no compile, keychain or app."""
 import contextlib
 from datetime import datetime, timezone
+import fcntl
 import importlib.util
 import io
 import json
@@ -8,10 +9,12 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1]
@@ -34,6 +37,22 @@ EXPECTED_LAYOUT = {
 }
 
 
+def png(width, height):
+    """A PNG header with these dimensions: enough for every size check."""
+    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IEND', b'')
+
+
+def png_size(path):
+    data = Path(path).read_bytes()
+    return struct.unpack('>II', data[16:24]) if data[:8] == b'\x89PNG\r\n\x1a\n' else None
+
+
+ICONSET_MEMBERS = {f'icon_{p}x{p}{suffix}.png': p * scale
+                   for p in (16, 32, 128, 256, 512) for scale, suffix in ((1, ''), (2, '@2x'))}
+
+
 def layout(app):
     return {str(p.relative_to(app)) for p in app.rglob('*')}
 
@@ -45,6 +64,15 @@ class FakeTools:
         self.root, self.tag, self.distance, self.dirty, self.arch = root, tag, distance, dirty, arch
         self.calls = []
         self.bin = root / 'fake-bin'
+        self.sips_skips, self.sips_wrong_size, self.drop_from_icns = set(), set(), set()
+
+    def sips(self, pixels, source, out):
+        # Like sips: a missing or unreadable input is skipped with a warning and exit status 0.
+        if not source.is_file() or png_size(source) is None or out.name in self.sips_skips:
+            return ''
+        size = pixels // 2 if out.name in self.sips_wrong_size else pixels
+        out.write_bytes(png(size, size))
+        return ''
 
     def __call__(self, args, env=None, capture=True):
         args = [str(a) for a in args]
@@ -58,10 +86,16 @@ class FakeTools:
             self.compile(Path(args[args.index('--package-path') + 1]))
             return ''
         if tool == 'sips':
-            shutil.copyfile(args[4], args[6])
-            return ''
+            return self.sips(int(args[2]), Path(args[4]), Path(args[6]))
         if tool == 'iconutil':
-            Path(args[5]).write_bytes(b'icns')
+            if args[2] == 'icns':
+                # Like iconutil, pack whatever the iconset holds, complete or not.
+                members = {p.name: p.read_bytes().hex() for p in Path(args[3]).iterdir() if p.name not in self.drop_from_icns}
+                Path(args[5]).write_text(json.dumps(members))
+            else:
+                out = Path(args[5]); out.mkdir()
+                for name, data in json.loads(Path(args[3]).read_text()).items():
+                    (out / name).write_bytes(bytes.fromhex(data))
             return ''
         if tool == 'lipo':
             return self.arch + '\n'
@@ -108,10 +142,12 @@ class Checkout:
         self.path = path
         real = SCRIPT.parent
         for name in ('Package.swift', 'Package.resolved', 'script/aquaspace-Info.plist',
-                     'docs/config-examples/default-config.toml',
-                     'resources/Assets.xcassets/AppIcon.appiconset/icon.png'):
+                     'docs/config-examples/default-config.toml'):
             (path / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(real / name, path / name)
+        icon = path / 'resources/Assets.xcassets/AppIcon.appiconset/icon.png'
+        icon.parent.mkdir(parents=True)
+        icon.write_bytes(png(1024, 1024))
         common = path / 'Sources/Common'
         common.mkdir(parents=True)
         (common / 'versionGenerated.swift').write_text('public let aeroSpaceAppVersion = "0.0.0-SNAPSHOT"\n')
@@ -120,6 +156,8 @@ class Checkout:
 
 
 class BuilderTest(unittest.TestCase):
+    fake_installer_process = True
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='aquaspace-build-offline-')
         self.addCleanup(temporary.cleanup)
@@ -133,11 +171,14 @@ class BuilderTest(unittest.TestCase):
             patcher = patch.object(build, target, side_effect=value) if target != 'run' else patch.object(build, 'run', value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        # The installer replaces the builder process; record the call instead.
-        self.exec_calls = []
-        for patcher in (patch.object(build.platform, 'machine', return_value='arm64'),
-                        patch.object(build.shutil, 'which', side_effect=lambda tool: '/fake/' + tool),
-                        patch.object(build.os, 'execv', side_effect=lambda *call: self.exec_calls.append(call))):
+        # Record the installer command instead of starting the installer.
+        self.installer_calls = []
+        patchers = [patch.object(build.platform, 'machine', return_value='arm64'),
+                    patch.object(build.shutil, 'which', side_effect=lambda tool: '/fake/' + tool)]
+        if self.fake_installer_process:
+            patchers.append(patch.object(build, 'run_installer',
+                                         side_effect=lambda command: self.installer_calls.append(command) or 0))
+        for patcher in patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -345,18 +386,18 @@ class InstallerOptionTests(BuilderTest):
         return [sys.executable, str(self.root / 'script/install-aquaspace.py'), '--source', str(self.app), '--restart',
                 *options]
 
-    def test_install_and_restart_replaces_the_builder_with_the_installer(self):
+    def test_install_and_restart_runs_the_installer_once(self):
         self.main('--install-and-restart')
-        self.assertEqual(self.exec_calls, [(sys.executable, self.installer_command())])
+        self.assertEqual(self.installer_calls, [self.installer_command()])
 
     def test_installer_options_are_forwarded(self):
         self.main('--install-and-restart', '--ready-timeout', '120', '--allow-identity-change')
-        self.assertEqual(self.exec_calls, [(sys.executable, self.installer_command(
-            '--allow-identity-change', '--ready-timeout', '120'))])
+        self.assertEqual(self.installer_calls, [self.installer_command(
+            '--allow-identity-change', '--ready-timeout', '120')])
 
     def test_build_without_install_and_restart_starts_no_installer(self):
         self.main()
-        self.assertEqual(self.exec_calls, [])
+        self.assertEqual(self.installer_calls, [])
 
     def test_invalid_installer_options_stop_before_signing_or_compile(self):
         for options in (['--allow-identity-change'], ['--ready-timeout', '60'],
@@ -370,7 +411,7 @@ class InstallerOptionTests(BuilderTest):
                 self.assertEqual(stopped.exception.code, 2)
                 build.local_identity.assert_not_called()
                 self.assertEqual(self.tools.calls, [])
-                self.assertEqual(self.exec_calls, [])
+                self.assertEqual(self.installer_calls, [])
 
     def test_builder_and_installer_reject_the_same_ready_timeouts(self):
         for value in ('0', '-5', '3601', 'soon'):
@@ -388,7 +429,7 @@ class InstallerOptionTests(BuilderTest):
         with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit) as stopped:
             self.main('--install-and-restart', '--allow-identity-change')
         self.assertEqual(stopped.exception.code, 1)
-        self.assertEqual(self.exec_calls, [])
+        self.assertEqual(self.installer_calls, [])
 
 
 class FakeCodesign:
@@ -420,6 +461,7 @@ class ManifestSystem:
     run = staticmethod(update.NativeSystem.run)
     verify_bundle = update.NativeSystem.verify_bundle
     requirement = update.NativeSystem.requirement
+    time = update.NativeSystem.time
 
     def managers(self):
         return []
@@ -491,6 +533,199 @@ class SourceStagingTests(BuilderTest):
         manifest, _ = build.stage_sources(self.root, source)
         self.assertFalse((source / 'Sources/Common/removed.swift').exists())
         self.assertNotIn('Sources/Common/removed.swift', manifest)
+
+
+
+class Crash(BaseException):
+    """Simulated power loss: no handler or cleanup runs after it."""
+
+
+class IconTests(FailureTests):
+    """Finding 7: a missing or partial icon fails the build with a precise message."""
+    ICON = 'resources/Assets.xcassets/AppIcon.appiconset/icon.png'
+
+    def test_missing_source_image_stops_the_build(self):
+        self.stage_previous_build()
+        (self.root / self.ICON).unlink()
+        self.assert_stops(r'icon\.png.*not a readable PNG')
+        self.assert_previous_build_kept()
+
+    def test_source_image_that_is_not_a_png_or_too_small_stops_the_build(self):
+        for data, message in ((b'not an image', 'not a readable PNG'), (png(512, 512), '512x512'),
+                              (png(1024, 768), '1024x768')):
+            with self.subTest(message=message):
+                (self.root / self.ICON).write_bytes(data)
+                self.assert_stops(message)
+
+    def test_size_that_sips_did_not_render_stops_the_build(self):
+        self.stage_previous_build()
+        self.tools.sips_skips.add('icon_32x32@2x.png')
+        self.assert_stops(r'icon_32x32@2x\.png')
+        self.assert_previous_build_kept()
+
+    def test_size_with_wrong_pixel_dimensions_stops_the_build(self):
+        self.tools.sips_wrong_size.add('icon_256x256.png')
+        self.assert_stops(r'icon_256x256\.png.*128x128.*expected 256x256')
+
+    def test_icon_file_missing_a_member_stops_the_build(self):
+        self.stage_previous_build()
+        self.tools.drop_from_icns.add('icon_512x512@2x.png')
+        self.assert_stops(r'AppIcon\.icns.*icon_512x512@2x\.png')
+        self.assert_previous_build_kept()
+
+    def test_complete_icon_has_every_member_at_its_size(self):
+        self.main()
+        check = self.root / 'check.iconset'
+        self.tools(['/usr/bin/iconutil', '-c', 'iconset', self.app / 'Contents/Resources/AppIcon.icns', '-o', check])
+        self.assertEqual({p.name: png_size(p) for p in check.iterdir()},
+                         {name: (pixels, pixels) for name, pixels in ICONSET_MEMBERS.items()})
+
+
+class PublishTests(FailureTests):
+    """Finding 8: no crash leaves the output without a complete build; builds never overlap."""
+
+    def test_publish_replaces_the_previous_build_and_leaves_no_staging(self):
+        self.stage_previous_build()
+        self.main()
+        self.assertEqual(layout(self.app), EXPECTED_LAYOUT)
+        self.assertEqual(list(self.output.glob('.staging-*')), [])
+
+    def without_exchange_and_crashing_between_renames(self, crash):
+        """Force the two-rename path and stop after the first rename."""
+        real = os.rename
+        calls = self.renames = []
+        def rename(source, target):
+            if calls and isinstance(crash, Crash): raise Crash('the builder is gone')
+            real(source, target); calls.append(target)
+            if len(calls) == 1 and Path(target).name == 'previous.app': raise crash
+        unsupported = lambda first, second: (_ for _ in ()).throw(build.ExchangeUnsupported(45, 'unsupported'))
+        return (patch.object(build, 'exchange_paths', side_effect=unsupported, create=True),
+                patch.object(build.os, 'rename', side_effect=rename))
+
+    def test_interrupt_between_the_two_renames_keeps_a_build_in_place(self):
+        self.stage_previous_build()
+        no_exchange, rename = self.without_exchange_and_crashing_between_renames(KeyboardInterrupt())
+        with no_exchange, rename, self.assertRaises(KeyboardInterrupt):
+            with contextlib.redirect_stdout(io.StringIO()):
+                build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
+        self.assertTrue((self.app / 'Contents').is_dir(), 'The output has no AquaSpace.app')
+
+    def test_next_build_restores_a_previous_build_stranded_by_a_crash(self):
+        self.stage_previous_build()
+        no_exchange, rename = self.without_exchange_and_crashing_between_renames(Crash())
+        real_rmtree = shutil.rmtree
+        def frozen(*args, **kwargs):
+            if self.renames: raise Crash('the builder is gone')  # No cleanup runs after a power loss.
+            return real_rmtree(*args, **kwargs)
+        with no_exchange, rename, patch.object(build.shutil, 'rmtree', side_effect=frozen):
+            with self.assertRaises(Crash), contextlib.redirect_stdout(io.StringIO()):
+                build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch')], root=self.root)
+        self.assertFalse(self.app.exists())
+        # The next build fails before publishing; the previous build must be back in place.
+        def failing_compile(package):
+            raise build.BuildError('swift build failed with exit code 1')
+        self.tools.compile = failing_compile
+        self.assert_stops('swift build failed')
+        self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
+        self.assertEqual(list(self.output.glob('.staging-*')), [])
+
+    def test_a_running_build_blocks_a_second_build_of_the_same_output(self):
+        self.stage_previous_build()
+        lock = self.output / '.aquaspace-build.lock'
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        leftover = self.output / '.staging-other-build'
+        (leftover / 'AquaSpace.app').mkdir(parents=True)
+        self.assert_stops('Another AquaSpace build')
+        self.assertFalse(any(Path(c[0]).name == 'swift' for c in self.tools.calls))
+        self.assertTrue(leftover.is_dir(), "The other build's staging directory was deleted")
+        self.assert_previous_build_kept_except(leftover)
+
+    def test_a_running_build_blocks_a_second_build_that_shares_the_source_copy(self):
+        lock = self.root / '.debug/aquaspace/.aquaspace-source.lock'
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.output = self.root / 'other-output'
+        self.assert_stops('Another AquaSpace build')
+        self.assertFalse(any(Path(c[0]).name == 'swift' for c in self.tools.calls))
+
+    def test_build_lock_file_is_kept_after_the_build(self):
+        self.main()
+        lock = self.output / '.aquaspace-build.lock'
+        inode = lock.stat().st_ino
+        self.main()
+        self.assertEqual(lock.stat().st_ino, inode)
+
+    def assert_previous_build_kept_except(self, leftover):
+        self.assertEqual((self.app / 'Contents/marker').read_text(), 'previous')
+        self.assertEqual((self.output / 'build.json').read_text(), 'previous manifest')
+
+
+class InstallerExitStatusTests(BuilderTest):
+    """Finding 6: the installer's exit status reaches the caller unchanged, with no traceback."""
+    fake_installer_process = False
+
+    def fake_installer(self, code):
+        script = self.root / 'script/install-aquaspace.py'
+        script.parent.mkdir(parents=True, exist_ok=True)
+        record = self.root / 'installer-arguments'
+        script.write_text(f'import json, sys\nopen({str(record)!r}, "w").write(json.dumps(sys.argv[1:]))\n'
+                          f'sys.exit({code})\n')
+        return record
+
+    def install(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = build.main(['--output', str(self.output), '--scratch-path', str(self.root / 'scratch'),
+                               '--install-and-restart'], root=self.root)
+        return code, err.getvalue()
+
+    def test_installer_status_is_returned_unchanged(self):
+        for status in (0, 1, 3, 130):
+            with self.subTest(status=status):
+                record = self.fake_installer(status)
+                code, err = self.install()
+                self.assertEqual(code or 0, status)
+                self.assertNotIn('Traceback', err)
+                self.assertEqual(json.loads(record.read_text()), ['--source', str(self.app), '--restart'])
+
+    def test_interrupt_waits_for_the_installer_instead_of_killing_it(self):
+        self.fake_installer(130)
+        real_popen = build.subprocess.Popen
+        class InterruptedOnce(real_popen):
+            interrupted = False
+            def wait(self, timeout=None):
+                if not InterruptedOnce.interrupted:
+                    InterruptedOnce.interrupted = True
+                    raise KeyboardInterrupt
+                return super().wait(timeout)
+            def kill(self):
+                raise AssertionError('The builder must never kill the installer')
+        with patch.object(build.subprocess, 'Popen', InterruptedOnce):
+            code, err = self.install()
+        self.assertEqual(code, 130)
+        self.assertNotIn('Traceback', err)
+
+
+class VersionOverrideTests(BuilderTest):
+    """Pre-existing issue d: --version reaches Swift source, so only plain characters are allowed."""
+
+    def test_unsafe_version_overrides_are_refused_before_any_tool_runs(self):
+        for version in ('', 'a b', 'quote"', 'back\\slash', 'caf\u00e9', '$(id)', '-leading', 'x' * 65, 'new\nline'):
+            with self.subTest(version=version):
+                with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                    self.main('--version', version)
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertEqual(self.tools.calls, [])
+
+    def test_plain_version_overrides_are_accepted(self):
+        for version in ('local-test', '1.2.3', '0.21.3-aquaspace.71.g79e53f21.dirty', '1.0+build_7'):
+            with self.subTest(version=version):
+                self.main('--version', version)
+                self.assertEqual(self.info()['CFBundleShortVersionString'], version)
 
 
 if __name__ == '__main__':
