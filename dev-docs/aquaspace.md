@@ -545,41 +545,73 @@ Then start AquaSpace by hand (`open /Applications/AquaSpace.app`).
 Run the checks that match your change. Read a test before you run it for the
 first time.
 
-### Offline Python suite
+### Offline suites
+
+One command runs every offline suite:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
+nice -n 10 python3 script/test-offline.py --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 ```
 
-This is the suite that CI runs. It needs only Python 3 and Git. It covers the
-builder, the updater and its transaction, signing checks, session identity
-checks, the shell wrappers, the opt-in guards of the live harnesses, the
-Ghostty harness safety guards, some source-text guards, and the relative links
-and heading anchors in every tracked Markdown file. The tests use fakes for
-`swift`, `codesign`, the macOS tools and the process scan. The updater tests
+It runs the Python suite and the five Swift suites one after another. It prints
+one table (suite, tests, result, seconds) and writes each output to
+`.debug/offline-logs/<suite>.log`. For a failed suite it also prints the end of
+the log. The exit status is 1 if any suite fails. `--suite <name>` runs only
+that suite; repeat it for more. No suite starts an app or reads live AX,
+WindowServer or process state.
+
+| Suite | Runs alone with | Covers |
+| --- | --- | --- |
+| `python` | `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests` | See [the Python suite](#the-python-suite). |
+| `ownership` | `python3 script/test-ownership-offline.py` | Admission, the controller lock, the process scan and its cache, the watch log, failure reports, and the controller lifecycle (`WindowManagerControllerTest`: startup, claim, watch, launch notifications, handoff, stop). Native process calls are stubs that abort. |
+| `native-tabs` | `python3 script/test-native-tabs-offline.py` | The native tab state machine and matchers with in-memory AX, and when tab reconciliation reads the WindowServer list. |
+| `hidden-handoff` | `python3 script/test-hidden-handoff-offline.py` | The window-level cache, hidden-window discovery and session commands with in-memory WindowServer and AX data. |
+| `window-discovery` | `python3 script/test-window-discovery-offline.py` | Stock versus fork discovery, deferred restoration, callback ordering and user-intent rules. |
+| `native-tab-model` | `python3 script/test-native-tab-model-offline.py --sdk <path>` | Native tab bindings against the real in-memory model tree. |
+
+On 2026-11-13 the suites had 444, 60, 53, 15, 121 and 2 tests, in the order of
+the table.
+
+Needs: Python 3 and Git for the Python suite; a Swift toolchain with Swift
+Testing (Swift 6 Command Line Tools or Xcode) for the Swift suites. Only
+`native-tab-model` builds the whole app library, so only it needs cached package
+dependencies (resolution is disabled) and an SDK that builds the app. On the
+owner's machine that is the SDK in the command above.
+
+How the Swift runners work: each writes an isolated Swift package under
+`.debug/<suite>-offline/` from production sources and memory-only stubs, then
+runs `swift test`. The shared code is in
+[offline_harness.py](../script/offline_harness.py). It finds the toolchain and
+its Swift Testing macro plugin, and cuts production declarations out of their
+files by name. When a production declaration is renamed, the run stops and
+names the file and the declaration. The shared stubs are in
+`script/offline-shared/`. The `window-discovery` runner compiles a copy of
+upstream's stock refresh method,
+`script/window-discovery-offline/stock-v0.21.3-Beta-refresh.swift.txt`. It
+needs no Git tag. When the tag `v0.21.3-Beta` is present, the runner checks the
+copy against it.
+
+`script/test-ghostty-{foreground,target,termination}-offline.py` test the Ghostty
+harness native helper against fake APIs with `clang`. `test-offline.py` does not
+run them.
+
+### The Python suite
+
+This is the suite that CI runs. It covers the builder, the updater and its
+transaction, signing checks, session identity checks, the shell wrappers, the
+opt-in guards of the live harnesses, the Ghostty harness safety guards, the
+pure logic of the offline runners, two source-text guards, and the relative
+links and heading anchors in every tracked Markdown file. The tests use fakes
+for `swift`, `codesign`, the macOS tools and the process scan. The updater tests
 block `subprocess`, `os.kill` and native library loading. The shell-wrapper
 tests run Bash with a fake `python3` in a temporary folder. The link test runs
 `git ls-files`.
 
-`test_aquaspace_lifecycle_source_guards.py` reads Swift source instead of
-running it. Each of its tests names the Swift behavior test that should replace
-it.
-
-### Offline Swift replays
-
-Each runner copies the production sources it needs into an isolated Swift
-package under `.debug/<name>/` and runs `swift test`. No app starts. They need a
-Swift toolchain, and the `swift test` runners need cached package dependencies
-(resolution is disabled).
-
-| Runner | Covers |
-| --- | --- |
-| `script/test-ownership-offline.py` | Admission, controller lock, process scan, failure reports. Native process calls are replaced by stubs that abort. |
-| `script/test-native-tabs-offline.py` | The native tab state machine and matchers with in-memory AX. |
-| `script/test-native-tab-model-offline.py [--sdk <path>]` | Native tab bindings against the real in-memory tree. |
-| `script/test-hidden-handoff-offline.py` | Hidden-window discovery and session commands with in-memory WindowServer and AX data. |
-| `script/test-window-discovery-offline.py` | Stock versus fork discovery, deferred restoration and callback ordering. Needs the local tag `v0.21.3-Beta`. |
-| `script/test-ghostty-{foreground,target,termination}-offline.py` | The Ghostty harness native helper against fake APIs. Uses `clang`. |
+The two source-text guards are in `test_aquaspace_lifecycle_source_guards.py`.
+They read Swift source and check what no behavior test can see: upstream's
+`toggleReleaseServerIfDebug` has not come back, and the failure report type has
+no UI, process, ownership or focus call. Swift behavior tests cover the rest of
+the lifecycle.
 
 ### Upstream test target
 
@@ -591,8 +623,9 @@ and Bash 5, and stops at once with a message when XCTest is missing.
 ### Live harnesses
 
 These act on the real desktop. Run them only with explicit authorization, on an
-idle desktop, and on dedicated test workspaces. Each one refuses to start
-without its opt-in flag.
+idle desktop, and on dedicated test workspaces. The two `live.py` harnesses
+refuse to start without the full `--run-live` flag; an abbreviated form such as
+`--run` does not work.
 
 | Harness | What it does |
 | --- | --- |
@@ -600,9 +633,11 @@ without its opt-in flag.
 | `script/native-tabs-smoke/ghostty-topology/live.py --run-live` | Real Ghostty merges and detaches through the running AquaSpace. See its [README](../script/native-tabs-smoke/ghostty-topology/README.md). |
 | `swift run --package-path script/native-tabs-smoke NativeTabSmoke` | AppKit tab groups in a test process that reads only its own AX tree. |
 
-`script/native-tabs-smoke/prepare-ghostty-live.py`, `AppKitFixture.swift` and
-`ghostty-driver.applescript` are kept from earlier harnesses. No current
-harness uses them.
+**Unused; removal is the owner's decision.** Nothing in the repository uses
+these files from earlier harnesses (checked on 2026-11-13):
+`script/native-tabs-smoke/prepare-ghostty-live.py`,
+`script/native-tabs-smoke/AppKitFixture.swift` and
+`script/native-tabs-smoke/ghostty-driver.applescript`.
 
 ## Known limits
 
