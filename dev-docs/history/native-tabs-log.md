@@ -1,5 +1,10 @@
 # Native macOS tabs
 
+> **Historical record.** This file was `dev-docs/native-tabs.md` until 2026-11-12. Its entries are
+> not edited; only link targets changed when it moved. "Current" and "now" refer
+> to the date of each entry. For the index and the maintained documents, see
+> [the history index](README.md).
+
 AppKit uses a different NSWindow/AX window ID for each native tab. Only the selected tab appears in the application's AXWindows list; the previous AX window remains valid. Keeping every previously seen ID in the tiling tree gives one physical window multiple slots and workspace owners.
 
 The selected window's direct AXTabGroup and its AXTabButton elements retain their identities when AppKit moves the titlebar between tabs. AeroSpace follows that identity before adopting native focus, then transfers the predecessor's current binding, weight, floating size, fullscreen state, and cached layout. The predecessor leaves the managed tree without closed-window restoration or another on-window-detected callback.

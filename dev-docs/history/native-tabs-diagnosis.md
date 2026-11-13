@@ -1,5 +1,10 @@
 # Offline investigation of the AppKit fixture failures
 
+> **Historical record.** This file was `dev-docs/native-tabs-diagnosis.md` until 2026-11-12. Its entries are
+> not edited; only link targets changed when it moved. "Current" and "now" refer
+> to the date of each entry. For the index and the maintained documents, see
+> [the history index](README.md).
+
 Investigated on 2026-10-14 against local checkpoint `dc94868d`, then repaired offline as described below. During that offline phase, no manager, AppKit fixture, or terminal app was launched, and no live AX/CG observations, command sockets, installation changes, or network access were used. The installed applications were unchanged during that phase; the repair, tests, and validation notes were committed as `5cf47d53`. Subsequent authorized installation and live validation are recorded at the end of this document.
 
 ## Finding

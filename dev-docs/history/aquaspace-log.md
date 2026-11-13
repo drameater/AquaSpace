@@ -1,5 +1,10 @@
 # AquaSpace local fork
 
+> **Historical record.** This file was `dev-docs/aquaspace.md` until 2026-11-12. Its entries are
+> not edited; only link targets changed when it moved. "Current" and "now" refer
+> to the date of each entry. For the index and the maintained documents, see
+> [the history index](README.md).
+
 AquaSpace installs as `/Applications/AquaSpace.app` with bundle identifier `local.aquaspace`. AeroSpace remains `/Applications/AeroSpace.app` with its original `bobko.aerospace` identity. AquaSpace uses the same icon and assets, `~/.aerospace.toml` / `${XDG_CONFIG_HOME}/aerospace/aerospace.toml`, bindings, and `AEROSPACE_*` environment variables.
 
 Current installed release: **0.21.3-aquaspace.20261017.4**. The permission identity
