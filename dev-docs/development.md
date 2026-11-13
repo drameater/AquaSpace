@@ -1,6 +1,6 @@
 # Development Notes
 
-For current local build/install and safety instructions, see [aquaspace.md](aquaspace.md).
+For current local build/install and safety instructions, see [the validation log](history/aquaspace-log.md).
 The optional upstream toolchain setup follows:
 1. Install dependencies
 2. Create codesign certificate in `Keychain Access.app`

@@ -103,7 +103,7 @@ Commit `5cf47d53` was subsequently built, signed, and installed as AquaSpace `0.
 
 Both background and foreground AppKit fixture sequences passed: **87 live assertions** including cross-workspace merges into bare destinations, selected and inactive detachment, independent movement, incoming-selected merges, two-to-one splits, bare merges, remerging, and repeated selections. The fixture now verifies NSWindow membership and saves its own AX snapshot sequence. Two fixture setup failures (JSON dictionary keys and initial workspace placement) were corrected without changing or reinstalling AquaSpace. The complete suite preserved its eight existing baseline windows and restored workspace/focus; all disposable windows were closed.
 
-Across installation and the three fixture attempts, independent monitors recorded 380 process inventories, with peak one manager and no scan errors. No stock AeroSpace process was launched, and nothing was pushed. The [full live validation record](aquaspace.md#recovery-checkpoint-installation-and-live-validation) includes report paths, baseline details, limitations, and the final verification file. This subsequent live validation note is recorded in a local documentation checkpoint after `5cf47d53`.
+Across installation and the three fixture attempts, independent monitors recorded 380 process inventories, with peak one manager and no scan errors. No stock AeroSpace process was launched, and nothing was pushed. The [full live validation record](aquaspace-log.md#recovery-checkpoint-installation-and-live-validation) includes report paths, baseline details, limitations, and the final verification file. This subsequent live validation note is recorded in a local documentation checkpoint after `5cf47d53`.
 
 ## Independent Ghostty window moved during application checks
 
@@ -132,14 +132,14 @@ The fix is now installed as AquaSpace `0.21.3-aquaspace.20261014.7`, with app/CL
 
 The completed suite passed 109 assertions using disposable Ghostty terminals on dedicated test workspaces. It exercised three-tab creation, group movement and repeated selections, two independently observed active native Space changes, inactive/selected closes, and cleanup. Existing window 21423 stayed on workspace 2 after every operation and across 108 background window samples; original terminal identities and all 12 baseline workspace assignments were preserved. Two earlier setup/observer limitations were corrected in the harness, with no source changes or repeated installation. This supplies foreground application/Space-boundary coverage, not a captured replay of the earlier missing AX trace or Ghostty merge/detach coverage.
 
-The [full installation and live record](aquaspace.md#ghostty-fix-installation-and-live-validation-after-f13337a2) includes evidence paths and the later focus/fullscreen changes observed after successful cleanup. Final read-only checks confirm the original Ghostty workspace, all baseline workspace assignments, exclusive ownership, installation hashes, and closed disposable windows without overwriting newer desktop state. These live validation notes are included in a local documentation checkpoint after `f13337a2`; nothing was pushed.
+The [full installation and live record](aquaspace-log.md#ghostty-fix-installation-and-live-validation-after-f13337a2) includes evidence paths and the later focus/fullscreen changes observed after successful cleanup. Final read-only checks confirm the original Ghostty workspace, all baseline workspace assignments, exclusive ownership, installation hashes, and closed disposable windows without overwriting newer desktop state. These live validation notes are included in a local documentation checkpoint after `f13337a2`; nothing was pushed.
 
 
 The subsequent explicitly authorized isolated Ghostty native-menu suite completed
 31 live assertions against the installed `f13337a2` release. Actual Ghostty merges,
 three-to-two and two-to-one detach boundaries, independent moves and remerges all
 passed while existing window 21423 stayed on workspace 2. No production changes
-were needed. The [validation record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
+were needed. The [validation record](aquaspace-log.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
 distinguishes the completed suite from earlier harness setup/lookup failures and
 records independent native membership and single-manager monitoring.
 
@@ -220,7 +220,7 @@ sole AquaSpace launch. The requested Zen/ownership checks passed, but the
 broader all-window comparison failed for seven other stock IDs that remain in
 WindowServer metadata and are absent from the apps' current AX window lists.
 That separate discrepancy remains unresolved and the full result remains
-failed. See the [scoped live validation and limitations](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).
+failed. See the [scoped live validation and limitations](aquaspace-log.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).
 
 ## Seven stock-only IDs: retained discovery state and one-shot restoration — 2026-10-15
 
@@ -479,7 +479,7 @@ Evidence is in `.debug/aquaspace/deferred-handoff/run-20261015-221802/`, especia
 `fullscreen-omission.json`, `stock-handoff-session.json`, `cold-discovery.json`,
 `cold-pending-export.json`, `rediscovery-observations.json`, `final-export.json`,
 `manager-samples.jsonl` and `results.json`. See the [installation, guarded stops,
-identities and full validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
+identities and full validation record](aquaspace-log.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
 
 ## Deferred-restoration command and root-continuity safety repair — 2026-10-16
 
@@ -619,7 +619,7 @@ restored original ChatGPT focus/fullscreen state. The automatic-callback source,
 regressions and these notes are included in this local checkpoint. Creating it
 involved no additional tests, builds, installations, app/helper launches or live
 checks; nothing was pushed.
-See the [installation, setup failures and successful live evidence](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16).
+See the [installation, setup failures and successful live evidence](aquaspace-log.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16).
 
 
 ## Discovery initialization and superseded callback ordering — 2026-10-16

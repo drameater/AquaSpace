@@ -8,7 +8,7 @@ no personal Ghostty instance: a separate identity-pinned disposable sentinel was
 the protected baseline. It retained its workspace and native IDs throughout.
 The harness recorded 2,136 sole-manager and 771 baseline-window samples; all
 disposable windows/processes were removed afterward. See the
-[daily-use validation](../../../dev-docs/aquaspace.md#daily-use-continuation-and-renaming-validation--2026-10-17).
+[daily-use validation](../../../dev-docs/history/aquaspace-log.md#daily-use-continuation-and-renaming-validation--2026-10-17).
 Earlier records below describe their own builds and baselines.
 
 The earlier authorized **v7** validation on **2026-10-15** passed **32 assertions**, including
@@ -18,7 +18,7 @@ stayed on its current baseline workspace 1, disposable tabs/processes were remov
 and 2,240 manager inventories observed the same sole AquaSpace. Three direct native
 merges and three detachments passed with exact restoration-source admission and
 the final retained-menu selection checks enabled. See the
-[completed focus-fixed v7 run](../../../dev-docs/aquaspace.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
+[completed focus-fixed v7 run](../../../dev-docs/history/aquaspace-log.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
 
 The subsequent review found two remaining focus-admission gaps. Current Python
 source now requires fresh exact native/model ownership for restoration and
@@ -26,7 +26,7 @@ rechecks the retained requested menu window after the last membership callback.
 All **223 Python offline tests** passed, including both reproduced failures,
 before the separately authorized complete live run above validated the committed
 fixes. The native v7 library is unchanged; no rebuild or installation was needed.
-See the [offline focus repair](../../../dev-docs/aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
+See the [offline focus repair](../../../dev-docs/history/aquaspace-log.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
 
 Current source admission requires **`ghostty-topology-retained-source-v7`** for
 pinned foreground targets and exact menu membership. The earlier v7 library
@@ -35,7 +35,7 @@ read failed after opening the Window menu. It passed 12 preliminary checks,
 preserved all eight baseline assignments and observed the same sole AquaSpace
 in 800 samples, but did not validate merge/detach or focus restoration. Separately
 authorized background recovery removed all disposable tabs/processes while
-preserving the new ChatGPT focus. See the [v7 attempt and recovery](../../../dev-docs/aquaspace.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
+preserving the new ChatGPT focus. See the [v7 attempt and recovery](../../../dev-docs/history/aquaspace-log.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
 Older libraries, including v6, are refused before capture or launch. The earlier
 v6 validation and failed v7 attempts remain historical records for their exact builds.
 
@@ -43,11 +43,11 @@ The subsequent offline repair dispatches the retained menu item directly from
 the closed menu tree, keeping fresh exact membership checks before its single
 press. It never opens the menu first or falls back to cached membership.
 All **211 Python offline tests** passed before the earlier successful menu-reader
-live retry recorded [here](../../../dev-docs/aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
+live retry recorded [here](../../../dev-docs/history/aquaspace-log.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
 The first fixed-v7 attempt stopped on a real Helium focus change before menu
 dispatch; its disposable process was safely removed without changing that focus.
 The subsequent complete retry followed renewed explicit idle confirmation. See
-the [offline menu-tracking repair](../../../dev-docs/aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
+the [offline menu-tracking repair](../../../dev-docs/history/aquaspace-log.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
 
 This opt-in harness reuses the **already running, sole installed AquaSpace**.
 It has no installer, manager launch, stop, pause, resume, or recovery path.
@@ -211,7 +211,7 @@ preserved all 11 baseline assignments/fullscreen states and original Ghostty
 window 21423 on workspace 2; 913 process inventories observed the same sole
 AquaSpace. All disposable windows/processes were removed. Final desktop focus
 differed from the initial snapshot, so full focus restoration is not claimed.
-See the [complete live record](../../../dev-docs/aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15)
+See the [complete live record](../../../dev-docs/history/aquaspace-log.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15)
 for evidence and the final read-only focus check.
 
 
@@ -267,8 +267,8 @@ Rebuild `launch-ghostty` with the command above before using this reader.
 Three additional offline adapter tests cover binding, foreground churn, invalid
 PIDs, read failures and mismatched AX ownership. All **113** AquaSpace Python
 offline tests pass. The live run preserved all 11 original windows and observed
-the same sole manager in 875 inventories. See the [live validation record](../../../dev-docs/aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
-and [earlier diagnosis](../../../dev-docs/aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
+the same sole manager in 875 inventories. See the [live validation record](../../../dev-docs/history/aquaspace-log.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
+and [earlier diagnosis](../../../dev-docs/history/aquaspace-log.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
 
 ## Offline focus-safety repair after 4492ad71
 
@@ -311,7 +311,7 @@ The subsequent v2 attempt and current v3 library are described below.
 Neither helper nor either window manager was rebuilt or launched during this
 offline repair; the Objective-C helper received a syntax-only compiler check.
 These changes are not yet live-validated. The earlier 32-assertion run predates
-this repair. See the [offline repair record](../../../dev-docs/aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).
+this repair. See the [offline repair record](../../../dev-docs/history/aquaspace-log.md#offline-execution-focus-safety-repair-after-4492ad71).
 
 ## Initial activation follow-up and interrupted live runs after eff15f35
 
@@ -334,7 +334,7 @@ The guards refused restoration rather than overriding those changes. All
 disposable processes were cleaned up; original Ghostty window 21423 stayed on
 workspace 2, and 1,636 process samples saw the same sole AquaSpace. A later
 read-only snapshot matched the original desktop focus, but this is not a passing
-restoration result. See the [attempt record](../../../dev-docs/aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).
+restoration result. See the [attempt record](../../../dev-docs/history/aquaspace-log.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).
 
 ## Offline destination and source-identity repair after ec38b622
 
@@ -372,7 +372,7 @@ same-title replacement, windowless sources, pointer width, failed confirmation,
 stale-library rejection and native-response cleanup without retries. The native
 source passed a syntax-only compiler check. No apps, diagnostic helpers or
 diagnostic native libraries were launched/loaded; no live test or installation
-was performed. Live validation remains pending. See the [repair record](../../../dev-docs/aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).
+was performed. Live validation remains pending. See the [repair record](../../../dev-docs/history/aquaspace-log.md#offline-destination-and-retained-source-repair-after-ec38b622).
 
 ## Lost-executable process inventory and first v3 live attempt
 
@@ -388,7 +388,7 @@ unverifiable processes continue to block. No additional privilege is required.
 The command wrapper also preserves empty tab-separated fields and whitespace
 in window titles, removing only line endings. All **173 Python tests** and
 **22 Swift ownership tests** pass, including the new inventory and parsing
-regressions. See the [diagnosis and handoff record](../../../dev-docs/aquaspace.md#lost-executable-inventory-repair-and-ordered-handoff--2026-10-15).
+regressions. See the [diagnosis and handoff record](../../../dev-docs/history/aquaspace-log.md#lost-executable-inventory-repair-and-ordered-handoff--2026-10-15).
 
 The first v3 live attempt after that repair reached initial creation/activation,
 then stopped when native/model focus returned to the original desktop window.
@@ -424,7 +424,7 @@ The fresh-reader live attempt passed initial tab grouping, movement and selectio
 then stopped on a real native/model foreground change to Raycast. Disposable
 cleanup, sole-manager observations and existing Ghostty preservation passed their
 separate checks, but complete merge/detach and guarded focus restoration remain
-pending. See the [attempt and regression record](../../../dev-docs/aquaspace.md#in-process-foreground-cache-repair-and-idle-attempts--2026-10-15).
+pending. See the [attempt and regression record](../../../dev-docs/history/aquaspace-log.md#in-process-foreground-cache-repair-and-idle-attempts--2026-10-15).
 
 A later uninterrupted portion of the next run did pass the core real native
 merge/detach cases, including a cross-workspace destination merge, both three-tab
@@ -432,7 +432,7 @@ and two-to-one detachments, independent movement, merging three bare windows and
 all subsequent selections on destination B. Another real Raycast foreground
 change stopped it before the final repeated cycle/restoration. That interrupted
 run did not establish restoration success; see the
-[extended attempt](../../../dev-docs/aquaspace.md#extended-native-mergedetach-attempt-after-renewed-idle-confirmation).
+[extended attempt](../../../dev-docs/history/aquaspace-log.md#extended-native-mergedetach-attempt-after-renewed-idle-confirmation).
 Switching back to this chat during the test also ends foreground authorization;
 leave the desktop untouched until completion is reported.
 
@@ -516,7 +516,7 @@ The subsequent authorized v6 retry passed all 32 real Ghostty checks, including
 each native/background cleanup admission and stable focus before/after cleanup.
 It preserved all seven current baseline assignments, original Ghostty identities
 and the same sole manager in 1,893 samples. Only disposable PID 2282 exited.
-See the [complete v6 result](../../../dev-docs/aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
+See the [complete v6 result](../../../dev-docs/history/aquaspace-log.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
 
 ## Offline foreground-target and exact-menu ownership repair after 44578401
 

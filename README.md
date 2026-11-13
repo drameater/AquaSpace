@@ -18,7 +18,7 @@ tiling, configuration format and original icon.
   replacement. Failed updates retain a recovery record and never launch a rollback
   manager automatically.
 
-The [validation notes](dev-docs/aquaspace.md) record the exact releases and cases
+The [validation notes](dev-docs/history/aquaspace-log.md) record the exact releases and cases
 checked in Finder, Ghostty and AppKit fixtures, plus offline regressions. AquaSpace
 uses ordinary macOS Accessibility permission. It requires no sudo, SIP changes
 or code injection.
@@ -47,7 +47,7 @@ the builder refuses to silently replace a missing identity or sign ad hoc.
 This stages a certificate-signed bundle at
 `.debug/aquaspace/release/AquaSpace.app` without installing or launching it.
 If you need a specific SDK, pass `--sdk /path/to/MacOSX.sdk`; see the
-[SDK and build options](dev-docs/aquaspace.md#build-locally).
+[SDK and build options](dev-docs/history/aquaspace-log.md#build-locally).
 
 For the first installation, quit any running window manager, then install the
 staged build:
@@ -72,7 +72,7 @@ The updater builds, saves the sole installed AquaSpace's session, waits for it t
 exit, then starts the replacement once. It refuses to update while stock
 AeroSpace or another manager is running. Pass build options such as `--sdk` as
 needed, or use `--dont-rebuild` after staging a build yourself. See
-[update and recovery details](dev-docs/aquaspace.md#updating-aquaspace).
+[update and recovery details](dev-docs/history/aquaspace-log.md#updating-aquaspace).
 
 ## Configuration and commands
 

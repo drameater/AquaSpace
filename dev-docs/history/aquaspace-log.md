@@ -251,7 +251,7 @@ The harness stops on unexpected errors and never starts a fallback manager. It c
 
 ## Local installation history
 
-The original AeroSpace 0.21.3-Beta app and CLI are saved under `.debug/native-tabs/install-backup/`. Before separation, the native-tabs patch temporarily replaced that installation; the separation restores those original files and installs the patched fork under its own name. Native tab implementation and validation details are in [native-tabs.md](native-tabs.md).
+The original AeroSpace 0.21.3-Beta app and CLI are saved under `.debug/native-tabs/install-backup/`. Before separation, the native-tabs patch temporarily replaced that installation; the separation restores those original files and installs the patched fork under its own name. Native tab implementation and validation details are in [native-tabs.md](native-tabs-log.md).
 
 
 ## Automated native Ghostty merge/detach validation after a243c7f0
@@ -321,7 +321,7 @@ Local evidence: `.debug/aquaspace/ghostty-topology/run-20261014-233015/`
 record. The executed working harness/helpers are in the parent directory.
 
 The reusable source is saved under
-[`script/native-tabs-smoke/ghostty-topology/`](../script/native-tabs-smoke/ghostty-topology/README.md).
+[`script/native-tabs-smoke/ghostty-topology/`](../../script/native-tabs-smoke/ghostty-topology/README.md).
 Its runner retains the tested core and adds repository-relative paths, an explicit
 `--run-live` gate and a required `--expect-existing-window ID:WORKSPACE` baseline.
 Those entrypoint changes were checked offline; the live suite used the working
