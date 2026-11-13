@@ -230,7 +230,7 @@ struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRestoration
         var value = AquaSpaceProcUniqueInfo()
         let count = unsafe proc_pidinfo(pid, 17 /* PROC_PIDUNIQIDENTIFIERINFO */, 0, &value, 56)
         guard count == 56 else { throw scanError("exec-generation", pid: pid, count: count, code: errno) }
-        let uuid = withUnsafeBytes(of: value.uuid) { unsafe Array($0) }
+        let uuid = unsafe withUnsafeBytes(of: value.uuid) { unsafe Array($0) }
         return WindowManagerExecGeneration(uuid: uuid, uniqueId: value.uniqueid, version: value.idversion)
     }
 
