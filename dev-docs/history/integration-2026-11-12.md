@@ -8,8 +8,8 @@ at the end are still to be done.
 ## Scope
 
 The work is on the branch `fix/assessment-2026-11`, from `79e53f21` to
-`87b2c589`, plus the documentation commits that bring this record up to date.
-It came in three stages:
+`14fca076`, plus the documentation commits that bring this record up to date.
+It came in four stages:
 
 1. **First integration (2026-11-12).** Four workstreams, merged in `430b8b35`,
    `aad54e3d` and `1b52b88a`, and a joining pass, merged in `c8e6e9b4`.
@@ -17,10 +17,13 @@ It came in three stages:
    first review round, merged in `c858ed14` (offline harness), `03818580`
    (updater, builder, signing) and `1c307163` (Swift app), with the direct
    commits `74740866`, `16473ad0` and `87b2c589`.
-3. **Documentation (2026-11-13).** The documents describe the code at
-   `87b2c589`.
+3. **Second review fixes (2026-11-13).** Fixes for the findings of the second
+   review round in the updater and the builder, merged in `2cce50b5`, with
+   the direct commit `14fca076`.
+4. **Documentation (2026-11-13).** The documents describe the code at
+   `14fca076`.
 
-`git log --oneline 79e53f21..87b2c589` lists every commit.
+`git log --oneline 79e53f21..14fca076` lists every commit.
 
 ## What changed
 
@@ -97,13 +100,15 @@ after `87b2c589`.
 - **Offline suites.** `python3 script/test-offline.py --sdk
   /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk` runs the Python
   suite and the five Swift suites. See the [guide](../aquaspace.md#offline-suites).
-  At `87b2c589` the suites have 444 (Python), 60 (ownership), 53 (native tabs),
-  15 (hidden handoff), 121 (window discovery) and 2 (native tab model) tests.
-  The Python suite passed with 444 tests on the documentation branch on
-  2026-11-13. The Swift counts are the declared tests; the integrator reports
-  that all suites passed.
-- **Compiles.** The integrator reports a debug and a release compile of the
-  app. No compiled app was installed or started.
+  On 2026-11-13 the integrator ran this command at `14fca076`. All six suites
+  passed: 481 (Python), 60 (ownership), 53 (native tabs), 15 (hidden handoff),
+  121 (window discovery) and 2 (native tab model) tests. The Python suite also
+  passed with 481 tests under `/usr/bin/python3` (3.9).
+- **Compiles.** The native tab model suite compiles the whole `AppBundle`
+  library in the debug configuration. The integrator also compiled the release
+  configuration of both products at `14fca076` with `swift build -c release` and
+  the macOS 26.5 SDK, without signing. No compiled app was installed or
+  started.
 - **Help output.** `script/install-aquaspace.py --help`,
   `script/build-aquaspace.py --help` and `script/test-offline.py --help` match
   the commands that the [guide](../aquaspace.md) describes.
@@ -112,8 +117,8 @@ after `87b2c589`.
     updater it found one high, four medium and seven low defects. The review
     fixes above address them.
   - Round two found no high or medium Swift defect. In the updater it found
-    one medium and several low defects. A final fix pass for these findings
-    followed; this record does not list its commits.
+    one medium and several low defects. The second review fixes above
+    address them. The integrator read those fixes; no third review round ran.
 - **Earlier measurements.** Commit `75102516` records about 0.11 ms CPU for
   each periodic scan in a release build of the production sources, against
   about 8-10 ms before. An assessment on 2026-11-12 measured about 12% of one

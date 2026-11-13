@@ -305,16 +305,19 @@ The builder:
 9. Signs the CLI and the app with the persistent identity and refuses ad-hoc
    signing. The designated requirement must name `local.aquaspace` and a
    certificate. Both signatures must pass `codesign --verify --strict`.
-10. Publishes the result. First it writes `build.json` to the output folder:
+10. Publishes the result. First it copies the previous `build.json` into the
+    staging folder. Then it writes the new `build.json` to the output folder:
     version, bundle version, Git revision, dirty flag, source hashes, app and
     CLI hashes, and designated requirement. Then it exchanges the new bundle
     with `.debug/aquaspace/release/AquaSpace.app` in one atomic step. A volume
-    without atomic exchange gets two renames. If the exchange fails, the
-    previous `build.json` is put back. If any earlier step fails, the previous
-    build stays.
+    without atomic exchange gets two renames. If a step fails, the previous
+    build and its manifest stay. If an error comes after the new app is in
+    place, the new manifest stays with it.
 
-If the builder stops between `build.json` and the app, the new manifest does
-not match the old app. The installer then refuses the build; build again.
+After a power loss during the publish, the next build puts the previous app
+and its manifest back together. If a power loss comes between the manifest and
+the app, the new manifest does not match the old app. The installer then
+refuses the build and says to build again.
 
 It does not install or start anything unless you pass `--install-and-restart`.
 
@@ -397,9 +400,11 @@ installer:
    [Signing identity change](#signing-identity-change).
 5. Creates the update record `/Applications/.aquaspace-update-<id>/` with a
    journal. Each phase is written to the journal before it starts. Copies the
-   build into the record and verifies the copy again. If the build has a
-   `build.json`, the copy's hashes, version and designated requirement must
-   match it.
+   build into the record and verifies the copy again. The copy's hashes,
+   version and designated requirement must match `build.json`. A builder output
+   folder (one that holds `.aquaspace-build.lock`) must have `build.json`. For
+   another `--source` without one, the installer says that it skipped this
+   check.
 6. Asks the running AquaSpace for its status and session through the installed
    CLI, and checks that the CLI belongs to the running process. Saves the
    session in the record.
@@ -516,9 +521,12 @@ bundle to the journal before they change a file.
 | The new AquaSpace may or may not have started. | If it runs: `--confirm <record>`. If no manager runs: wait 30 seconds after the start attempt, then `--resume <record>`. |
 | The new AquaSpace was started (exit status 3). | If it runs: allow it in Accessibility settings, then `--confirm <record>`. If no manager runs: `--resume <record>`. |
 | An unreadable update record blocks new installs. | `--set-aside <record>`. |
+| A recovery of this update started but did not finish. | `--recover <record>`. No manager may run. `--resume` and `--confirm` refuse. |
+| The installation does not hold the new bundle from this update. | `--recover <record>`. |
+| The record was written by a newer AquaSpace updater. | Finish it with the updater version that wrote it. |
 
-Each of these messages also names `--recover`, which puts the previous version
-back instead.
+Each message for an unfinished update of this updater also names `--recover`,
+which puts the previous version back instead.
 
 ### Recovery commands
 
@@ -527,9 +535,9 @@ Each command takes the path of an update record and holds the install lock.
 | Command | What it does |
 | --- | --- |
 | `--resume <record>` | Finishes an interrupted update: completes the file exchange. If the original command was `--restart`, it then starts the new AquaSpace once and waits up to the ready timeout for it to take control. A file-only update (`--allow-running-stock`) starts nothing and allows only the stock AeroSpace that the update kept running, with an unchanged identity. Any other running manager makes it refuse; if that manager is the AquaSpace from this update, it prints the `--confirm` command. After a start attempt, it refuses for 30 seconds, because macOS can still start the app. If no file was replaced (the record is in `staging` or `prepared`, or the old AquaSpace still runs), it closes the record as aborted and changes nothing. |
-| `--confirm <record>` | Completes an update whose new files are in place, while the new AquaSpace runs. It stops and starts nothing. The one running manager must be the AquaSpace from this update: the process that the update started, or any process of the installed app, of this user, that started after the new files were in place (for example, after a restart of the Mac). It waits up to the ready timeout for that process to take control, then completes the update. |
-| `--recover <record>` | Restores the previous files and starts nothing. If no file was replaced, it closes the record as aborted. Otherwise every manager must be stopped, except the stock AeroSpace that a file-only update kept running. The new bundle stays in the record as `unconfirmed.app`. It refuses if the installation or the previous bundle in the record changed after the update. It reports success only after it checks by content (the hash of the main executable) that the installation holds the previous bundle. After a first installation there is no previous version: it closes the record and leaves the new files in place. |
-| `--set-aside <record>` | Renames an unreadable record in its folder to `.aquaspace-set-aside-<id>-<date>-<time>`, so that it stops blocking installs. It deletes nothing and starts or stops nothing. It refuses a readable record (and prints the commands for its state), a record of another user, a record that changed in the last 30 seconds (an update can still use it), and a record that holds a bundle while the installation is missing or damaged (it can hold the only copy). Remove a set-aside record yourself when you no longer need it. |
+| `--confirm <record>` | Completes an update whose new files are in place, while the new AquaSpace runs. It stops and starts nothing. The one running manager must be the AquaSpace from this update: the process that the update started, or any process of the installed app, of this user, that started after the new files were in place (for example, after a restart of the Mac). The installed bundle must be the new bundle of this update: the same folder, the same main executable, a valid signature and the recorded signing identity. It waits up to the ready timeout for that process to take control, then completes the update. |
+| `--recover <record>` | Restores the previous files and starts nothing. If no file was replaced, it closes the record as aborted. Otherwise every manager must be stopped, except the stock AeroSpace that a file-only update kept running. The new bundle stays in the record as `unconfirmed.app`. It refuses if the installation or the previous bundle in the record changed after the update. Before it changes a file, it writes the phase `recovering` to the journal. If it is interrupted after that, only `--recover` continues the record. It reports success only after it checks that the installation holds the previous bundle: the same main executable, a valid signature and the recorded signing identity. After a first installation there is no previous version: it closes the record and leaves the new files in place. |
+| `--set-aside <record>` | Renames an unreadable record in its folder to `.aquaspace-set-aside-<id>-<date>-<time>`, so that it stops blocking installs. It deletes nothing and starts or stops nothing. It refuses a readable record (and prints the commands for its state), a record of another user, a record that changed in the last 30 seconds (an update can still use it), and a record that holds a bundle while the installation is missing or damaged (it can hold the only copy). A record from a newer updater also needs `--allow-newer-record`; use that only if the newer updater is no longer available and no update runs. The summary names the bundles that the record holds. Any of them can be the previous version. Remove a set-aside record yourself when you no longer need it. |
 
 **Restore the previous version** instead of finishing an update: quit all
 managers, then run
@@ -569,7 +577,7 @@ WindowServer or process state.
 | `window-discovery` | `python3 script/test-window-discovery-offline.py` | Stock versus fork discovery, deferred restoration, callback ordering and user-intent rules. |
 | `native-tab-model` | `python3 script/test-native-tab-model-offline.py --sdk <path>` | Native tab bindings against the real in-memory model tree. |
 
-On 2026-11-13 the suites had 444, 60, 53, 15, 121 and 2 tests, in the order of
+On 2026-11-13 the suites had 481, 60, 53, 15, 121 and 2 tests, in the order of
 the table.
 
 Needs: Python 3 and Git for the Python suite; a Swift toolchain with Swift

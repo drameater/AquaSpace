@@ -26,7 +26,7 @@ the owner's machine; `.debug` is not in Git.
 
 | Date | Checkpoint | Entry | Outcome as recorded | Result |
 | --- | --- | --- | --- | --- |
-| 2026-11-12 to 2026-11-13 | `fix/assessment-2026-11` at `87b2c589` | [Integration of 2026-11-12](integration-2026-11-12.md) | New builder and updater, faster peer watch, testable controller lifecycle, window-level cache fix, six upstream commits, one offline test entry point, two review rounds, current documents. 444 Python offline tests passed. Not installed. | Passed (offline); live checks pending |
+| 2026-11-12 to 2026-11-13 | `fix/assessment-2026-11` at `14fca076` | [Integration of 2026-11-12](integration-2026-11-12.md) | New builder and updater, faster peer watch, testable controller lifecycle, window-level cache fix, six upstream commits, one offline test entry point, two review rounds, current documents. All six offline suites passed (481 Python tests). Not installed. | Passed (offline); live checks pending |
 
 ## AquaSpace log
 
