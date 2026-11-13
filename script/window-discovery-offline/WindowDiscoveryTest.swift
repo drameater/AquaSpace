@@ -25,6 +25,26 @@ extension OfflineWindowDiscoveryTests {
         #expect(aquaIds == [30881])
     }
 
+    // Under the lock screen the refresh takes no WindowServer snapshot, and the
+    // tab state machine does not run, so it must not read one either.
+    @Test func lockScreenRefreshReadsNoWindowServerInventory() async throws {
+        let fixture = capturedFixtures[0]
+        let roots = fixture.roots(), aqua = ReplayAquaApp()
+        aqua.axApp.threadGuarded.set(Ax.windowsAttr, fixture.exposed.map { (windowId: $0, ax: roots[$0]!) })
+        let reads = ReplayDesktop.ReadCounter()
+        try await ReplayDesktop.$reads.withValue(reads) {
+            _ = try await aqua.refreshAndGetAliveWindowIds(frontmostAppBundleId: lockScreenAppBundleId, windowServerIds: nil)
+        }
+        #expect(reads.count == 0)
+        #expect(aqua.nativeTabs.threadGuarded.observations.isEmpty)
+        // The same refresh outside the lock screen does read and observe.
+        try await ReplayDesktop.$reads.withValue(reads) {
+            _ = try await aqua.refreshAndGetAliveWindowIds(frontmostAppBundleId: nil, windowServerIds: nil)
+        }
+        #expect(reads.count == 1)
+        #expect(!aqua.nativeTabs.threadGuarded.observations.isEmpty)
+    }
+
     @Test(arguments: capturedFixtures)
     func bothImplementationsRetainTheSameWarmReferences(fixture: DiscoveryFixture) async throws {
         let roots = fixture.roots(), stock = ReplayStockApp(), aqua = ReplayAquaApp()

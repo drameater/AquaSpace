@@ -32,7 +32,8 @@ def prepare(args):
             text, drop=('AppKit', 'Common'), add=('Foundation', 'CoreFoundation')))
     for name in ('ReplayAX.swift', 'ReplayRuntime.swift', 'ReplayNativeTabEnvironment.swift'):
         package.copy(source + name, harness.SHARED_SWIFT / name)
-    package.copy(tests + 'NativeTabReplayTest.swift', harness.ROOT / 'script/native-tabs-offline/NativeTabReplayTest.swift')
+    for name in ('NativeTabReplayTest.swift', 'NativeTabBaselineTest.swift'):
+        package.copy(tests + name, harness.ROOT / 'script/native-tabs-offline' / name)
     # Keep the existing matcher and queue regressions, with memory-only AX identities.
     existing = harness.SwiftSource('Sources/AppBundleTests/tree/NativeTabReplacementTest.swift').without(*TREE_TESTS)
     package.write(tests + 'NativeTabReplacementTest.swift', harness.retarget_imports(
