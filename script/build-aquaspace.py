@@ -149,7 +149,7 @@ def stage_sources(root, source):
     return manifest, digest
 
 
-def compile_products(source, scratch, sdk=None, jobs=2, sandbox=False):
+def compile_products(source, scratch, sdk=None, jobs=2, sandbox=True):
     """Compile the app and CLI in release configuration; return the binary directory."""
     flags = ["-c", "release", "--jobs", str(jobs), "--disable-automatic-resolution", "--skip-update",
              "--package-path", source, "--scratch-path", scratch]
@@ -257,7 +257,7 @@ def build(args, root):
     source = root / ".debug/aquaspace/source"
     manifest, digest = stage_sources(root, source)
     git_hash = write_legacy_version_sources(source / "Sources/Common", version.short, version.revision, digest)
-    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs)
+    binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
     args.output.mkdir(parents=True, exist_ok=True)
     for leftover in args.output.glob(".staging-*"):
         shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build.
@@ -292,6 +292,9 @@ def main(argv=None, root=ROOT):
     parser.add_argument("--output", type=Path, default=root / ".debug/aquaspace/release")
     parser.add_argument("--version", help="Override CFBundleShortVersionString; by default it is derived from git")
     parser.add_argument("--jobs", type=int, default=2, help="Limit compilation workers while using the machine")
+    parser.add_argument("--disable-sandbox", action="store_true",
+                        help="Evaluate package manifests without SwiftPM's sandbox. Use it only when this "
+                             "script runs inside another sandbox that does not allow nested sandboxes")
     parser.add_argument("--signing-identity", help="Persistent code-signing certificate; defaults to AquaSpace's local identity")
     parser.add_argument("--signing-keychain", type=Path, help="Keychain containing the explicit signing identity")
     parser.add_argument("--install-and-restart", action="store_true", help="After building, use the serialized installer to replace and restart the sole installed AquaSpace")

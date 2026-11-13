@@ -223,6 +223,16 @@ class BundleTests(BuilderTest):
             self.assertIn(b'0.21.3-aquaspace.71.g79e53f21', data)
             self.assertIn(REVISION.encode(), data)
 
+    def test_package_sandbox_is_on_unless_disabled(self):
+        self.main()
+        swift = [c for c in self.tools.calls if Path(c[0]).name == 'swift']
+        self.assertTrue(swift)
+        self.assertFalse(any('--disable-sandbox' in c for c in swift))
+        self.tools.calls.clear()
+        self.main('--disable-sandbox')
+        swift = [c for c in self.tools.calls if Path(c[0]).name == 'swift']
+        self.assertTrue(swift and all('--disable-sandbox' in c for c in swift))
+
 
 class FailureTests(BuilderTest):
     def stage_previous_build(self):
