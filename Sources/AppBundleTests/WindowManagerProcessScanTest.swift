@@ -224,22 +224,43 @@ struct WindowManagerProcessCacheTest {
         #expect(try cache.peers().map(\.pid) == [11])
     }
 
+    // A manager behind a renamed executable is known only by its bundle. One
+    // failed Info.plist read must delay its detection by one scan (about 200 ms).
+    @Test func transientlyUnreadableBundleIsReadAgainOnTheNextScan() throws {
+        let api = desktop()
+        let renamed = "/Applications/Renamed.app/Contents/MacOS/Renamed"
+        api.paths[13] = renamed
+        api.bundles[renamed] = WindowManagerBundleMetadata(identifier: "bobko.aerospace", executable: "Renamed")
+        api.deniedMetadata = [renamed]
+        let cache = WindowManagerProcessCache(api: api)
+        #expect(try cache.peers().isEmpty)
+        api.deniedMetadata = []
+        #expect(try cache.peers().map(\.pid) == [13])
+    }
+
+    // A bundle that stays unreadable must cost almost nothing: after a short
+    // back-off, at most one read per `metadataRetryScans` scans (about 5 s).
     @Test func unreadableBundleIsRetriedRarelyNotEveryScan() throws {
         let api = desktop()
         let renamed = "/Applications/Renamed.app/Contents/MacOS/Renamed"
         api.paths[13] = renamed
         api.deniedMetadata = [renamed]
         let cache = WindowManagerProcessCache(api: api)
-        #expect(try cache.peers().isEmpty)
-        for _ in 0 ..< WindowManagerProcessCache.metadataRetryScans - 1 { #expect(try cache.peers().isEmpty) }
-        #expect(api.metadataReads[renamed] == 1)
-        // The bundle becomes readable and is a manager: the bounded retry finds it.
+        let scans = 8 * WindowManagerProcessCache.metadataRetryScans
+        var readsBySecondHalf = 0
+        for scan in 1 ... scans {
+            #expect(try cache.peers().isEmpty)
+            if scan == scans / 2 { readsBySecondHalf = api.metadataReads[renamed] ?? 0 }
+        }
+        let total = api.metadataReads[renamed] ?? 0
+        #expect(total - readsBySecondHalf <= scans / 2 / WindowManagerProcessCache.metadataRetryScans)
+        #expect(total <= scans / WindowManagerProcessCache.metadataRetryScans + 6)
+        // The bundle becomes readable and is a manager: the capped retry finds it.
         api.deniedMetadata = []
         api.bundles[renamed] = WindowManagerBundleMetadata(identifier: "bobko.aerospace", executable: "Renamed")
         var found: [WindowManagerProcess] = []
-        for _ in 0 ..< 2 where found.isEmpty { found = try cache.peers() }
+        for _ in 0 ..< WindowManagerProcessCache.metadataRetryScans where found.isEmpty { found = try cache.peers() }
         #expect(found.map(\.pid) == [13])
-        #expect(api.metadataReads[renamed] == 2)
     }
 
     @Test func unreadableGenerationIsClassifiedOnEveryScan() throws {
