@@ -361,8 +361,8 @@ any other manager runs.
 | `... --allow-running-stock` | File-only install while the one stock AeroSpace (`/Applications/AeroSpace.app`) keeps running. The installer checks that stock's identity does not change and never signals it. Not with another mode. |
 | `... --allow-identity-change` | Accept a build signed with another identity. See [Signing identity change](#signing-identity-change). |
 | `... --ready-timeout <seconds>` | How long to wait for the new AquaSpace to take control: more than 0, at most 3600, default 30. With `--restart`, `--resume` or `--confirm`. |
-| `... --resume <record>`, `--confirm <record>`, `--recover <record>` | Finish an unfinished update. See [Recovery](#recovery). |
-| `... --archive-backups` | Tidy the update records (see below). Starts and stops nothing. |
+| `... --resume <record>`, `--confirm <record>`, `--recover <record>`, `--set-aside <record>` | Finish or close an unfinished update. See [Recovery commands](#recovery-commands). |
+| `... --archive-backups` | Tidy the [update records](#update-records). Starts and stops nothing. |
 
 `--source` (default `.debug/aquaspace/release/AquaSpace.app`) and `--target`
 (default `/Applications/AquaSpace.app`) select other bundles.
@@ -380,9 +380,8 @@ any other manager runs.
    (30 seconds by default) and tells you when it starts to wait.
 4. If you allow it in time, the installer finishes with exit status 0.
    Otherwise it stops with exit status 3, leaves AquaSpace running and prints a
-   `--confirm` command. Allow AquaSpace, then run that command. `--confirm`
-   stops and starts nothing. It waits again for AquaSpace to take control, then
-   completes the update.
+   [`--confirm`](#recovery-commands) command. Allow AquaSpace, then run that
+   command.
 
 ### Updates
 
@@ -391,7 +390,7 @@ installer:
 
 1. Takes the [install lock](#install-lock). A second installer stops.
 2. [Tidies the update records](#update-records). It refuses if an earlier
-   update is unfinished and prints the next command for it.
+   update is unfinished or a record is unreadable, and prints the next command.
 3. Verifies the staged app and CLI signatures and refuses a hash-bound (ad-hoc)
    identity. Refuses if any manager other than the installed AquaSpace runs.
 4. Compares the signing identity of the build with the installed app. See
@@ -404,9 +403,10 @@ installer:
 6. Asks the running AquaSpace for its status and session through the installed
    CLI, and checks that the CLI belongs to the running process. Saves the
    session in the record.
-7. Stops the old AquaSpace with `SIGKILL` after a fresh identity check. This
-   skips the normal quit path, which moves windows. It waits up to 5 seconds
-   for the process to exit.
+7. Stops the old AquaSpace with `SIGKILL` after a fresh identity check, and
+   records in the journal that it sent the signal. `SIGKILL` skips the normal
+   quit path, which moves windows. The installer waits up to 5 seconds for the
+   process to exit.
 8. Exchanges the new and the old bundle in one atomic step. The old bundle
    goes into the record as `previous.app`. A volume without atomic exchange
    uses two renames; `--resume` can finish them.
@@ -418,11 +418,12 @@ installer:
 10. Marks the update complete and archives the old app as
     `previous.app.tar.gz`.
 
-Only `--restart` and `--resume` start an app, and each starts the new
-AquaSpace at most once. No step starts an old copy, a rollback app or a
-watchdog. If a step fails, the installer names the record, says what state
-remains, and prints the next command. If you press Ctrl-C before the old
-AquaSpace is stopped, the installer closes the record as aborted.
+Only `--restart` starts an app, and `--resume` of an update that was started
+with `--restart`. Each starts the new AquaSpace at most once. No step starts an
+old copy, a rollback app or a watchdog. If a step fails, the installer names the
+record, says what state remains, and prints the next command. If you press
+Ctrl-C before the old AquaSpace is stopped, the installer closes the record as
+aborted.
 
 ### Signing identity change
 
@@ -450,24 +451,50 @@ identity. `python3 script/aquaspace_signing.py` shows it.
 Every installer run takes an exclusive lock on
 `~/Library/Application Support/AquaSpace/Updater/.aquaspace-install-<uid>.lock`.
 Updaters before 2026-11 locked `/tmp/.aquaspace-install-<uid>.lock` or
-`/Applications/.aquaspace-install-<uid>.lock`. If you own one of these files,
-the installer locks it too, so an older updater that still runs cannot overlap.
+`/Applications/.aquaspace-install-<uid>.lock`, so the installer locks these too
+and an older updater that still runs cannot overlap:
+
+- It creates the `/tmp` file if it is missing, as the older updaters did. macOS
+  clears `/tmp` at startup.
+- It locks the `/Applications` file only if that file exists.
+- It skips, with a note, a file that is not a plain file of this user with one
+  link (for example, a file that another account made in `/tmp`). An older
+  updater refuses to start while that file is there, so it cannot overlap.
+
 The installer never deletes a lock file.
 
 ### Update records
 
-Each install keeps a record folder `/Applications/.aquaspace-update-<id>/`.
+Each install keeps a record folder `/Applications/.aquaspace-update-<id>/`. Its
+`journal.json` holds the phase of the update. The installer writes journals and
+archives with `F_FULLFSYNC`, so they reach the drive and not only its cache.
+
+Before each install, these records block it:
+
+- an unfinished record of this installation;
+- an unfinished record of another installation in the same folder (the message
+  gives that installation's commands);
+- a record that cannot be read. See `--set-aside` in
+  [Recovery commands](#recovery-commands).
+
 Before each install, and with `--archive-backups`, the installer tidies the
-records:
+records of this installation:
 
 - A record in the phase `staging` or `prepared` is closed as aborted. In these
   phases no process was stopped and no file was replaced, and the installer
   that wrote the record has ended.
 - In completed records (committed, recovered or aborted), the unused copy of
   the new build is deleted, and `previous.app` and `unconfirmed.app` become
-  `.tar.gz` archives. Live `.app` backups can show up in Privacy settings.
+  `.tar.gz` archives. Live `.app` backups can show up in Privacy settings. If an
+  interrupted exchange left another bundle under the name of the new build, it
+  is archived, not deleted.
 - Only the 5 newest completed records stay. **Older completed records are
   deleted, with their archived backups.** Unfinished records are never deleted.
+
+Records that updaters before 2026-11 wrote have no inode numbers for the
+bundles. `--resume` and `--recover` then identify each bundle by the hash of
+its main executable, and write the inode numbers and the hash of the previous
+bundle to the journal before they change a file.
 
 ## Recovery
 
@@ -483,16 +510,26 @@ records:
 | State in the message | Next command |
 | --- | --- |
 | No process was stopped and no file was replaced. | `--recover <record>` closes the record. Then run the update again. |
+| This update was file-only. | `--resume <record>`. |
 | The updater asked the old AquaSpace to stop. | If a manager still runs, nothing was replaced: `--recover <record>` closes the record. If no manager runs: `--resume <record>`. |
-| The new AquaSpace was not started. | `--resume <record>`: completes the file exchange and starts the new AquaSpace once. No manager may run. |
-| The new AquaSpace may or may not have started. | If it runs: `--confirm <record>`. If no manager runs: wait 30 seconds after the start attempt, then `--resume <record>`. `--resume` refuses earlier. |
+| The new AquaSpace was not started. | `--resume <record>`. If you started the new AquaSpace yourself after the files were replaced: `--confirm <record>`. |
+| The new AquaSpace may or may not have started. | If it runs: `--confirm <record>`. If no manager runs: wait 30 seconds after the start attempt, then `--resume <record>`. |
 | The new AquaSpace was started (exit status 3). | If it runs: allow it in Accessibility settings, then `--confirm <record>`. If no manager runs: `--resume <record>`. |
+| An unreadable update record blocks new installs. | `--set-aside <record>`. |
 
-`--confirm` stops and starts nothing. It completes the update only if the one
-running manager is the AquaSpace that this update started, from the installed
-bundle of this update. `--resume` and `--recover` close a record in which no
-process was stopped. Otherwise they refuse while a manager runs. If that
-manager is the AquaSpace from this update, they print the `--confirm` command.
+Each of these messages also names `--recover`, which puts the previous version
+back instead.
+
+### Recovery commands
+
+Each command takes the path of an update record and holds the install lock.
+
+| Command | What it does |
+| --- | --- |
+| `--resume <record>` | Finishes an interrupted update: completes the file exchange. If the original command was `--restart`, it then starts the new AquaSpace once and waits up to the ready timeout for it to take control. A file-only update (`--allow-running-stock`) starts nothing and allows only the stock AeroSpace that the update kept running, with an unchanged identity. Any other running manager makes it refuse; if that manager is the AquaSpace from this update, it prints the `--confirm` command. After a start attempt, it refuses for 30 seconds, because macOS can still start the app. If no file was replaced (the record is in `staging` or `prepared`, or the old AquaSpace still runs), it closes the record as aborted and changes nothing. |
+| `--confirm <record>` | Completes an update whose new files are in place, while the new AquaSpace runs. It stops and starts nothing. The one running manager must be the AquaSpace from this update: the process that the update started, or any process of the installed app, of this user, that started after the new files were in place (for example, after a restart of the Mac). It waits up to the ready timeout for that process to take control, then completes the update. |
+| `--recover <record>` | Restores the previous files and starts nothing. If no file was replaced, it closes the record as aborted. Otherwise every manager must be stopped, except the stock AeroSpace that a file-only update kept running. The new bundle stays in the record as `unconfirmed.app`. It refuses if the installation or the previous bundle in the record changed after the update. It reports success only after it checks by content (the hash of the main executable) that the installation holds the previous bundle. After a first installation there is no previous version: it closes the record and leaves the new files in place. |
+| `--set-aside <record>` | Renames an unreadable record in its folder to `.aquaspace-set-aside-<id>-<date>-<time>`, so that it stops blocking installs. It deletes nothing and starts or stops nothing. It refuses a readable record (and prints the commands for its state), a record of another user, a record that changed in the last 30 seconds (an update can still use it), and a record that holds a bundle while the installation is missing or damaged (it can hold the only copy). Remove a set-aside record yourself when you no longer need it. |
 
 **Restore the previous version** instead of finishing an update: quit all
 managers, then run
@@ -501,11 +538,7 @@ managers, then run
 python3 script/install-aquaspace.py --recover /Applications/.aquaspace-update-<id>
 ```
 
-`--recover` restores files only and starts nothing. The new bundle stays in the
-record as `unconfirmed.app`. It refuses if the installation changed after that
-update. Then start AquaSpace by hand (`open /Applications/AquaSpace.app`). After
-a first installation there is no previous version: `--recover` closes the record
-and leaves the new files in place.
+Then start AquaSpace by hand (`open /Applications/AquaSpace.app`).
 
 ## Tests
 
