@@ -60,7 +60,9 @@ struct WindowManagerSession: Codable, Equatable, Sendable {
 
 @MainActor
 enum WindowManagerHandoff {
-    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers)
+    private static let watchInventory = WindowManagerProcessCache()
+    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers,
+                                                          watchInventory: { try watchInventory.peers() })
     private static var startupSession: WindowManagerSession?
     private static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
     private static var restoringPending = false
@@ -93,7 +95,9 @@ enum WindowManagerHandoff {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 // A failed scan is retried on the next tick; only a detected peer stops control.
-                guard let peers = try? admission.observedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
+                // The incremental scan reads only changed processes, so an unbundled peer
+                // is still found within one interval (about 200 ms) of its exec.
+                guard let peers = try? admission.watchedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
                 await yieldToPeers(peers)
                 return
             }

@@ -101,11 +101,16 @@ final class WindowManagerAdmission {
     private(set) var ownership = WindowManagerOwnership.preparing
     private let lock: WindowManagerControllerLock
     private let inventory: () throws -> [WindowManagerProcess]
+    private let watchInventory: () throws -> [WindowManagerProcess]
 
+    /// `inventory` must be authoritative. `watchInventory` serves only the periodic
+    /// watch and may be incremental; it defaults to the authoritative inventory.
     init(lock: WindowManagerControllerLock = WindowManagerControllerLock(),
-         inventory: @escaping () throws -> [WindowManagerProcess]) {
+         inventory: @escaping () throws -> [WindowManagerProcess],
+         watchInventory: (() throws -> [WindowManagerProcess])? = nil) {
         self.lock = lock
         self.inventory = inventory
+        self.watchInventory = watchInventory ?? inventory
     }
 
     func prepare(build: Build, readOnly: Bool) throws -> [WindowManagerProcess] {
@@ -128,6 +133,13 @@ final class WindowManagerAdmission {
     /// freezing, so one transient read cannot stop a running controller.
     func observedPeers(freeze: () -> Void) throws -> [WindowManagerProcess] {
         let peers = try inventory()
+        if !peers.isEmpty { freeze() }
+        return peers
+    }
+
+    /// The periodic watch: the same freeze policy over the incremental inventory.
+    func watchedPeers(freeze: () -> Void) throws -> [WindowManagerProcess] {
+        let peers = try watchInventory()
         if !peers.isEmpty { freeze() }
         return peers
     }
