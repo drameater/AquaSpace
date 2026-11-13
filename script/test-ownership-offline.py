@@ -27,7 +27,7 @@ int proc_pidpath(int pid, void *buf, uint32_t size) { abort(); }
 
 def prepare(args):
     package = harness.package_for(args, 'ownership-offline')
-    for path in ('model/WindowManagerAdmission.swift', 'util/windowManagerProcesses.swift',
+    for path in ('model/WindowManagerAdmission.swift', 'model/WindowControlPermission.swift', 'util/windowManagerProcesses.swift',
                  'model/PendingWindowRestoration.swift', 'model/WindowManagerFailureReport.swift',
                  'model/WindowManagerWatchHealth.swift'):
         package.copy('Sources/Ownership/' + path.split('/')[-1], harness.ROOT / 'Sources/AppBundle' / path)

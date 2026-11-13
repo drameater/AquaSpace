@@ -241,36 +241,6 @@ func nativeTabReplacementHasManagedSuccessor(_ newId: UInt32, replacements: [UIn
     return false
 }
 
-/// Read the binding at the instant of replacement: normalization may have changed the parent.
-@MainActor
-func transferNativeTabState(from previous: Window, to current: Window) {
-    if current.isBound { current.unbindFromParent() }
-    let binding = previous.unbindFromParent()
-    current.bind(to: binding.parent, adaptiveWeight: binding.adaptiveWeight, index: binding.index)
-    current.lastFloatingSize = previous.lastFloatingSize
-    current.isFullscreen = previous.isFullscreen
-    current.noOuterGapsInFullscreen = previous.noOuterGapsInFullscreen
-    current.layoutReason = previous.layoutReason
-    current.lastAppliedLayoutVirtualRect = previous.lastAppliedLayoutVirtualRect
-    current.lastAppliedLayoutPhysicalRect = previous.lastAppliedLayoutPhysicalRect
-    replaceNativeTabFocusId(previous.windowId, current.windowId)
-}
-
-@MainActor
-func absorbNativeTabState(from previous: Window, into current: Window) {
-    if focus.windowOrNil === previous { _ = current.focusWindow() }
-    replaceNativeTabFocusId(previous.windowId, current.windowId)
-    previous.unbindFromParent()
-}
-
-/// Recovery can identify a split after its window was registered elsewhere.
-/// Keep its existing floating/fullscreen state and avoid new-window callbacks.
-@MainActor
-func inheritNativeTabWorkspace(_ window: Window, on workspace: Workspace) {
-    guard window.nodeWorkspace !== workspace else { return }
-    _ = moveWindowToWorkspace(window, workspace, CmdIoImpl.emptyStdinIgnoringOut, focusFollowsWindow: false, failIfNoop: false)
-}
-
 /// AX objects stay on their application's AX thread; only the replacement IDs cross threads.
 struct AxNativeTabObservation {
     let snapshot: NativeTabWindowSnapshot

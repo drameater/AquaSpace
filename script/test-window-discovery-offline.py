@@ -116,19 +116,18 @@ def prepare(args):
         body = body.replace('private func', 'func', 1)
         bodies[name] = hashlib.sha256(body.encode()).hexdigest()
         write(f'Replay{name}App.swift', APP_WRAPPER.replace('NAME', name).replace('BODY', body + extra))
-    # Whole files. nativeTabs.swift binds windows through the local tree stubs.
+    # Whole files. nativeTabSlotTransfer.swift binds windows through the local tree stubs.
     for relative in ('model/NativeTabReplacement.swift', 'tree/nativeTabTopology.swift', 'tree/nativeTabs.swift',
-                     'util/AxUiElementMock.swift', 'model/KnownBundleId.swift', 'model/PendingWindowRestoration.swift'):
+                     'tree/nativeTabSlotTransfer.swift', 'util/AxUiElementMock.swift', 'model/KnownBundleId.swift',
+                     'model/PendingWindowRestoration.swift', 'model/WindowControlPermission.swift',
+                     'model/WindowManagerSession.swift'):
         write(relative.split('/')[-1], harness.retarget_imports(
             production(relative).text, drop=('AppKit', 'Common'), add=('Foundation', 'CoreFoundation')))
     write('DictionaryEx.swift', harness.SwiftSource('Sources/Common/util/DictionaryEx.swift').text)
     for name in ('ReplayAX.swift', 'ReplayRuntime.swift', 'ReplayNativeTabEnvironment.swift'):
         package.copy(source + name, harness.SHARED_SWIFT / name)
 
-    admission = production('model/WindowManagerAdmission.swift')
-    write('WindowControlPermission.swift', 'import Foundation\n' + admission.decl('struct WindowControlPermission:'))
     handoff = production('WindowManagerHandoff.swift')
-    write('WindowManagerSession.swift', handoff.decl('struct WindowManagerSession:'))
     write('ReplayHandoff.swift', HANDOFF_HEADER + handoff.decl('static func restoreStartupSession(') + '}\n')
     anchor = handoff.between('struct RestorationAnchor:', 'static func captureOwners(').replace('private ', '')
     capture_owners = handoff.between('static func captureOwners(', 'static func reconcilePendingRestoration(')

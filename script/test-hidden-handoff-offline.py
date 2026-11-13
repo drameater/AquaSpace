@@ -24,7 +24,7 @@ def prepare(args):
     for relative in ('AppBundle/windowLevelCache.swift', 'AppBundle/model/KnownBundleId.swift',
                      'AppBundle/model/AxUiElementWindowType.swift', 'AppBundle/util/AxUiElementMock.swift',
                      'AppBundle/util/AwaitableOneTimeBroadcastLatch.swift', 'AppBundle/util/UniqueToken.swift',
-                     'AppBundle/model/PendingWindowRestoration.swift',
+                     'AppBundle/model/PendingWindowRestoration.swift', 'AppBundle/model/WindowManagerSession.swift',
                      'Common/util/Nullable.swift', 'Common/util/TaskEx.swift'):
         text = harness.retarget_imports(harness.SwiftSource('Sources/' + relative).text,
                                         drop=('CoreGraphics', 'AppKit', 'Common'))
@@ -32,8 +32,6 @@ def prepare(args):
             # Private cache state is reset only inside this isolated copy.
             text += '\n@MainActor func resetReplayCache() { cache = [:]; wip = nil }\n'
         package.write(source + relative.split('/')[-1], text)
-    handoff = harness.SwiftSource('Sources/AppBundle/WindowManagerHandoff.swift')
-    package.write(source + 'WindowManagerSession.swift', handoff.decl('struct WindowManagerSession:'))
     for name in ('ReplayAX.swift', 'ReplayRuntime.swift'):
         package.copy(source + name, harness.SHARED_SWIFT / name)
     support = harness.ROOT / 'script/hidden-handoff-offline'
