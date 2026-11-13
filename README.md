@@ -2,127 +2,98 @@
 
 <img src="resources/Assets.xcassets/AppIcon.appiconset/icon.png" alt="AquaSpace icon" width="96">
 
-AquaSpace is a fork of [AeroSpace](https://github.com/nikitabobko/AeroSpace). It keeps native macOS
-tab groups together across workspaces while preserving AeroSpace's keyboard-driven
-tiling, configuration format and original icon.
+AquaSpace is a personal fork of [AeroSpace](https://github.com/nikitabobko/AeroSpace),
+a tiling window manager for macOS. It keeps native macOS tab groups together
+across workspaces. It keeps AeroSpace's keyboard-driven tiling, configuration
+format and icon.
 
 ## What changes
 
-- Native tabs share one workspace slot. Selecting another tab keeps the group on
-  its assigned workspace.
-- Merging groups adopts the destination's workspace; detached tabs can move
-  independently.
-- Identity-checked session transfer preserves workspace assignments when switching
-  between AquaSpace and stock AeroSpace, including windows discovered later.
-- The local updater waits for the old AquaSpace to exit before starting its
-  replacement. Failed updates retain a recovery record and never launch a rollback
-  manager automatically.
+- A native tab group uses one workspace slot. Selecting another tab keeps the
+  group on its workspace.
+- Merging groups keeps the destination's workspace. A detached tab can move on
+  its own.
+- Only one window manager controls windows at a time. AquaSpace takes the
+  session (workspace assignments, layouts, focus) from stock AeroSpace when it
+  starts, and gives the session back if stock AeroSpace starts later.
+- A local updater stops the old AquaSpace before it starts the new one. A
+  failed update keeps a recovery record and never starts an old copy by itself.
 
-The [validation notes](dev-docs/aquaspace.md) record the exact releases and cases
-checked in Finder, Ghostty and AppKit fixtures, plus offline regressions. AquaSpace
-uses ordinary macOS Accessibility permission. It requires no sudo, SIP changes
-or code injection.
+AquaSpace uses the ordinary macOS Accessibility permission. It needs no sudo,
+no SIP change and no code injection.
 
-## Build and install
+The [AquaSpace guide](dev-docs/aquaspace.md) explains how the fork works and how
+to build, install, update, recover and test it. Dated test records are in
+[dev-docs/history](dev-docs/history/README.md).
 
-You need macOS, Python 3, Git, a Swift toolchain compatible with
-[Package.swift](Package.swift), and a compatible macOS SDK from Xcode or the
-Command Line Tools. The [development guide](dev-docs/development.md) covers
-additional tooling. Keep `/Applications/AeroSpace.app` installed: the local
-builder copies its icon and bundle resources, then gives AquaSpace its separate
-application identity. `--base-app` can select another local resource donor.
+## Quick start
+
+<!-- UPDATE-AFTER-INTEGRATION: readme-quick-start -->
+
+Keep `/Applications/AeroSpace.app` installed; the builder copies its resources.
+Stop any running window manager before the first installation.
 
 ```sh
 git clone https://github.com/drameater/AquaSpace.git
 cd AquaSpace
-python3 script/aquaspace_signing.py --setup
-./build-release.sh
+python3 script/aquaspace_signing.py --setup   # once: persistent signing identity
+./build-release.sh                            # stage a signed build
+./install-from-sources.sh --dont-rebuild      # install and start it
 ```
 
-The one-time signing setup creates a persistent local certificate in a dedicated
-private keychain. Reusing that certificate lets macOS remember AquaSpace's
-permissions across builds. Keep `~/Library/Application Support/AquaSpace/Signing`;
-the builder refuses to silently replace a missing identity or sign ad hoc.
+Then grant Accessibility to AquaSpace in System Settings (called **Device
+Control and Data Access** on some macOS versions). To update later, run
+`./install-from-sources.sh`. Options, requirements and recovery steps are in
+the guide: [build](dev-docs/aquaspace.md#build),
+[install and update](dev-docs/aquaspace.md#install-and-update),
+[recovery](dev-docs/aquaspace.md#recovery).
 
-This stages a certificate-signed bundle at
-`.debug/aquaspace/release/AquaSpace.app` without installing or launching it.
-If you need a specific SDK, pass `--sdk /path/to/MacOSX.sdk`; see the
-[SDK and build options](dev-docs/aquaspace.md#build-locally).
-
-For the first installation, quit any running window manager, then install the
-staged build:
-
-```sh
-./install-from-sources.sh --dont-rebuild
-```
-
-This installs and starts `/Applications/AquaSpace.app`. Grant its ordinary
-Accessibility permission in System Settings (called **Device Control and Data
-Access** on some macOS versions). Stock `/Applications/AeroSpace.app` remains
-installed separately. The upstream Homebrew cask installs stock AeroSpace;
-it does not install this fork.
-
-### Updates
-
-```sh
-./install-from-sources.sh
-```
-
-The updater builds, saves the sole installed AquaSpace's session, waits for it to
-exit, then starts the replacement once. It refuses to update while stock
-AeroSpace or another manager is running. Pass build options such as `--sdk` as
-needed, or use `--dont-rebuild` after staging a build yourself. See
-[update and recovery details](dev-docs/aquaspace.md#updating-aquaspace).
+The upstream Homebrew cask installs stock AeroSpace, not this fork.
 
 ## Configuration and commands
 
-AquaSpace keeps these existing config locations:
+AquaSpace reads the same config files as AeroSpace:
 
 - `~/.aerospace.toml`
 - `$XDG_CONFIG_HOME/aerospace/aerospace.toml` (normally
   `~/.config/aerospace/aerospace.toml`)
 
-Your existing keybindings and `AEROSPACE_*` callback variables remain compatible.
-The app is **AquaSpace.app**, the command is **aquaspace**, and its bundle ID is
-`local.aquaspace`.
+Key bindings and the `AEROSPACE_*` callback variables stay compatible. The app
+is **AquaSpace.app** and its bundle ID is `local.aquaspace`.
 
-The bundled CLI is `/Applications/AquaSpace.app/Contents/MacOS/aquaspace-cli`.
-If `aquaspace` is not on your PATH, use that full path or create a symlink named
-`aquaspace` in a directory on your PATH. The installer does not add a global CLI
-symlink. Stock `aerospace` and the fork's `aquaspace` address separate managers.
-AquaSpace supplies a bundled `aerospace` compatibility alias to its own config
-callbacks; external scripts and absolute CLI paths should explicitly use the
-manager they intend to control.
+The CLI is `/Applications/AquaSpace.app/Contents/MacOS/aquaspace-cli`. The
+installer does not put it on your `PATH`; use the full path or make your own
+symlink. Stock `aerospace` and `aquaspace-cli` talk to different managers.
+Inside AquaSpace's own config callbacks, `aerospace` reaches AquaSpace through a
+bundled alias. Scripts outside the config must call the CLI of the manager they
+mean.
 
 The upstream [configuration guide](https://nikitabobko.github.io/AeroSpace/guide)
-and [command reference](https://nikitabobko.github.io/AeroSpace/commands) remain
-useful for the shared configuration and command syntax.
+and [command reference](https://nikitabobko.github.io/AeroSpace/commands) apply
+to the shared configuration and command syntax.
 
 ## Switching managers
 
-Open **AquaSpace** normally to take over from stock AeroSpace. AquaSpace has no
-switch back. If you start stock AeroSpace while AquaSpace runs, AquaSpace gives
-its session to AeroSpace and quits. Session transfer preserves workspace,
-root-layout, floating/fullscreen and focus state; exact nested container
-structure and weights are rebuilt across managers.
+Open **AquaSpace** to take over from stock AeroSpace. AquaSpace has no command
+to switch back: start stock AeroSpace, and AquaSpace gives it the session and
+quits. The session keeps workspace assignments, root layouts, floating and
+fullscreen flags, and focus. Nested containers and their sizes are rebuilt.
 
-Startup failures report a readable reason at
-`~/Library/Logs/AquaSpace/last-failure.txt`, with stderr and Console fallbacks.
+If AquaSpace stops or refuses to start, read
+`~/Library/Logs/AquaSpace/last-failure.txt`.
 
-## Checks and development
+## Checks
 
-GitHub Actions is **manual-only**. Pushes, pull requests, issues and schedules do
-not start jobs. The single optional workflow runs the offline Python suite on one
-Linux runner with a five-minute limit. It does not build or launch either manager.
-Run the same checks locally with Python's standard library:
+GitHub Actions runs only when started by hand. Its one workflow runs the offline
+Python suite on Linux; it does not build or start a window manager. Run the same
+suite locally:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
 ```
 
-Swift model/ownership regressions and build instructions are in the
-[development guide](dev-docs/development.md). Live harnesses require explicit
-foreground-testing authorization and are separate from offline checks.
+The [guide](dev-docs/aquaspace.md#tests) lists the Swift suites and the live
+harnesses. Live harnesses need explicit authorization.
 
 ## Attribution and license
 

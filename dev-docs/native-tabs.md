@@ -1,419 +1,126 @@
-# Native macOS tabs
-
-AppKit uses a different NSWindow/AX window ID for each native tab. Only the selected tab appears in the application's AXWindows list; the previous AX window remains valid. Keeping every previously seen ID in the tiling tree gives one physical window multiple slots and workspace owners.
-
-The selected window's direct AXTabGroup and its AXTabButton elements retain their identities when AppKit moves the titlebar between tabs. AeroSpace follows that identity before adopting native focus, then transfers the predecessor's current binding, weight, floating size, fullscreen state, and cached layout. The predecessor leaves the managed tree without closed-window restoration or another on-window-detected callback.
-
-The first tab has no predecessor tab bar. For this boundary, matching requires a recently created WindowServer ID, a native tab bar, the same frame, and a unique match in both directions. Public CG window metadata includes inactive native Spaces and background tabs, so an existing window becoming AX-visible is not evidence of creation. A brief creation allowance covers AppKit exposing a bare window before attaching its bar.
-
-Closing one of two tabs removes the bar. This boundary requires a closed predecessor, its previously observed two-tab bar, an existing successor ID, and uniquely matching geometry. Unknown or ambiguous transitions retain their existing windows. Native Space changes invalidate the AX observation history. Settled independent bare-window evidence survives that reset, so another group's shrinking count or coincident geometry cannot claim an unrelated existing window. Confirmed joins consume that evidence; shared native-bar identity and the existing first-tab creation allowance remain authoritative.
-
-The AX thread queues replacements until the main actor acknowledges transferring the slot. Cancellation cannot consume a handoff, and rapid selections can form chains or cycles. The main actor collapses these onto the exposed tab rather than replaying inactive intermediate tabs, including when a previous transfer committed before its acknowledgement was canceled. The binding is read when transferred because container normalization can change it between sessions.
-
-## Verification
-
-An offline investigation after checkpoint `dc94868d` reproduced recovery defects when tab counts, geometry, and AXWindows exposure settle across separate scans. The working source now retains a bounded pre-transition baseline and passes all six reproductions, additional ambiguity/cancellation checks, and model binding tests. A subsequent repair protects independent windows from false detachment attribution after AX observation resets. See [native-tabs-diagnosis.md](native-tabs-diagnosis.md) for the diagnoses, repairs, evidence, and limits on attributing the earlier live failures. `python3 script/test-native-tabs-offline.py` runs 49 tests using memory-only AX substitutes, including 16 existing matcher/queue regressions. No app is launched.
-
-Recovered detachment can find a window already registered on a staging workspace. The registry now applies the inherited workspace to that existing model, preserving floating/fullscreen state and avoiding another new-window callback. Fresh registrations retain the existing callback path. Two tests run this binding helper against the real in-memory tree using `TestWindow`/`TestApp`:
-
-```sh
-python3 script/test-native-tab-model-offline.py \
-  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
-  --scratch-path /private/tmp/aerospace-native-tab-validation-build
-```
-
-This builds the AppBundle library and a Swift Testing target, with no app entrypoint or window creation. Dependencies must already be cached; resolution and updates are disabled. The explicit scratch path above reuses this machine's existing dependency/build cache. The initial recovery release `0.21.3-aquaspace.20261014.6` from commit `5cf47d53` passed 87 live assertions with background and foreground AppKit fixtures; see [that installation record](aquaspace.md#recovery-checkpoint-installation-and-live-validation). The independent-window repair is now installed as `0.21.3-aquaspace.20261014.7` from `f13337a2`: 109 foreground Ghostty assertions passed, including two independently observed native Space changes and per-operation/background checks that the original Ghostty window remained on workspace 2. See [the latest live record](aquaspace.md#ghostty-fix-installation-and-live-validation-after-f13337a2) for ownership monitoring, setup limitations, cleanup, and subsequent desktop-state changes.
-
-`Sources/AppBundleTests/tree/NativeTabReplacementTest.swift` exercises classification and actual tree/workspace transfers. Run it with the repository's normal Swift/Xcode test environment:
-
-```sh
-swift test --filter NativeTabReplacementTest
-```
-
-The standalone AppKit integration harness reads only its own AX tree. It requires no Accessibility/Device Control grant and uses the production AX state machine and tree-transfer helper. It creates two native tab groups, tests repeated simultaneous selections, canceled reads, unobservable snapshots, closing selected tabs, and exposing a bare window before attaching its first tab bar:
-
-```sh
-swift run --package-path script/native-tabs-smoke NativeTabSmoke
-```
-
-Use a toolchain/SDK that builds AeroSpace. On the development machine used for this investigation, the macOS 27 Command Line Tools SDK lacks the SwiftUI State macro plugin, and XCTest is absent. The application and smoke test compile with the installed macOS 26.5 SDK:
-
-```sh
-swift run --disable-sandbox \
-  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
-  --package-path script/native-tabs-smoke NativeTabSmoke
-```
-
-This harness verifies real native AppKit/AX transitions plus the production matching and tree-transfer code. The separate live tests below exercise the running AeroSpace application's observer scheduling and app-specific titlebars. The merge/detach mode additionally covers merging existing groups, detaching selected and inactive tabs, and retrying committed transitions before acknowledgement. Tab overview, native Space transitions, and long sessions remain outside the automated coverage.
-
-Live tests must keep the test windows' native macOS Space active. Background AX tab-button presses can change an application's focused-window attribute while its windows remain absent from AXWindows on an inactive Space, so those presses alone cannot validate normal foreground tab switching.
-
-On macOS 27.0.1, a live Finder test verified first-tab creation, selecting both tabs after moving the group to another AeroSpace workspace, and closing the selected tab while the final sibling retained its workspace. A test-only build excluded all pre-existing WindowServer IDs and all applications except Finder/Ghostty to preserve the user's windows. The final implementation is covered by 20 regression tests and the AppKit harness's 50 selections, including committing a transfer without acknowledgement, switching back, and retrying the queued cycle.
-
-Ghostty 1.3.1 also passed 42 automated live assertions against the final implementation. These cover first-tab creation, ten repeated selections after a workspace move, adding and closing a third tab, closing the selected sibling from two tabs to one, recreating the native bar, and twenty selections alternating between two independently owned groups. Cleanup verified that every test window disappeared, the user's personal terminal identities were unchanged, and existing window-to-workspace assignments were preserved. The installed AeroSpace was restored afterward.
-
-The live harness uses Ghostty's [documented scripting API](https://ghostty.org/docs/features/applescript), not UI keystrokes. Fresh terminals execute an idle fixture through `/bin/sh` and `/bin/cat`; it sends no terminal input and reads no terminal contents. Every selection/closure verifies both a created tab ID and its terminal UUID. A test-only registration gate excludes all pre-existing WindowServer IDs, requires a unique test-title prefix, and admits only Ghostty. The harness verifies the scoped binary's checksum before launching it. These gates are applied to a source copy, leaving the production patch unchanged.
-
-To reproduce, build the scoped app and run the harness on an active macOS desktop. It temporarily switches to dedicated AeroSpace test workspaces and restores the original workspace. The debug app needs AeroSpace's normal Accessibility/Device Control permission; Ghostty scripting uses the platform's normal Automation permission if not already granted.
-
-```sh
-python3 script/native-tabs-smoke/prepare-ghostty-live.py \
-  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-python3 script/native-tabs-smoke/ghostty-live.py \
-  --debug-app "$PWD/.debug/native-tabs/ghostty-isolated/AeroSpace Native Tabs.app"
-```
-
-The harness emits an assertions log and passive server events into its reported temporary output directory. The validated run is also saved locally under `.debug/native-tabs/ghostty-live/`.
-
-Merging groups retains the destination group's workspace and retires the incoming group's old slot. An established native bar identifies the destination even when an incoming tab becomes selected. Incoming bar identities are destroyed by AppKit, so reconciliation also requires exact tab-count accounting, a still-valid incoming root, and matching fresh geometry. AppKit can resize an incoming tab while retaining AeroSpace's offscreen origin; this case additionally requires a destroyed incoming bar or a bare incoming window, matching dimensions, and no concurrent new WindowServer IDs. Ambiguous transitions are left alone.
-
-Detaching a tab creates a separate slot on the group's current workspace. The surviving bar, an observed count decrease, and remembered membership identify the owner. The two-to-one boundary uses the remaining window's unchanged frame. Detached windows can then move independently; merging them back replaces obsolete membership.
-
-A separate live run of the full observer/layout pipeline passed 30 assertions using `AppKitFixture.swift`. These include merging across AeroSpace workspaces into a bare destination, selecting each incoming tab, selected-tab detachment, independently moving the detached window, merging with the incoming tab selected, inactive-tab detachment after a merge, two-to-one detachment, bare-window merging, and repeated selections after merge/split cycles. Cleanup confirmed original terminal identities and workspace assignments were unchanged. This fixture invokes public NSWindow tab operations only on its own windows; it does not claim app-specific Ghostty merge/detach API coverage.
-
-```sh
-swiftc -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
-  script/native-tabs-smoke/AppKitFixture.swift -o /path/to/Fixture.app/Contents/MacOS/Fixture
-# Bundle ID: org.aerospace.NativeTabFixture; CFBundleExecutable: Fixture
-python3 script/native-tabs-smoke/prepare-ghostty-live.py \
-  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
-  --application-id org.aerospace.NativeTabFixture \
-  --output .debug/native-tabs/topology-isolated
-python3 script/native-tabs-smoke/ghostty-live.py \
-  --debug-app "$PWD/.debug/native-tabs/topology-isolated/AeroSpace Native Tabs.app" \
-  --fixture-app "/path/to/Fixture.app" --topology-only
-```
-
-The implementation uses public AX/CG APIs and AeroSpace's existing AX-to-window-ID bridge. It adds no scripting addition, injection, root requirement, SIP change, or screen-recording permission.
-
-## Earlier local installation on 2026-10-14
-
-Before the fork was separated, the optimized arm64 app was installed at `/Applications/AeroSpace.app`, with its matching CLI at the existing Homebrew symlink target. Both report `0.21.3-native-tabs.20261014`. The original app and CLI are backed up under `.debug/native-tabs/install-backup/`. All 11 pre-existing window IDs, their workspace assignments, floating/fullscreen settings, and focus were restored. The existing user configuration passed dry-run validation. A further 10 assertions against the installed build verified live Ghostty creation, moving the group, six tab switches, final-sibling closure, and cleanup; original terminal identities and workspace assignments were unchanged. Test evidence is saved under `.debug/native-tabs/`. That temporary replacement has since been removed: original AeroSpace is restored and the patch is installed separately as AquaSpace. Current installation and handoff validation are documented in [aquaspace.md](aquaspace.md).
-
-
-## Real Ghostty native-menu topology validation
-
-The previously blocked Ghostty merge/detach checks now have a completed,
-explicitly authorized isolated System Events run. **31 live assertions** passed
-against installed AquaSpace `.7` and real Ghostty 1.3.1 native menus: cross-workspace
-merging, selecting every merged member, detaching from three tabs and from two
-tabs to bare windows, independent movement, bare-window merging and repeated
-remerge cycles. Ghostty's own native membership API provides the independent
-oracle. Original window 21423 stayed floating on workspace 2 with unchanged tab
-and terminal identities. All 12 baseline windows retained workspace/fullscreen
-state, all disposable windows/processes were removed, and 1,046 native inventories
-observed the same sole AquaSpace process. No manager lifecycle action or rebuild
-was needed. See the [full record](aquaspace.md#automated-native-ghostty-mergedetach-validation-after-a243c7f0)
-and [opt-in harness](../script/native-tabs-smoke/ghostty-topology/README.md), including
-setup failures, cleanup, evidence and the four offline entrypoint guard tests.
-
-
-The subsequent offline harness review found that initial creation could occur on
-the original workspace and that System Events process indices were not stable
-mutation targets. Both are repaired with verified test-workspace focus before
-creation and retained PID-bound AX menu elements. New offline regressions cover
-the creation ordering and process-churn/error paths. The revised harness has not
-been run live; see the [offline repair record](aquaspace.md#offline-ghostty-harness-isolation-repair-after-4072970d).
-
-
-The repaired harness from `4508f0e8` subsequently passed a separately authorized
-31-assertion live Ghostty run on 2026-10-15 using retained native AX menu targets.
-Original window 21423 stayed floating on workspace 2 with unchanged native tab
-and terminal identities; all 11 baseline window assignments/fullscreen states
-were preserved. The same sole AquaSpace was observed in 913 process inventories,
-and all disposable tabs/processes were cleaned up. Final desktop focus differed
-from the initial snapshot and was left unchanged during read-only verification;
-complete focus restoration is not claimed. See the [full live validation](aquaspace.md#fixed-ghostty-harness-live-validation-after-4508f0e8--2026-10-15).
-
-
-An ensuing offline investigation confirmed that focus restoration could be
-silently skipped after foreground app teardown and was not a success invariant.
-The harness now captures coherent native/model focus before launch, restores it
-while the disposable app still owns the foreground, performs background cleanup,
-and requires stable native/model agreement afterward. It preserves detected new
-user focus and reports failure rather than taking focus back. The added 30
-regressions passed; at that checkpoint the revised lifecycle had not been run live. See the [focus
-repair diagnosis](aquaspace.md#offline-ghostty-focus-restoration-repair-after-6e4ab9b2).
-
-The separately authorized 2026-10-15 run after `721214c1` passed **32 live
-assertions**, including stable original native/model focus before and after
-background cleanup. A failing system-wide AX foreground query required a
-diagnostic-only AppKit reader repair and three additional offline tests; all
-113 AquaSpace Python tests passed. All 11 original windows were preserved;
-Ghostty window 21423 remained floating on workspace 2 with unchanged native
-identities. The same sole AquaSpace appeared in 875 inventories. See the
-[focus-restoration live record](aquaspace.md#ghostty-desktop-focus-live-validation-after-721214c1--2026-10-15)
-for the preflight failure, reader repair, subsequent read-only checks and evidence.
-
-The offline review of `4492ad71` then reproduced foreground loss during late
-native reads and unconditional focus reclamation during the main test sequence.
-Both are repaired with complete snapshot revalidation, an execution-wide
-foreground gate, permanently revoked permission after detected user focus changes,
-and guarded helper mutation boundaries. Ownership and ambiguity checks remain;
-no manager lifecycle path was added. All 139 AquaSpace Python offline tests pass,
-including 26 added methods. The new helper source received a syntax-only check;
-neither apps nor helper binaries were launched, rebuilt or installed. These
-changes have not been live-validated. See the [offline focus-safety repair](aquaspace.md#offline-execution-focus-safety-repair-after-4492ad71).
-
-The authorized live attempts after `eff15f35` exposed a missing initial native
-activation for the disposable instance; a guarded one-shot handoff and four
-additional offline tests bring the suite to 143 passing Python tests. The v2
-helper was rebuilt and real merge/detach checks ran, but a disappearing baseline
-Zen window and later foreign Zen foreground caused safe aborts. No full live
-restoration pass is claimed. All disposable processes were removed, original
-Ghostty window 21423 remained floating on workspace 2 with unchanged native
-identities, and all 1,636 process samples observed the same sole AquaSpace. See
-the [complete attempt record](aquaspace.md#foreground-guard-live-attempts-after-eff15f35--2026-10-15).
-
-The offline review of `ec38b622` found late destination-occupancy detection and
-loss of the original source-window identity across subprocess admission. The
-runner now validates exact native/model destination ownership before mutations,
-and its diagnostic scripting library receives the original retained AX roots
-in process rather than rebinding by PID/title. Existing ownership and ambiguity
-checks remain; old executable helpers are not a fallback. All 162 offline Python
-tests pass, including 19 added methods, and the native source passes syntax-only
-checking. No app/helper or diagnostic library was launched/loaded, built or
-installed. This repair is included in a local checkpoint after `ec38b622` and is
-not live-validated. No additional tests were run when creating the checkpoint. See the
-[destination and source-identity repair record](aquaspace.md#offline-destination-and-retained-source-repair-after-ec38b622).
-
-An idle run of the in-process diagnostic library subsequently found stale AppKit
-foreground metadata. The guard now uses fresh system foreground PID and retained
-source AX foreground reads, preserving exact root/title/owner checks. Thirteen
-offline native guard cases and all 173 Python tests pass. The repaired live run
-passed tab grouping/movement/selection, then stopped when native/model focus
-returned to Raycast. Original Ghostty window 28264 stayed on workspace 3 and only
-AquaSpace was observed, but merging/detachment and guarded restoration are still
-pending. See the [fresh-reader diagnosis and interrupted attempts](aquaspace.md#in-process-foreground-cache-repair-and-idle-attempts--2026-10-15).
-
-A later authorized run after the user closed Raycast **completed all 32 real
-Ghostty assertions**, including three native merges, three native detachments,
-repeated movement/selection and stable exact native/model focus restoration both
-before and after cleanup. Original Ghostty window 28264 stayed floating on
-workspace 3 with unchanged native identities, all nine fresh-baseline assignments
-were preserved in 895 samples, and 1,720 process inventories saw the same sole
-AquaSpace PID 42527. All disposable tabs/processes were removed. Earlier failed
-attempts remain failed; the separate hidden-Zen handoff limitation is unchanged.
-See the [completed fresh-reader validation](aquaspace.md#completed-fresh-reader-ghostty-validation--2026-10-15).
-
-The offline review of `734ebf62` found that an unrecompiled diagnostic library
-could still advertise the old v3 capability and bypass the fresh-reader repair.
-Native and Python admission now require v4; an explicit legacy-v3 rejection and
-producer/consumer agreement regression bring the Python suite to 175 passing
-tests. Ownership checks are unchanged. No diagnostic binary was rebuilt/loaded,
-app/helper launched, live test run, installation performed or changes pushed.
-The preceding 32-check live result remains historical evidence for its v3 build.
-See the [offline admission repair](aquaspace.md#offline-stale-library-admission-repair-after-734ebf62).
-
-After explicit rebuild/live authorization, the v4 diagnostic library completed
-all **32 real Ghostty assertions**, including three merges, three detachments,
-repeated selection/movement and stable exact native/model focus restoration before
-and after cleanup. Original Ghostty window 28264 stayed floating on workspace 3;
-all nine baseline assignments were preserved in 626 samples. All 1,812 process
-inventories saw the same sole AquaSpace PID 42527, with no manager lifecycle
-changes. Disposable PID 7126 and its tabs were removed. Nothing was pushed.
-See the [v4 live validation record](aquaspace.md#v4-ghostty-live-validation-after-388b3117--2026-10-15).
-
-The subsequent offline review found that cleanup's final focus observation
-separated its empty-process/identity checks from a PID-only termination helper.
-The repair rechecks after observation, requires independent retained-application,
-kernel identity and empty-window validation inside the native termination
-receiver, and removes the Swift PID-only command. Admission now requires v5;
-v3/v4 libraries remain refused. Both original reproductions now refuse unsafe
-termination, all 183 Python tests and 26 native cases with fake APIs pass, and no
-diagnostic helper/library or app was rebuilt or launched. Live validation is
-pending. See the [offline cleanup repair](aquaspace.md#offline-cleanup-termination-repair-after-c56ce874--2026-10-15).
-
-After explicit authorization, the rebuilt v5 diagnostic library passed all **32
-real Ghostty checks**, including native merges/detachments, the new guarded
-in-process termination and stable native/model focus restoration before and after
-cleanup. Original Ghostty window 28264 stayed on its fresh baseline workspace 1
-with unchanged native identities; all nine baseline assignments were preserved
-in 565 samples. All 1,900 manager samples saw the same sole AquaSpace PID 42527.
-Only disposable PID 53112 was terminated, no manager lifecycle action occurred,
-and nothing was pushed. See the [v5 live validation record](aquaspace.md#v5-ghostty-live-validation-after-3fd4ba73--2026-10-15).
-
-The subsequent offline review found that failed focus restoration still allowed
-foreground disposable tabs to close. Cleanup now requires confirmed background
-admission before each close/termination, with independent fresh native checks at
-the operation boundary; uncertainty leaves the remainder intact and reports
-incomplete cleanup. Exact tab/terminal, process, manager and original-window
-ownership checks remain in force. Admission now requires v6, with stale v5
-libraries refused. All 190 Python tests and 52 native cases with fake APIs pass;
-no diagnostic library/helper or app was rebuilt/launched, and live validation
-remains pending. See the [offline background-cleanup repair](aquaspace.md#offline-background-cleanup-focus-repair-after-943558e3--2026-10-15).
-
-The first authorized v6 attempt stopped on native foreground churn before its
-two-tab grouping settled, preserving the seven fresh baseline assignments and
-Ghostty window 28264 on workspace 1. All 206 manager samples saw the same sole
-AquaSpace. Exact disposable tabs closed through v6 background guards; a separately
-verified empty/background cleanup terminated only disposable PID 99908 without
-changing desktop focus. The run remains failed, with full v6 validation pending
-idle-desktop clarification. Nothing was installed or pushed. See the
-[interrupted v6 attempt](aquaspace.md#v6-foreground-interrupted-ghostty-attempt-after-b9aadb8f--2026-10-15).
-
-After renewed idle confirmation, the unchanged v6 library completed **all 32 real
-Ghostty checks**, including three native merges/detachments, three independently
-guarded background closes, guarded termination and stable exact native/model
-focus restoration before/after cleanup. Ghostty window 28264 stayed on workspace
-1 with unchanged native identities; all seven fresh-baseline assignments were
-preserved in 571 samples. All 1,893 manager samples observed the same sole
-AquaSpace PID 42527. Only disposable PID 2282 exited. Nothing was installed or
-pushed. The earlier interrupted attempt remains failed; see the
-[complete v6 validation](aquaspace.md#v6-ghostty-live-validation-after-b9aadb8f--2026-10-15).
-
-The subsequent offline review found missing native target-lifetime admission for
-foreground calls and prefix-only menu admission after parent validation. Both
-are repaired: foreground mutations/owned snapshots require pinned process proof,
-and in-process menu dispatch repeatedly verifies exact recorded group/tab/
-terminal/selection membership plus retained AX roots. Unknown prefixed windows,
-hidden tabs, identity replacements and unreadable membership are refused. The
-old standalone menu CLI is retired; admission requires v7 and rejects v6.
-All 204 Python and 105 native cases with fake APIs pass, including a saved-v6
-reproduction. No app/diagnostic helper was launched, no live test or installation
-occurred, and nothing was pushed. See the [offline ownership repair](aquaspace.md#offline-foreground-target-and-menu-ownership-repair-after-44578401--2026-10-15).
-
-The authorized v7 rebuild/live attempt passed 12 preliminary checks, then stopped
-before its first merge when exact native membership became unreadable after
-opening Ghostty's Window menu. All eight baseline assignments were unchanged in
-237 samples, and 800 manager samples observed the same sole AquaSpace. Original
-Ghostty window 28264 stayed on workspace 1 with unchanged native identities.
-Focus restoration was refused by the error latch. Separately authorized recovery
-preserved the new ChatGPT focus and removed only the three recorded disposable
-tabs and pinned process. v7 merge/detach and restoration validation remain pending;
-see the [attempt and recovery](aquaspace.md#v7-ghostty-live-attempt-and-authorized-recovery-after-34e0f9af--2026-10-15).
-
-The menu-tracking reader path is now repaired offline. The harness discovers the
-retained native action in the closed menu tree and runs its fresh exact native
-membership, AX root/selection and foreground checks before one direct item press.
-It never opens the tracking menu first, substitutes cached membership, or retries
-an uncertain action. Inaccessible/ambiguous closed menus fail before mutation.
-All 211 Python offline tests pass, including both operations under simulated
-menu-tracking read failure and late ownership/focus changes. No app, helper,
-native diagnostic library or live API was launched/loaded for this repair; no
-installation or push occurred. The earlier failed live result remains failed;
-see the [offline diagnosis and repair](aquaspace.md#offline-menu-tracking-membership-repair-after-34e0f9af--2026-10-15).
-
-The subsequently authorized fixed-v7 retry passed all **32 real Ghostty checks**,
-including three direct native merges, three detachments, independent movement,
-repeated tab selection and stable desktop focus before and after cleanup.
-All eight fresh-baseline assignments were unchanged in **699 samples**; existing
-Ghostty window **28264** stayed on workspace **1** with its native tab/terminal
-identities intact. **2,392 manager samples** saw the same sole AquaSpace PID
-**42527**, peak count one. Only disposable PID **68465** exited. The first fixed
-attempt had stopped on a Helium foreground change before any menu action and
-was safely cleaned up without a focus write; it remains failed. No manager
-lifecycle action, rebuild, installation or push occurred. See the
-[complete fixed-v7 record](aquaspace.md#fixed-v7-ghostty-live-validation-after-1789ab2d--2026-10-15).
-
-The following offline review reproduced two further focus gaps: native ownership
-failure did not always revoke restoration, and final menu membership reads could
-change the requested selected root before dispatch. Both are repaired. Restoration
-requires fresh exact native/model admission and a retained unchanged source;
-native failures permanently revoke focus permission. Menu dispatch rechecks the
-retained requested root/title and full AX inventory after blocking callbacks.
-All **223 Python offline tests** pass, including 12 new regression methods using
-actual runner/policy functions with fake APIs. No apps, helpers, diagnostic
-libraries, live readers or installed CLIs were launched/loaded; no rebuild,
-installation, live test or push occurred. The successful v7 live result remains
-historical for its exact checkpoint; see the [offline focus repair](aquaspace.md#offline-restoration-and-final-menu-focus-repair-after-fa59aeb4--2026-10-15).
-
-The subsequently authorized live run of `f6c7d2fd` passed **all 32 Ghostty checks**
-with exact restoration-source admission and final retained-menu selection checks
-enabled. Three real native merges and three detachments passed. Original desktop
-focus was stably restored before/after cleanup; all eight fresh-baseline window
-assignments remained unchanged in **935 samples**, including Ghostty **28264** on
-workspace **1** with its native identities intact. **2,240 manager samples** saw
-the same sole AquaSpace PID **42527**, peak one. Only disposable PID **81303**
-exited; no disposable windows remained. No rebuild, manager lifecycle action,
-installation or push occurred. See the [focus-fixed v7 live record](aquaspace.md#focus-fixed-v7-ghostty-live-validation-after-f6c7d2fd--2026-10-15).
-
-The hidden-Zen stock-to-fork omission now has an offline source repair: the
-window-level cache includes off-screen WindowServer metadata instead of
-classifying an initially hidden browser window from a missing layer. Strict
-popup/unknown-metadata checks and ownership/focus policies remain unchanged.
-All 7 new handoff replay tests, 49 native-tab replay tests and 223 Python tests
-pass. No app/helper or live reader was launched; nothing was installed or pushed.
-At the offline checkpoint the fix was not installed or live-validated. See the
-[hidden-Zen diagnosis](native-tabs-diagnosis.md#hidden-zen-window-omitted-during-stock-to-fork-startup--2026-10-15).
-
-The later authorized release `0.21.3-aquaspace.20261015.2` is installed and
-running. The stock-to-fork run confirmed exact Zen window **28122** remained
-hidden on workspace **2**, original native/model focus was preserved, and
-**264 manager inventories** observed a peak of one manager. The broader
-all-window check remains failed for seven other IDs whose native AX/WindowServer
-inventories disagree; the scoped Zen success does not relabel that result.
-See the [live validation record and unresolved discrepancy](aquaspace.md#hidden-zen-rebuild-and-ordered-handoff-validation-after-fafd604a--2026-10-15).
-
-An offline differential replay now reproduces all seven stock-only IDs from
-retained versus fresh AX discovery state, without native-tab transfers. Both
-versions agree when given the same retained state. It also confirms that the
-one-shot handoff drops undiscovered assignments and does not restore them on
-later discovery. All eight diagnostic test methods pass. Native fullscreen Space
-visibility is the leading trigger inference, but the historical trace lacks the
-native membership data needed to prove it. No production fix or live action was
-made in this investigation. See the [seven-ID diagnosis](native-tabs-diagnosis.md#seven-stock-only-ids-retained-discovery-state-and-one-shot-restoration--2026-10-15).
-
-Deferred restoration now retains identity-backed assignments until ordinary AX
-rediscovery, with process/native-owner/root/controller checks before a background
-model update. It cannot override foreground/user changes, popup classification or
-proven native-tab ownership. Legacy snapshots cannot authorize delayed moves.
-All 124 offline Swift tests and 232 Python tests pass; library/CLI compilation is
-validated without executing either product during that offline checkpoint. The
-historical broader handoff failure remains unchanged.
-See the [deferred-restoration repair record](native-tabs-diagnosis.md#identity-safe-deferred-restoration-repair--2026-10-15).
-
-The repair is now installed as `0.21.3-aquaspace.20261015.3` from `de5541d9`.
-A controlled native-fullscreen test on a disposable workspace reproduced fresh
-AX omission of all six surviving historical IDs. Their authenticated assignments
-remained pending through the exclusive stock-to-fork handoff and restored
-automatically on rediscovery: Finder/System Settings on workspace 1 and
-Obsidian/VSCodium on workspace 3. All 12 original rows and original Ghostty focus
-were preserved at completion; the fixture exited and AquaSpace was left as the
-sole verified controller. All 256 monitored samples across the attempts peaked
-at one manager. The seventh historical ID, Vesktop 30682, was already gone and
-was not recreated; it is not counted as a live-restoration pass. See the
-[live installation and validation record](aquaspace.md#deferred-restoration-install-and-native-space-handoff-validation-after-de5541d9--2026-10-15).
-
-The later offline review found and repaired three additional sequences: explicit
-background changes before the first anchor, forgotten first-root proof after a
-second-read failure, and stale root intent surviving export/restart. Command
-mutations now revoke affected intent before changing the model, root history is
-retained across failed reads, and export rechecks established continuity. All
-138 offline Swift and 232 Python tests pass, with full library compilation but
-no app/helper launch. This additional source repair forms a local checkpoint
-after `f60c1e5f`; at that offline checkpoint it was not installed or
-live-validated. See the [safety repair record](native-tabs-diagnosis.md#deferred-restoration-command-and-root-continuity-safety-repair--2026-10-16).
-
-Those three repairs and an automatic-discovery callback follow-up are now
-installed as `0.21.3-aquaspace.20261016.2`. All 141 offline Swift and 232 Python
-tests pass. A fresh stock-to-fork native-Space handoff restored all six surviving
-historical assignments automatically; all 15 original final window rows,
-including existing Ghostty/Zen workspaces and original ChatGPT fullscreen state,
-match the baseline. Native/model focus returned to ChatGPT, the disposable
-fixture exited, and AquaSpace remained the sole verified controller. All 356
-independent inventories across the monitored attempts peaked at one manager.
-Vesktop 30682 remains retired/unavailable, not a seventh restoration pass.
-See the [latest installation and live-validation record](aquaspace.md#deferred-restoration-safety-install-and-handoff-after-96ef60c5--2026-10-16),
-including setup failures, geometry limits and the local checkpoint status.
-
-
-A subsequent offline repair closes two callback-ordering gaps after `4396d3e4`:
-restoration consuming intent before initialization finished, and delayed automatic
-rules overriding newer explicit input. Initialization now has an exact-window
-lifetime; restoration waits and rechecks after awaits, while superseded callback
-continuations stop. All 155 offline Swift and 232 Python tests pass, including
-14 new ordering regressions, and the changed production library compiles. This
-repair remains uncommitted source only; no app/helper or live test was launched,
-and the installed `.20261016.2` build is unchanged. See the [offline callback-ordering record](native-tabs-diagnosis.md#discovery-initialization-and-superseded-callback-ordering--2026-10-16).
-
-
-The later offline continuation repair also guards commands that already began
-before user input: it checks affected-model/user-mutation/controller continuity
-after native reads and before later effects. Floating-focus preparation/cleanup
-preserves newer user bindings without leaving earlier candidates unbound. All
-170 offline Swift methods and 232 Python tests pass, with full production-library
-compilation and no app/helper or live-test launch. These ordering/continuation
-repairs, regressions and notes are included in the local checkpoint; the installed
-build is unchanged. Checkpoint creation involved no additional tests, builds,
-installations, app/helper launches, live checks or pushes. See the [command-continuation repair record](native-tabs-diagnosis.md#awaited-callback-command-continuations--2026-10-17).
+# Native macOS tabs: design and limits
+
+This document describes how AquaSpace keeps a native macOS tab group in one
+workspace slot. It describes the code as it is now. The dated test records are
+in [history/](history/README.md).
+
+A *native tab group* is a set of windows that AppKit shows as tabs in one
+titlebar, for example Finder or Ghostty tabs. It is not a tab strip that an app
+draws inside its own content, such as browser tabs.
+
+## The problem
+
+AppKit gives each native tab its own window. Each tab has its own window ID
+(the macOS `CGWindowID`, also used as the Accessibility (AX) window ID). Only
+the selected tab is in the app's AX window list (`AXWindows`). The windows of
+the other tabs stay valid but hidden.
+
+Stock AeroSpace treats each window ID as a separate window. When the user
+selects another tab, AeroSpace sees a new window and lays it out as a new tile.
+The old tab keeps its own tile and workspace. One physical window then has
+several slots and several workspace owners.
+
+## The approach
+
+AquaSpace keeps one model window (one *slot*) for each tab group. When the
+selected tab changes, the slot moves to the new window ID. The slot keeps its
+workspace, its place in the tiling tree, its weight, its floating size, its
+fullscreen state and its cached layout. The old window ID leaves the model
+without closed-window handling and without another `on-window-detected`
+callback.
+
+The detector uses AX identity, not window titles or app-specific APIs:
+
+- The tab bar is an `AXTabGroup` that is a direct child of the selected window
+  and contains `AXTabButton` elements. When AppKit moves the titlebar to another
+  tab, the tab group keeps its AX identity. A shared tab group is the main
+  evidence that two window IDs belong to one group.
+- Tab bars that are deeper in the AX tree (content tab strips) are ignored.
+
+## Transitions
+
+| Transition | Evidence that AquaSpace requires | Result |
+| --- | --- | --- |
+| Select another tab | The new window has the tab bar of the old one. Matching must work in both directions, so two groups that switch at the same time cannot take each other's slot. | The slot moves to the new window ID. |
+| First tab is created | The old window had no tab bar. The new window ID is recent, has a tab bar with two or more tabs, the same frame (within 1 point), and the match is unique. | The slot moves to the window that now shows the tab bar. |
+| Last sibling closes (two tabs to one) | The old window closed, it had a two-tab bar, the survivor already existed, and the frames match. | The slot moves to the survivor. |
+| Merge two groups | The destination group has an established tab bar. The tab count grows by exactly the number of incoming tabs. The incoming root is still valid and its fresh frame matches. | The incoming group's slot is retired. The group keeps the destination's workspace. |
+| Detach a tab | The remaining tab bar, a count decrease, and remembered membership identify the old group. For two tabs to one, the remaining window keeps the group's frame. | The detached window gets a new slot on the group's current workspace. It can then move on its own. |
+| Anything else | No unique match. | Nothing changes. Ambiguous transitions keep their existing windows. |
+
+AppKit can expose a new window before it attaches the tab bar. A short creation
+allowance covers this. Public window metadata also lists windows on inactive
+macOS Spaces and background tabs, so a window that becomes AX-visible is not
+taken as proof of a new window.
+
+For a merge, AppKit destroys the incoming group's tab bar and can resize an
+incoming tab while it keeps an offscreen origin. In that case AquaSpace also
+requires a destroyed incoming bar or a bare incoming window, the same size, and
+no other new window IDs in the same refresh.
+
+## State and threading
+
+- Each app has an `AxNativeTabState` on its AX thread
+  ([nativeTabs.swift](../Sources/AppBundle/tree/nativeTabs.swift)). It keeps the
+  last observations, a short pre-transition baseline (AX lists, tab bars and
+  frames can settle in different reads), pending replacements, and the known
+  independent windows.
+- [nativeTabTopology.swift](../Sources/AppBundle/tree/nativeTabTopology.swift)
+  computes replacements, absorptions (merges), inheritances (detaches) and
+  continuations from those observations.
+- [NativeTabReplacement.swift](../Sources/AppBundle/model/NativeTabReplacement.swift)
+  holds the snapshot types and the single-switch matcher.
+- The AX thread keeps a replacement queued until the main actor confirms that it
+  moved the slot. Cancellation cannot drop a switch. Fast selections can form a
+  chain or a cycle; the main actor collapses them onto the tab that is exposed
+  now (`nativeTabTransferPlan`), not onto an inactive tab in between.
+- The main actor moves the slot in `MacWindow.getOrRegister` with
+  `transferNativeTabState`, `absorbNativeTabState` and
+  `inheritNativeTabWorkspace`. The first two also move focus with
+  `replaceNativeTabFocusId`.
+  The binding is read at the moment of transfer, because tree normalization can
+  change it between refreshes.
+- A macOS Space change (`activeSpaceDidChangeNotification`) clears the AX
+  observations of every app. Known independent windows survive this reset. So
+  after a Space change, another group's shrinking tab count or equal geometry
+  cannot claim an unrelated existing window. A confirmed join removes the
+  independent mark.
+- A confirmed tab transfer cancels any pending session restoration for the
+  windows involved
+  ([WindowManagerHandoff.cancelPendingNativeTabAssignments](../Sources/AppBundle/WindowManagerHandoff.swift)).
+  An old per-tab assignment from stock AeroSpace cannot then move the group.
+
+The feature uses public AX and CoreGraphics APIs and the existing AX-to-window-ID
+bridge. It adds no scripting addition, code injection, root requirement, SIP
+change or screen-recording permission.
+
+## Tests
+
+| Test | What it covers | Needs |
+| --- | --- | --- |
+| `python3 script/test-native-tabs-offline.py` | The production state machine and matchers, replayed with in-memory AX elements. Includes the recovery, ambiguity and Space-reset cases. | Swift toolchain, cached package dependencies. No app. |
+| `python3 script/test-native-tab-model-offline.py --sdk <SDK>` | Recovered workspace bindings against the real in-memory tree (`TestWindow`, `TestApp`). | Swift toolchain, an SDK that builds the app, cached dependencies. No app. |
+| [NativeTabReplacementTest.swift](../Sources/AppBundleTests/tree/NativeTabReplacementTest.swift), [NativeTabWorkspaceRecoveryTest.swift](../Sources/AppBundleTests/tree/NativeTabWorkspaceRecoveryTest.swift) | Classification and real tree/workspace transfers. | The full Swift test target (`./swift-test.sh`). Upstream's XCTest cases need Xcode. |
+| `swift run --package-path script/native-tabs-smoke NativeTabSmoke` | Real AppKit tab groups in a test process that reads only its own AX tree. | An active desktop. No Accessibility grant. |
+| [ghostty-topology](../script/native-tabs-smoke/ghostty-topology/README.md) `live.py --run-live` | Real Ghostty merges and detaches through the installed AquaSpace. | Explicit authorization, an idle desktop, dedicated test workspaces. |
+
+The [AquaSpace guide](aquaspace.md#tests) lists every suite and its safety rules.
+
+## Known limits
+
+- Only native titlebar tab groups are handled. Tabs that an app draws in its
+  content are separate concerns.
+- When a transition is ambiguous, AquaSpace changes nothing. The windows can then
+  keep separate slots until a later transition is unambiguous.
+- No automated test covers the macOS tab overview, native Space transitions in
+  general, or long sessions. The Ghostty live harness covered two native Space
+  changes in one run; see the [history](history/README.md).
+- The offline replays model AppKit timing that was seen in live runs. They do not
+  prove every possible AppKit or app-specific timing.
+- Stock AeroSpace knows nothing about tab groups. It keeps a separate slot for
+  each tab window that it has seen. A session that comes from stock can therefore
+  hold per-tab rows. See the
+  [handoff limits](aquaspace.md#known-limits).
+- Upstream AeroSpace is building its own native tab support. See
+  [upstream-sync.md](upstream-sync.md#upstream-native-tabs) for how the two
+  designs differ and the plan for a merge.
