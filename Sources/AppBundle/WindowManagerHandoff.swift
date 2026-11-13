@@ -7,140 +7,90 @@ import Darwin
 @MainActor
 enum WindowManagerHandoff {
     private static let watchInventory = WindowManagerProcessCache()
-    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers,
-                                                          watchInventory: { try watchInventory.peers() })
+    nonisolated private static let writeGate = WindowWriteGate()
+    private static let controller = WindowManagerController(
+        admission: WindowManagerAdmission(inventory: WindowManagerProcesses.peers, watchInventory: { try watchInventory.peers() }),
+        gate: writeGate,
+        effects: WindowManagerController.Effects(
+            isReadOnly: { serverArgs.isReadOnly },
+            forgetRestoration: forgetRestoration,
+            pauseManagement: pauseWindowManagementForHandoff,
+            drainWrites: drainWindowWrites,
+            takeOver: takeOver,
+            handOff: handOff,
+            report: showFailure,
+            exit: { exit($0) },
+        ),
+    )
     private static var startupSession: WindowManagerSession?
     private static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
     private static var restoringPending = false
     private static var restorationAnchors: [UInt32: RestorationAnchor] = [:]
-    private static var applicationWatch: Task<(), Never>?
-    nonisolated private static let writePermission = OSAllocatedUnfairLock(initialState: WindowControlPermission())
-    nonisolated static var permitsAXWrites: Bool { writePermission.withLock { $0.permitsWrites } }
-    nonisolated static var controlGeneration: UUID { writePermission.withLock { $0.generation } }
-    nonisolated static func freezeAXWrites() { writePermission.withLock { $0.freeze() } }
-    static var isYielding: Bool { admission.ownership == .yielding }
+    nonisolated static var permitsAXWrites: Bool { writeGate.permitsWrites }
+    nonisolated static var controlGeneration: UUID { writeGate.generation }
+    nonisolated static func freezeAXWrites() { writeGate.freeze() }
+    /// Freezes writes at once when another manager launches or activates.
+    nonisolated static func freezeIfPeerLaunched(_ app: NSRunningApplication?) -> Bool {
+        writeGate.freezeIfPeerLaunched(bundleId: app?.bundleIdentifier, pid: app?.processIdentifier, ownPid: myPid)
+    }
+    static var isYielding: Bool { controller.isYielding }
     static var canControlWindows: Bool {
         !serverArgs.isReadOnly && (isUnitTest || permitsAXWrites)
     }
     static var canInitializeWindows: Bool {
-        !isYielding && writePermission.withLock { $0.permitsInitialization }
+        !isYielding && writeGate.permitsInitialization
     }
     static var status: String {
         let inventory = try? WindowManagerProcesses.peers()
         let peers = inventory?.map(\.pid) ?? []
-        let data = try? JSONSerialization.data(withJSONObject: ["pid": myPid, "phase": admission.ownership.rawValue,
+        let data = try? JSONSerialization.data(withJSONObject: ["pid": myPid, "phase": controller.ownership.rawValue,
             "controlsWindows": canControlWindows && inventory != nil, "readOnly": serverArgs.isReadOnly, "originalPids": peers,
             "inventoryVerified": inventory != nil, "sessionSchema": 2])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
     private static let originalSocketPath = "/tmp/\(originalAeroSpaceAppId)-\(unixUserName).sock"
 
-    static func watchForOriginal() {
-        guard !serverArgs.isReadOnly, applicationWatch == nil else { return }
-        applicationWatch = Task.startUnstructured { @MainActor in
-            var health = WindowManagerWatchHealth()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-                // A failed scan is retried on the next tick; only a detected peer stops control.
-                // The incremental scan reads only changed processes, so an unbundled peer
-                // is still found within one interval (about 200 ms) of its exec.
-                let peers: [WindowManagerProcess]
-                do {
-                    peers = try admission.watchedPeers(freeze: freezeAXWrites)
-                    if let message = health.scanSucceeded() { WindowManagerFailureReport.logger.notice("\(message, privacy: .public)") }
-                } catch {
-                    if let message = health.scanFailed(error) { WindowManagerFailureReport.logger.error("\(message, privacy: .public)") }
-                    continue
-                }
-                guard !peers.isEmpty else { continue }
-                await yieldToPeers(peers)
-                return
-            }
-        }
+    // The controller owns the lifecycle policy; these are its production entry points.
+    static func prepareForStartup() async { await controller.prepareForStartup() }
+    static func finishStartup() async { await controller.finishStartup() }
+    static func runFinalStartupSession(_ body: @MainActor () async throws -> Void) async {
+        await controller.runFinalStartupSession(body)
     }
+    static func observedPeerLaunch() async { await controller.observedPeerLaunch() }
 
-    /// Notifications freeze synchronously; polling also catches unbundled peers.
-    /// The launch notification already froze writes. Yield only to a confirmed peer.
-    /// Otherwise resume control; polling still catches a peer that appears later.
-    static func observedPeerLaunch() async {
-        if let peers = try? admission.observedPeers(freeze: freezeAXWrites), !peers.isEmpty {
-            await yieldToPeers(peers)
-        } else if admission.ownership == .controlling {
-            writePermission.withLock { $0.claim() }
-        } else {
-            await stopForUncertainOwnership(WindowManagerAdmissionError.uncertainInventory)
-        }
-    }
-
-    private static func yieldToPeers(_ peers: [WindowManagerProcess]) async {
-        if peers.count == 1 && peers[0].isStockRelease {
-            await switchToOriginal()
-        } else {
-            await stopForUncertainOwnership(WindowManagerAdmissionError.competingManager)
-        }
-    }
-
-    private static func stopForUncertainOwnership(
-        _ error: any Error,
-        phase: WindowManagerFailureReport.Phase = .monitoring,
-    ) async {
-        guard !serverArgs.isReadOnly else { return }
-        admission.yield()
+    private static func forgetRestoration() {
         pendingRestoration.removeAll()
         restorationAnchors.removeAll()
         restorationRootTokens.removeAll()
-        freezeAXWrites()
-        pauseWindowManagementForHandoff()
-        showFailure(error, phase: phase)
+    }
+
+    private static func drainWindowWrites() async {
         await activateMode_nonCancellable(nil)
         for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
-        exit(EXIT_FAILURE)
     }
 
-    static func prepareForStartup() async {
-        guard !serverArgs.isReadOnly else { return }
-        do {
-            let originals = try admission.prepare(build: isDebug ? .debug : .release, readOnly: false)
-            if originals.isEmpty {
-                if let path = serverArgs.restoreSessionPath {
-                    startupSession = try JSONDecoder().decode(WindowManagerSession.self, from: Data(contentsOf: URL(filePath: path)))
-                }
-                return
+    private static func takeOver(_ originals: [WindowManagerProcess]) async throws {
+        if originals.isEmpty {
+            if let path = serverArgs.restoreSessionPath {
+                startupSession = try JSONDecoder().decode(WindowManagerSession.self, from: Data(contentsOf: URL(filePath: path)))
             }
-            startupSession = try await capture(remoteCommand)
-            // Revalidate kernel birth identity after the asynchronous session capture.
-            guard Set(try WindowManagerProcesses.peers()) == Set(originals) else {
+            return
+        }
+        startupSession = try await capture(remoteCommand)
+        // Revalidate kernel birth identity after the asynchronous session capture.
+        guard Set(try WindowManagerProcesses.peers()) == Set(originals) else {
+            throw WindowManagerAdmissionError.uncertainInventory
+        }
+        for original in originals {
+            guard kill(original.pid, SIGKILL) == 0 || errno == ESRCH else {
                 throw WindowManagerAdmissionError.uncertainInventory
             }
-            for original in originals {
-                guard kill(original.pid, SIGKILL) == 0 || errno == ESRCH else {
-                    throw WindowManagerAdmissionError.uncertainInventory
-                }
-            }
-            for _ in 0 ..< 40 {
-                if try WindowManagerProcesses.peers().isEmpty { return }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            throw HandoffError.message("AeroSpace did not stop. AquaSpace will not start a second window manager.")
-        } catch {
-            showFailure(error, phase: .startup)
-            exit(EXIT_FAILURE)
         }
-    }
-
-    static func finishStartup() async {
-        guard !serverArgs.isReadOnly else { return }
-        do {
-            try admission.claim()
-            writePermission.withLock { $0.claim() }
-            watchForOriginal()
-        } catch {
-            await failStartup(error)
+        for _ in 0 ..< 40 {
+            if try WindowManagerProcesses.peers().isEmpty { return }
+            try await Task.sleep(for: .milliseconds(50))
         }
-    }
-
-    static func failStartup(_ error: any Error) async {
-        await stopForUncertainOwnership(error, phase: .startup)
+        throw HandoffError.message("AeroSpace did not stop. AquaSpace will not start a second window manager.")
     }
 
     static func restoreStartupSession() async {
@@ -169,44 +119,25 @@ enum WindowManagerHandoff {
         }
     }
 
-    /// Hands the session to a stock AeroSpace that was started while AquaSpace ran.
-    static func switchToOriginal() async {
-        guard !serverArgs.isReadOnly, !isYielding else { return }
-        admission.yield()
-        freezeAXWrites()
-        // Freeze synchronously, before any AX/network await. Disabled AeroSpace's
-        // normal layout path unhides every window, which must not run in a handoff.
-        pauseWindowManagementForHandoff()
-        do {
-            let session = try await captureCurrentModel()
-            pendingRestoration.removeAll()
-            restorationAnchors.removeAll()
-            restorationRootTokens.removeAll()
-            await activateMode_nonCancellable(nil)
-            // Drain canceled AX work before AeroSpace restores the session.
-            for app in MacApp.allAppsMap.values { await app.drainWindowWrites() }
-            var available: Set<String>?
-            for _ in 0 ..< 80 {
-                if let answer = try? await remoteAnswer(["list-windows", "--all", "--format", "%{window-id}"]),
-                   answer.exitCode == 0, answer.serverVersionAndHash != "\(aeroSpaceAppVersion) \(gitHash)"
-                {
-                    available = Set(answer.stdout.split(separator: "\n").map(String.init))
-                    if available?.isSuperset(of: session.windows.map { $0[0] }) == true { break }
-                }
-                try await Task.sleep(for: .milliseconds(100))
+    /// The stock handoff after the controller has yielded, frozen writes and paused management.
+    private static func handOff() async throws {
+        let session = try await captureCurrentModel()
+        forgetRestoration()
+        // Drain canceled AX work before AeroSpace restores the session.
+        await drainWindowWrites()
+        var available: Set<String>?
+        for _ in 0 ..< 80 {
+            if let answer = try? await remoteAnswer(["list-windows", "--all", "--format", "%{window-id}"]),
+               answer.exitCode == 0, answer.serverVersionAndHash != "\(aeroSpaceAppVersion) \(gitHash)"
+            {
+                available = Set(answer.stdout.split(separator: "\n").map(String.init))
+                if available?.isSuperset(of: session.windows.map { $0[0] }) == true { break }
             }
-            guard let available else { throw HandoffError.message("AeroSpace did not become ready. AquaSpace has stopped window management.") }
-            for args in session.restorationCommands(availableWindowIds: available) {
-                _ = try await remoteCommand(args)
-            }
-            // A handoff must leave window geometry alone. The normal Quit path recenters
-            // every window and would undo the new manager's restored workspaces.
-            exit(EXIT_SUCCESS)
-        } catch {
-            // Fail closed. Never kill/restart AeroSpace, rebind its socket, or
-            // re-enable AquaSpace while the original may already be managing windows.
-            showFailure(error, phase: .handoff)
-            exit(EXIT_FAILURE)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard let available else { throw HandoffError.message("AeroSpace did not become ready. AquaSpace has stopped window management.") }
+        for args in session.restorationCommands(availableWindowIds: available) {
+            _ = try await remoteCommand(args)
         }
     }
 
@@ -239,11 +170,11 @@ enum WindowManagerHandoff {
 
     static func sessionForUpdate() async throws -> String {
         guard canControlWindows, TrayMenuModel.shared.isEnabled,
-              try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
+              try controller.observedPeers().isEmpty else {
             throw HandoffError.message("Cannot capture a session without exclusive window control")
         }
         let session = try await captureCurrentModel()
-        guard canControlWindows, try admission.observedPeers(freeze: freezeAXWrites).isEmpty else {
+        guard canControlWindows, try controller.observedPeers().isEmpty else {
             throw HandoffError.message("Window-control ownership changed during capture")
         }
         return String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
@@ -346,9 +277,9 @@ enum WindowManagerHandoff {
             // process generation and exclusive controller admission afterwards.
             guard canControlWindows, TrayMenuModel.shared.isEnabled else { return }
             // An unverified scan keeps the assignment pending for a later attempt.
-            guard let peers = try? admission.observedPeers(freeze: freezeAXWrites) else { return }
+            guard let peers = try? controller.observedPeers() else { return }
             if !peers.isEmpty {
-                await yieldToPeers(peers)
+                await controller.yield(to: peers)
                 return
             }
             // Initialization may have begun while the fresh native proofs awaited.
@@ -486,7 +417,7 @@ enum WindowManagerHandoff {
         return try JSONDecoder().decode(ServerAnswer.self, from: data)
     }
 
-    private static func showFailure(_ error: any Error, phase: WindowManagerFailureReport.Phase) {
+    private static func showFailure(_ phase: WindowManagerFailureReport.Phase, _ error: any Error) {
         // Keep reporting nonmodal: neither focus nor controller lifetime should
         // depend on dismissing a dialog. Persist before the existing exit path.
         WindowManagerFailureReport(error: error, phase: phase, version: aeroSpaceAppVersion,

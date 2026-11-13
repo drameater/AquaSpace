@@ -77,7 +77,18 @@ final class WindowManagerControllerLock {
 /// The same admission path is used by both build configurations. Dependencies are
 /// injectable so regressions exercise the real policy without native processes.
 final class WindowManagerAdmission {
-    enum Build { case release, debug }
+    enum Build {
+        case release, debug
+
+        /// The kind of this build. Startup admission always uses it.
+        static var current: Build {
+            #if DEBUG
+                .debug
+            #else
+                .release
+            #endif
+        }
+    }
     private(set) var ownership = WindowManagerOwnership.preparing
     private let lock: WindowManagerControllerLock
     private let inventory: () throws -> [WindowManagerProcess]

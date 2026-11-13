@@ -61,9 +61,8 @@ COORDINATOR_HEADER = '''import Foundation
     static var canInitializeWindows: Bool { !isYielding && Simulation.permission.permitsInitialization }
     static var controlGeneration: UUID { Simulation.permission.generation }
     static var isYielding: Bool { Simulation.yields > 0 || Simulation.stops > 0 }
-    static let admission = ReplayAdmission()
+    static let controller = ReplayController()
     static func freezeAXWrites() { Simulation.permission.freeze() }
-    static func yieldToPeers(_ peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
     static func stopForUncertainOwnership(_ error: any Error) async { Simulation.controls = false; Simulation.stops += 1 }
     enum HandoffError: Error { case message(String) }
 '''

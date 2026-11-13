@@ -102,12 +102,14 @@ extension AXUIElement {
 @MainActor enum WindowManagerProcesses {
     static func restorationOwner(_ pid: Int32) -> WindowRestorationOwner? { Simulation.processes[pid] }
 }
-@MainActor final class ReplayAdmission {
-    func observedPeers(freeze: () -> Void) throws -> [Int] {
+/// Stands in for WindowManagerController, which ReplayCoordinator calls.
+@MainActor final class ReplayController {
+    func observedPeers() throws -> [Int] {
         if Simulation.inventoryError { throw CancellationError() } // Production retries without freezing.
-        if !Simulation.peers.isEmpty { freeze() }
+        if !Simulation.peers.isEmpty { ReplayCoordinator.freezeAXWrites() }
         return Simulation.peers
     }
+    func yield(to peers: [Int]) async { Simulation.controls = false; Simulation.yields += 1 }
 }
 @MainActor struct ReplayFocus: @MainActor Equatable {
     var windowOrNil: MacWindow?
