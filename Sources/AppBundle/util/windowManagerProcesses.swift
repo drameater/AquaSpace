@@ -27,6 +27,7 @@ protocol WindowManagerProcessAPI {
     func executable(_ pid: Int32) throws -> String?
     func identity(_ pid: Int32) throws -> WindowManagerProcessBirth?
     func metadata(_ executable: String) throws -> WindowManagerBundleMetadata
+    func generation(_ pid: Int32) throws -> WindowManagerExecGeneration
 }
 
 protocol WindowRestorationProcessAPI {
@@ -68,23 +69,92 @@ enum WindowManagerProcesses {
     static func peers(using api: any WindowManagerProcessAPI) throws -> [WindowManagerProcess] {
         var result: [WindowManagerProcess] = []
         for pid in Set(try api.pids()) where pid > 0 && pid != api.ownPid {
-            guard let path = try? api.executable(pid) else { continue }
-            let metadata = (try? api.metadata(path)) ?? WindowManagerBundleMetadata()
-            guard WindowManagerProcess.isManager(executable: path, bundleId: metadata.identifier,
-                                                  bundleExecutable: metadata.executable)
-            else { continue }
-            guard let before = try api.identity(pid), before.uid == api.userId else { continue }
-            guard let verifiedPath = try api.executable(pid), let after = try api.identity(pid) else { continue }
-            guard before == after, path == verifiedPath else { throw WindowManagerAdmissionError.uncertainInventory }
-            let identifier = metadata.executable == URL(filePath: path).lastPathComponent ? metadata.identifier : nil
-            result.append(WindowManagerProcess(pid: pid, startedSeconds: after.seconds,
-                startedMicroseconds: after.microseconds, executable: path, bundleId: identifier))
+            guard let candidate = classify(pid, using: api), candidate.isManager else { continue }
+            if let peer = try verifiedPeer(pid, candidate, using: api) { result.append(peer) }
+        }
+        return result
+    }
+
+    struct Classification {
+        let path: String
+        let metadata: WindowManagerBundleMetadata
+        /// False when the bundle Info.plist could not be read; the verdict then rests on the name only.
+        let metadataComplete: Bool
+        var isManager: Bool {
+            WindowManagerProcess.isManager(executable: path, bundleId: metadata.identifier, bundleExecutable: metadata.executable)
+        }
+    }
+
+    /// nil when the path cannot be read: the process is skipped, never invented.
+    static func classify(_ pid: Int32, using api: any WindowManagerProcessAPI) -> Classification? {
+        guard let path = try? api.executable(pid) else { return nil }
+        let metadata = try? api.metadata(path)
+        return Classification(path: path, metadata: metadata ?? WindowManagerBundleMetadata(), metadataComplete: metadata != nil)
+    }
+
+    /// Kernel birth identity brackets a second path read. A change in between is
+    /// uncertainty, not absence, so the whole inventory fails closed.
+    static func verifiedPeer(_ pid: Int32, _ candidate: Classification, using api: any WindowManagerProcessAPI) throws -> WindowManagerProcess? {
+        let path = candidate.path
+        guard let before = try api.identity(pid), before.uid == api.userId else { return nil }
+        guard let verifiedPath = try api.executable(pid), let after = try api.identity(pid) else { return nil }
+        guard before == after, path == verifiedPath else { throw WindowManagerAdmissionError.uncertainInventory }
+        let identifier = candidate.metadata.executable == URL(filePath: path).lastPathComponent ? candidate.metadata.identifier : nil
+        return WindowManagerProcess(pid: pid, startedSeconds: after.seconds,
+            startedMicroseconds: after.microseconds, executable: path, bundleId: identifier)
+    }
+}
+
+/// Incremental inventory for the steady-state watch loop only. Authoritative
+/// decisions (startup prepare/claim, launch notifications, session export,
+/// deferred restoration, status) use the uncached `WindowManagerProcesses.peers()`.
+///
+/// Only "not a manager" verdicts are cached, keyed by PID plus the kernel exec
+/// generation (unique process ID, exec version and image UUID). The BSD start time
+/// is not enough: exec keeps it. A reused PID has a new unique ID, and any exec,
+/// even of a binary at the same path, bumps the exec version. So an unchanged
+/// generation means the same image as when its path and bundle were classified.
+/// A process whose generation cannot be read is classified uncached on every scan.
+/// Manager candidates always take the full verified path, so a cached verdict can
+/// only skip work, never report a peer.
+final class WindowManagerProcessCache {
+    private struct Entry {
+        let generation: WindowManagerExecGeneration
+        /// Set when the Info.plist was unreadable: re-read it after this scan, not every tick.
+        let retryAfterScan: Int?
+    }
+    /// About 5 s at the 200 ms watch interval.
+    static let metadataRetryScans = 25
+    private let api: any WindowManagerProcessAPI
+    private var unrelated: [Int32: Entry] = [:]
+    private var scans = 0
+
+    init(api: any WindowManagerProcessAPI = NativeWindowManagerProcessAPI()) { self.api = api }
+
+    func peers() throws -> [WindowManagerProcess] {
+        scans += 1
+        let pids = Set(try api.pids())
+        unrelated = unrelated.filter { pids.contains($0.key) }
+        var result: [WindowManagerProcess] = []
+        for pid in pids where pid > 0 && pid != api.ownPid {
+            let generation = try? api.generation(pid)
+            if let generation, let entry = unrelated[pid], entry.generation == generation,
+               entry.retryAfterScan.map({ scans <= $0 }) ?? true { continue }
+            unrelated[pid] = nil
+            guard let candidate = WindowManagerProcesses.classify(pid, using: api) else { continue }
+            if candidate.isManager {
+                if let peer = try WindowManagerProcesses.verifiedPeer(pid, candidate, using: api) { result.append(peer) }
+            } else if let generation, (try? api.generation(pid)) == generation {
+                // Cache only a verdict whose image did not change while it was read.
+                unrelated[pid] = Entry(generation: generation,
+                    retryAfterScan: candidate.metadataComplete ? nil : scans + Self.metadataRetryScans)
+            }
         }
         return result
     }
 }
 
-private struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRestorationProcessAPI {
+struct NativeWindowManagerProcessAPI: WindowManagerProcessAPI, WindowRestorationProcessAPI {
     var userId: UInt32 { getuid() }
     var ownPid: Int32 { getpid() }
 

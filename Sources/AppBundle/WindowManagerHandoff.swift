@@ -60,7 +60,9 @@ struct WindowManagerSession: Codable, Equatable, Sendable {
 
 @MainActor
 enum WindowManagerHandoff {
-    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers)
+    private static let watchInventory = WindowManagerProcessCache()
+    private static let admission = WindowManagerAdmission(inventory: WindowManagerProcesses.peers,
+                                                          watchInventory: { try watchInventory.peers() })
     private static var startupSession: WindowManagerSession?
     private static var pendingRestoration = PendingWindowRestoration(windows: [], owners: [:])
     private static var restoringPending = false
@@ -93,7 +95,9 @@ enum WindowManagerHandoff {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 // A failed scan is retried on the next tick; only a detected peer stops control.
-                guard let peers = try? admission.observedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
+                // The incremental scan reads only changed processes, so an unbundled peer
+                // is still found within one interval (about 200 ms) of its exec.
+                guard let peers = try? admission.watchedPeers(freeze: freezeAXWrites), !peers.isEmpty else { continue }
                 await yieldToPeers(peers)
                 return
             }
@@ -377,11 +381,11 @@ enum WindowManagerHandoff {
                 continue
             }
             restorationAnchors[id] = anchor
-            var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+            var proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable))
             let initialRootToken = proof?.token
             let initialRootAccepted = proof.map { rememberRestorationRoot($0.token, for: id) } ?? true
             if initialRootAccepted, proof != nil, proof?.type != .popup {
-                proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id))
+                proof = try? await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable))
             }
             // A fresh native read may suspend. Revalidate model, native ownership,
             // process generation and exclusive controller admission afterwards.
@@ -443,11 +447,11 @@ enum WindowManagerHandoff {
         // replacement revokes stale intent before any saved row can override it.
         for id in Array(restorationRootTokens.keys).sorted() where pendingRestoration.assignments[id] != nil {
             guard let window = MacWindow.allWindowsMap[id],
-                  let proof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+                  let proof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable)) else {
                 throw HandoffError.message("Cannot verify pending window root continuity for export")
             }
             guard rememberRestorationRoot(proof.token, for: id) else { continue }
-            guard let finalProof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id)) else {
+            guard let finalProof = try await window.macApp.restorationWindowProof(id, level: getWindowLevel(for: id, .cancellable)) else {
                 throw HandoffError.message("Cannot verify pending window root continuity for export")
             }
             _ = rememberRestorationRoot(finalProof.token, for: id)

@@ -15,6 +15,9 @@ func getWindowServerWindowIdsByPid() -> [Int32: Set<UInt32>]? {
     return result
 }
 
+/// The read is WindowServer IPC that takes milliseconds; keep it off the main actor.
+@concurrent func readWindowServerWindowIdsByPid() async -> [Int32: Set<UInt32>]? { getWindowServerWindowIdsByPid() }
+
 /// Strict ownership inventory for delayed restoration. Malformed/partial rows
 /// revoke pending intent instead of authorizing a later numeric-ID match.
 func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
@@ -28,19 +31,30 @@ func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
     return result
 }
 
-@MainActor
-private var cache: [UInt32: MacOsWindowLevel] = [:]
+@MainActor private var cache: [UInt32: MacOsWindowLevel] = [:]
+@MainActor private var wip: AwaitableOneTimeBroadcastLatch? = nil
 
-@MainActor
-func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
+@MainActor func getWindowLevel(for windowId: UInt32, _ cm: CancellationMode) async throws -> MacOsWindowLevel? {
     if let existing = cache[windowId] { return existing }
+    if let wip {
+        try await wip.await(cm)
+        return cache[windowId]
+    }
+    let latch = AwaitableOneTimeBroadcastLatch()
+    defer { await latch.signalToAll() }
+    wip = latch
+    cache = await computeCache()
+    wip = nil
+    return cache[windowId]
+}
 
+@concurrent private func computeCache() async -> [UInt32: MacOsWindowLevel] {
     var result: [UInt32: MacOsWindowLevel] = [:]
     // Hidden apps and windows on inactive native Spaces still need their real
     // layer at startup. An on-screen-only scan gives them nil, which makes the
     // strict browser classifier mistake ordinary windows for unbound popups.
     let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionAll)
-    guard let cfArray = CGWindowListCopyWindowInfo(options, CGWindowID(0)) as? [CFDictionary] else { return nil }
+    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return [:] }
     for elem in cfArray {
         let dict = elem as NSDictionary
 
@@ -52,8 +66,7 @@ func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
 
         result[windowId] = .new(windowLevel: windowLayer)
     }
-    cache = result
-    return result[windowId]
+    return result
 }
 
 enum MacOsWindowLevel: Sendable, Equatable {

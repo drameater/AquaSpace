@@ -35,6 +35,36 @@ struct WindowManagerAdmissionTest {
         }
     }
 
+    @Test func onlyThePeriodicWatchUsesTheIncrementalInventory() throws {
+        try withLock { lock, _ in
+            var authoritative: [WindowManagerProcess] = []
+            var watched: [WindowManagerProcess] = []
+            var frozen = 0
+            let admission = WindowManagerAdmission(lock: lock, inventory: { authoritative }, watchInventory: { watched })
+            watched = [peer("bobko.aerospace")]
+            // Startup admission and event-driven checks never see the incremental answer.
+            #expect(try admission.prepare(build: .debug, readOnly: false).isEmpty)
+            try admission.claim()
+            #expect(try admission.observedPeers { frozen += 1 }.isEmpty)
+            #expect(frozen == 0)
+            #expect(try admission.watchedPeers { frozen += 1 } == watched)
+            #expect(frozen == 1)
+            watched = []
+            authoritative = [peer(nil, name: "AeroSpaceApp")]
+            #expect(try admission.watchedPeers { frozen += 1 }.isEmpty)
+            #expect(try admission.observedPeers { frozen += 1 } == authoritative)
+            #expect(frozen == 2)
+        }
+    }
+
+    @Test func watchDefaultsToTheAuthoritativeInventory() throws {
+        try withLock { lock, _ in
+            let admission = WindowManagerAdmission(lock: lock, inventory: { [peer(nil, name: "AeroSpaceApp")] })
+            let peers = try admission.watchedPeers {}
+            #expect(peers.map(\.pid) == [42])
+        }
+    }
+
     private func peer(_ bundle: String?, name: String = "AeroSpace", pid: Int32 = 42) -> WindowManagerProcess {
         WindowManagerProcess(pid: pid, startedSeconds: 1, startedMicroseconds: 2,
                              executable: "/some other directory/\(name)", bundleId: bundle)

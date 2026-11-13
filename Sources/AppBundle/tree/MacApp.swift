@@ -33,11 +33,12 @@ final class MacApp: AbstractApp {
         _ axApp: AXUIElement,
         _ axSubscriptions: [AxSubscription],
         _ thread: Thread,
+        _ windowServerIds: [Int32: Set<UInt32>]?,
     ) {
         self.nsApp = nsApp
         self.axApp = .init(axApp)
         self.pid = nsApp.processIdentifier
-        self.nativeTabs = .init(AxNativeTabState(pid: nsApp.processIdentifier))
+        self.nativeTabs = .init(AxNativeTabState(pid: nsApp.processIdentifier, serverIds: windowServerIds))
         self.rawAppBundleId = nsApp.bundleIdentifier
         self.appId = nsApp.bundleIdentifier.flatMap { KnownBundleId.init(rawValue: $0) }
         assert(!axSubscriptions.isEmpty)
@@ -47,7 +48,7 @@ final class MacApp: AbstractApp {
 
     @MainActor
     @discardableResult
-    static func getOrRegister(_ nsApp: NSRunningApplication) async throws -> MacApp? {
+    static func getOrRegister(_ nsApp: NSRunningApplication, windowServerIds: [Int32: Set<UInt32>]? = nil) async throws -> MacApp? {
         // Don't perceive any of the lock screen windows as real windows
         // Otherwise, false positive ax notifications might trigger that lead to gcWindows
         if nsApp.bundleIdentifier == lockScreenAppBundleId { return nil }
@@ -58,7 +59,7 @@ final class MacApp: AbstractApp {
         if let existing = allAppsMap[pid] { return existing }
         try checkCancellation()
         if let wip = wipPids[pid] {
-            try await wip.await()
+            try await wip.await(.cancellable)
             return allAppsMap[pid]
         }
         let wip = AwaitableOneTimeBroadcastLatch()
@@ -73,7 +74,7 @@ final class MacApp: AbstractApp {
                 let job = RunLoopJob(.cancellable)
                 let subscriptions = (try? unsafe AxSubscription.bulkSubscribe(nsApp, axApp, job, handlers)) ?? []
                 let isGood = !subscriptions.isEmpty
-                let app = isGood ? MacApp(nsApp, axApp, subscriptions, Thread.current) : nil
+                let app = isGood ? MacApp(nsApp, axApp, subscriptions, Thread.current, windowServerIds) : nil
 
                 let appAxSubscriptionsThreadGuarded = app?.appAxSubscriptions
                 let windowsThreadGuarded = app?.windows
@@ -99,7 +100,7 @@ final class MacApp: AbstractApp {
         thread.name = "AxAppThread \(nsApp.idForDebug)"
         thread.start()
 
-        try await wip.await()
+        try await wip.await(.cancellable)
         return allAppsMap[pid]
     }
 
@@ -369,17 +370,23 @@ final class MacApp: AbstractApp {
 
     @MainActor
     static func refreshAllAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [MacApp: WindowRefresh] {
-        let windowServerIds = getWindowServerWindowIdsByPid()
+        // One WindowServer read per refresh, off the main actor, shared by every app.
+        // Tab reconciliation never uses it under the lock screen or while the left
+        // mouse button is down. If the button is released meanwhile, a reconciliation
+        // given nil reads its own copy on its AX thread, as before.
+        let needsWindowServerIds = frontmostAppBundleId != lockScreenAppBundleId && !isLeftMouseButtonDown
+        async let windowServerRead = needsWindowServerIds ? readWindowServerWindowIdsByPid() : nil
         for (_, app) in MacApp.allAppsMap { // gc dead apps
             try checkCancellation()
             if app.nsApp.isTerminated {
                 await app.destroy()
             }
         }
+        let windowServerIds = await windowServerRead
         return try await withThrowingTaskGroup(of: (pid_t, WindowRefresh).self, returning: [MacApp: WindowRefresh].self) { group in
             func refreshTheApp(_ nsApp: NSRunningApplication) {
                 group.addTask { @Sendable @MainActor in
-                    guard let app = try await MacApp.getOrRegister(nsApp) else { return (nsApp.processIdentifier, WindowRefresh()) }
+                    guard let app = try await MacApp.getOrRegister(nsApp, windowServerIds: windowServerIds) else { return (nsApp.processIdentifier, WindowRefresh()) }
                     return (nsApp.processIdentifier, try await app.refreshAndGetAliveWindowIds(frontmostAppBundleId: frontmostAppBundleId, windowServerIds: windowServerIds.map { $0[nsApp.processIdentifier] ?? [] }))
                 }
             }

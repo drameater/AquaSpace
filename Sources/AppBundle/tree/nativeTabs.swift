@@ -28,9 +28,10 @@ final class AxNativeTabState {
     }
     var inactiveWindowIds: Set<UInt32> { Set(representatives.keys).subtracting(exposedWindowIds) }
 
-    init(pid: Int32 = getpid()) {
+    /// `serverIds` is the WindowServer inventory already read for this refresh; nil reads one here.
+    init(pid: Int32 = getpid(), serverIds: [Int32: Set<UInt32>]? = nil) {
         self.pid = pid
-        knownWindowIds = getWindowServerWindowIdsByPid().map { $0[pid] ?? [] }
+        knownWindowIds = (serverIds ?? getWindowServerWindowIdsByPid()).map { $0[pid] ?? [] }
     }
 
     func reconcile(_ liveWindows: [WindowIdAndAxUiElement]?, _ job: RunLoopJob, isAppHidden: Bool, windowServerIds: Set<UInt32>? = nil) throws -> [UInt32: UInt32] {
