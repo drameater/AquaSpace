@@ -57,6 +57,15 @@ if /bin/test -z "${NUKE_PATH:-}"; then
     export NUKE_PATH=1
 fi
 
+# The upstream test suite uses XCTest, which ships only with Xcode, not with the Command Line Tools
+require-xctest() {
+    if ! /usr/bin/xcrun --find xctest &> /dev/null; then
+        echo "ERROR: XCTest is not available. Install Xcode and select it with xcode-select." > /dev/stderr
+        echo "To build AquaSpace with only the Command Line Tools, use ./build-release.sh" > /dev/stderr
+        exit 1
+    fi
+}
+
 xcodebuild-pretty() {
     log_file="$1"
     shift
