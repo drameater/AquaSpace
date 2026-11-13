@@ -20,13 +20,13 @@ the owner's machine; `.debug` is not in Git.
 | [aquaspace-log.md](aquaspace-log.md) | Releases, installs, updates, handoffs and live Ghostty runs. Was `dev-docs/aquaspace.md`. |
 | [native-tabs-log.md](native-tabs-log.md) | Native tab validation summaries. Was `dev-docs/native-tabs.md`. |
 | [native-tabs-diagnosis.md](native-tabs-diagnosis.md) | Offline diagnoses and repairs with their reproductions. Same name as before, in `dev-docs/`. |
-| [integration-2026-11-12.md](integration-2026-11-12.md) | The integration of 2026-11-12: changes, offline checks and the live checks still to do. |
+| [integration-2026-11-12.md](integration-2026-11-12.md) | The integration of 2026-11-12 and its review fixes up to 2026-11-13: changes, offline checks and the live checks still to do. |
 
 ## Integration records
 
 | Date | Checkpoint | Entry | Outcome as recorded | Result |
 | --- | --- | --- | --- | --- |
-| 2026-11-12 | `fix/assessment-2026-11` | [Integration of 2026-11-12](integration-2026-11-12.md) | New builder and updater, faster peer watch, six upstream commits, current documents. 333 Python offline tests passed. Not installed. | Passed (offline); live checks pending |
+| 2026-11-12 to 2026-11-13 | `fix/assessment-2026-11` at `87b2c589` | [Integration of 2026-11-12](integration-2026-11-12.md) | New builder and updater, faster peer watch, testable controller lifecycle, window-level cache fix, six upstream commits, one offline test entry point, two review rounds, current documents. 444 Python offline tests passed. Not installed. | Passed (offline); live checks pending |
 
 ## AquaSpace log
 
