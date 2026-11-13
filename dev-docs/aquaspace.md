@@ -243,10 +243,16 @@ standard input, not on the command line.
 
 - A complete identity is reused unchanged.
 - An interrupted setup has no certificate yet, so no build used it. Setup moves
-  its files to an `incomplete-<date>-<time>` folder and starts again.
+  its files to an `incomplete-<date>-<time>` folder and starts again. It also
+  deletes the `setup-*` work folders that an interrupted setup left, because
+  they can hold a private key in plain text.
 - If the certificate is present but the keychain or its password file is
   missing, setup stops. It prints the commands to make a new identity. A new
   identity needs a new Accessibility grant.
+- A second setup stops while one runs.
+- Setup and the builder refuse a signing folder whose path contains a double
+  quote, a backslash or a line break. `security -i` reads the commands, and its
+  rules for these characters are not documented.
 
 Build:
 
@@ -256,7 +262,10 @@ Build:
 
 The builder:
 
-1. Derives the version from Git. The short version is
+1. Takes two locks: `<output>/.aquaspace-build.lock` and
+   `.debug/aquaspace/.aquaspace-source.lock`. A second build that needs one of
+   them stops at once.
+2. Derives the version from Git. The short version is
    `<base>-aquaspace.<commits>.g<commit>`, for example
    `0.21.3-aquaspace.71.g79e53f21`. `<base>` comes from the nearest tag
    `v<major>.<minor>.<patch>...` before `HEAD`, and `<commits>` is the number of
@@ -265,15 +274,17 @@ The builder:
    untracked files, the version ends with `.dirty`. Build inputs are `Package.swift`,
    `Package.resolved`, `Sources/`, `script/aquaspace-Info.plist`, the icon image
    and `docs/config-examples/default-config.toml`.
-2. Sets `CFBundleVersion` to the commit time in UTC (`YYYYMMDDhhmmss`). A dirty
+3. Sets `CFBundleVersion` to the commit time in UTC (`YYYYMMDDhhmmss`). A dirty
    build uses the build time instead. So a newer commit or a later dirty build
    always gets a higher number.
-3. Copies `Package.swift`, `Package.resolved` and `Sources/` to
+4. Copies `Package.swift`, `Package.resolved` and `Sources/` to
    `.debug/aquaspace/source` and writes the version and Git hash files there.
-4. Runs `swift build -c release` for the products `AeroSpaceApp` and
+5. Cleans up after an interrupted build: puts back a previous app that a crash
+   left in a `.staging-*` folder, then deletes the `.staging-*` folders.
+6. Runs `swift build -c release` for the products `AeroSpaceApp` and
    `aerospace`, with 2 jobs and with dependency resolution and updates
    disabled. The build cache is `.debug/aquaspace/build`.
-5. Assembles `AquaSpace.app` in a temporary `.staging-*` folder in the output
+7. Assembles `AquaSpace.app` in a temporary `.staging-*` folder in the output
    folder:
    - `Contents/MacOS/AquaSpace` (the `AeroSpaceApp` product) and
      `Contents/MacOS/aquaspace-cli` (the `aerospace` product);
@@ -281,23 +292,29 @@ The builder:
    - `Contents/Info.plist` from `script/aquaspace-Info.plist`, with bundle ID
      `local.aquaspace`;
    - `Contents/Resources/AppIcon.icns`, made with `sips` and `iconutil` from
-     `resources/Assets.xcassets/AppIcon.appiconset/icon.png`. The bundle has no
-     `Assets.car`; `Info.plist` names only this icon file;
+     `resources/Assets.xcassets/AppIcon.appiconset/icon.png`. The source must
+     be a square PNG of at least 1024 pixels. The builder checks the size of
+     every rendered image, then unpacks the `.icns` file and checks each image
+     again. The bundle has no `Assets.car`; `Info.plist` names only this icon
+     file;
    - `Contents/Resources/default-config.toml`.
-6. Validates the bundle before and after signing: the exact file list, the
+8. Validates the bundle before and after signing: the exact file list, the
    bundle ID, executable and version in `Info.plist`, the helper symlink, the
    architecture of this Mac, and the version and Git hash inside both
    executables.
-7. Signs the CLI and the app with the persistent identity and refuses ad-hoc
+9. Signs the CLI and the app with the persistent identity and refuses ad-hoc
    signing. The designated requirement must name `local.aquaspace` and a
    certificate. Both signatures must pass `codesign --verify --strict`.
-8. Publishes the result. It replaces `.debug/aquaspace/release/AquaSpace.app`
-   with the new bundle, then writes `build.json` next to it: version, bundle
-   version, Git revision, dirty flag, source hashes, app and CLI hashes, and
-   designated requirement. If any step fails, the previous build stays.
+10. Publishes the result. First it writes `build.json` to the output folder:
+    version, bundle version, Git revision, dirty flag, source hashes, app and
+    CLI hashes, and designated requirement. Then it exchanges the new bundle
+    with `.debug/aquaspace/release/AquaSpace.app` in one atomic step. A volume
+    without atomic exchange gets two renames. If the exchange fails, the
+    previous `build.json` is put back. If any earlier step fails, the previous
+    build stays.
 
-If the builder stops between the app and `build.json`, the old manifest no
-longer matches the app. The installer then refuses the build; build again.
+If the builder stops between `build.json` and the app, the new manifest does
+not match the old app. The installer then refuses the build; build again.
 
 It does not install or start anything unless you pass `--install-and-restart`.
 
@@ -305,12 +322,12 @@ It does not install or start anything unless you pass `--install-and-restart`.
 | --- | --- |
 | `--sdk <path>` | Build with this macOS SDK. |
 | `--scratch-path <path>`, `--output <path>` | Other build cache and output folders. |
-| `--version <text>` | Replace the short version. `CFBundleVersion` stays derived from Git. |
+| `--version <text>` | Replace the short version. 1 to 64 ASCII letters, digits, `.`, `_`, `+` and `-`; the first character is a letter or a digit. `CFBundleVersion` stays derived from Git. |
 | `--jobs <n>` | Compiler jobs (default 2). |
 | `--disable-sandbox` | See below. |
 | `--signing-identity <id>`, `--signing-keychain <path>` | Sign with another persistent identity. `-` (ad hoc) is refused. |
-| `--install-and-restart` | After the build, run the installer with `--restart`. The installer takes over the process, so its [exit status](#exit-status) is the builder's. |
-| `--allow-identity-change`, `--ready-timeout <seconds>` | Installer options. They need `--install-and-restart`, and the builder checks them before it compiles. |
+| `--install-and-restart` | After the build, run the installer with `--restart` and wait for it. The builder never stops the installer; Ctrl-C reaches the installer, which closes or keeps its record. The builder exits with the installer's [exit status](#exit-status), for example 3 when the update waits for `--confirm`. |
+| `--allow-identity-change`, `--ready-timeout <seconds>` | Passed to the installer. They need `--install-and-restart`, and the builder checks them before it compiles. |
 
 `build-release.sh` passes all options on and accepts `--build-version` as a
 name for `--version`.
