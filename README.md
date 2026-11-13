@@ -92,7 +92,8 @@ suite locally:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
 ```
 
-The [guide](dev-docs/aquaspace.md#tests) lists the Swift suites and the live
+`python3 script/test-offline.py` runs this suite and the offline Swift suites
+together. The [guide](dev-docs/aquaspace.md#tests) explains them and the live
 harnesses. Live harnesses need explicit authorization.
 
 ## Attribution and license
