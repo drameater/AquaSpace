@@ -18,13 +18,17 @@ private final class ProcessAPIStub: WindowManagerProcessAPI {
     var metadataReads: [String: Int] = [:]
     var generations: [Int32: WindowManagerExecGeneration] = [:]
     var deniedGenerations: Set<Int32> = []
+    /// Runs after a path read has taken its result, before the caller sees it.
+    var afterPathRead: ((Int32) -> Void)?
 
     func pids() throws -> [Int32] { Array(paths.keys) + [ownPid, 0] }
     func executable(_ pid: Int32) throws -> String? {
         if deniedPaths.contains(pid) { throw NSError(domain: NSPOSIXErrorDomain, code: 1) }
         pathReads[pid, default: 0] += 1
         if changedExecutable == pid && pathReads[pid, default: 0] > 1 { return "/a/replacement/AeroSpaceApp" }
-        return paths[pid]
+        let path = paths[pid]
+        afterPathRead?(pid)
+        return path
     }
     func identity(_ pid: Int32) throws -> WindowManagerProcessBirth? {
         identityReads.append(pid)
@@ -273,6 +277,37 @@ struct WindowManagerProcessCacheTest {
         #expect(api.pathReads[10] == 1)
         api.paths[11] = "/tmp/build/AeroSpaceApp" // A path change with no readable generation.
         #expect(try cache.peers().map(\.pid) == [11])
+    }
+
+    // The process execs into a manager after its old path was read. The verdict
+    // about the old image must not hide the manager on the next scan.
+    @Test func execDuringClassificationIsClassifiedAgainOnTheNextScan() throws {
+        let api = desktop()
+        let cache = WindowManagerProcessCache(api: api)
+        api.afterPathRead = { [unowned api] pid in
+            guard pid == 11 else { return }
+            api.afterPathRead = nil
+            api.exec(11, "/tmp/build/AeroSpaceApp")
+        }
+        #expect(try cache.peers().isEmpty)
+        #expect(try cache.peers().map(\.pid) == [11])
+    }
+
+    // An inventory error ends the scan partway. The verdicts it already cached
+    // stay valid, and the next scan still finds every peer and every later exec.
+    @Test func scanThatThrowsPartwayLeavesTheCacheConsistent() throws {
+        let api = desktop()
+        api.paths[20] = "/tmp/build/AeroSpaceApp"
+        api.reusedPid = 20 // Birth identity changes during verification: the scan throws.
+        let cache = WindowManagerProcessCache(api: api)
+        #expect(throws: (any Error).self) { try cache.peers() }
+        api.reusedPid = nil
+        #expect(try cache.peers().map(\.pid) == [20])
+        // Each unrelated process was classified once over both scans.
+        for pid: Int32 in [10, 12] { #expect(api.metadataReads[api.paths[pid]!] == 1) }
+        #expect(api.pathReads[11] == 1)
+        api.exec(11, "/Users/me/AquaSpace/.debug/AquaSpaceApp")
+        #expect(Set(try cache.peers().map(\.pid)) == [11, 20])
     }
 
     @Test func changedIdentityDuringVerificationStillFailsClosed() {
