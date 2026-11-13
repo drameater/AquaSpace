@@ -43,6 +43,8 @@ CONFIRMABLE_PHASES = frozenset(('replaced', 'launch_attempted', 'child_started')
 RECORD_PREFIX = '.aquaspace-update-'
 # A record is created under this name and renamed after its first journal write.
 NEW_RECORD_PREFIX = '.aquaspace-new-update-'
+# --set-aside renames an unreadable record to this prefix; the updater never reads or removes it.
+SET_ASIDE_PREFIX = '.aquaspace-set-aside-'
 KEEP_COMPLETED_RECORDS = 5
 READY_TIMEOUT = 30
 # Launch Services can start an app some seconds after `open` returns or times out.
@@ -694,16 +696,46 @@ class Installer:
 
     # Records ---------------------------------------------------------------
 
-    def journal(self, transaction):
-        if transaction.is_symlink() or transaction.parent != self.target.parent or not transaction.name.startswith(RECORD_PREFIX):
-            raise UpdateError('Recovery record is outside this installation directory.')
+    @staticmethod
+    def _read_record(record):
+        """Return (journal, None) for a readable record of any target, or (None, why it is unreadable)."""
+        if record.is_symlink(): return None, 'the record is a symbolic link'
+        if not record.is_dir(): return None, 'the record is not a directory'
         try:
-            data = json.loads((transaction / 'journal.json').read_text())
-            if data.get('schema') != 1 or data.get('target') != str(self.target) or data.get('phase') not in PHASES:
-                raise ValueError('Invalid journal identity or phase')
-            return data
-        except (OSError, ValueError, TypeError, AttributeError) as error:
-            raise UpdateError(f'Unreadable update record; no process actions taken: {transaction}') from error
+            fd = os.open(record / 'journal.json', os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as error:
+            return None, ('its journal is a symbolic link' if error.errno == errno.ELOOP
+                          else f'its journal cannot be read: {error.strerror}')
+        try:
+            with os.fdopen(fd) as stream: data = json.load(stream)
+        except (OSError, ValueError) as error:
+            return None, f'its journal is not valid JSON ({error})'
+        if (not isinstance(data, dict) or data.get('schema') != 1 or data.get('phase') not in PHASES
+                or not isinstance(data.get('target'), str)):
+            return None, 'its journal has an unknown format'
+        return data, None
+
+    def _for_target(self, target):
+        """The same updater for another installation in this directory, for its guidance."""
+        other = Installer(self.source, target, self.system, self.timeout, self.lock_parent, self.ready_timeout)
+        return other
+
+    def _set_aside_hint(self, record):
+        return ('If no update of AquaSpace is running, set this record aside. It is renamed in the same '
+                'folder; nothing is deleted:\n  ' + self.command('--set-aside', record))
+
+    def journal(self, transaction):
+        if transaction.parent != self.target.parent or not transaction.name.startswith(RECORD_PREFIX):
+            raise UpdateError('Recovery record is outside this installation directory.')
+        data, reason = self._read_record(transaction)
+        if data is None:
+            raise UpdateError(f'Unreadable update record ({reason}); no process actions taken: {transaction}\n'
+                              + self._set_aside_hint(transaction))
+        if data['target'] != str(self.target):
+            other = self._for_target(data['target'])
+            raise UpdateError(f'This update record belongs to {data["target"]}, not {self.target}.\n'
+                              + other.next_steps(transaction, data))
+        return data
 
     @staticmethod
     def _abandoned(record):
@@ -712,12 +744,27 @@ class Installer:
         return (not record.is_symlink() and record.is_dir()
                 and not journal.exists() and not journal.is_symlink())
 
-    def _records(self):
-        return [(record, self.journal(record)) for record in sorted(self.target.parent.glob(RECORD_PREFIX + '*'))
-                if not self._abandoned(record)]
+    def _scan(self):
+        """Every record in this directory as (record, journal or None, why it is unreadable)."""
+        for record in sorted(self.target.parent.glob(RECORD_PREFIX + '*')):
+            if self._abandoned(record): continue
+            yield (record, *self._read_record(record))
 
     def pending_transactions(self):
-        return [record for record, state in self._records() if state['phase'] not in TERMINAL_PHASES]
+        return [record for record, state, _ in self._scan()
+                if state and state['target'] == str(self.target) and state['phase'] not in TERMINAL_PHASES]
+
+    def _refuse_blocking_records(self):
+        """An unreadable record, or an unfinished one of any target here, blocks a new install."""
+        for record, state, reason in self._scan():
+            if state is None:
+                raise UpdateError(f'An unreadable update record blocks new installs ({reason}): {record}\n'
+                                  + self._set_aside_hint(record))
+            if state['phase'] in TERMINAL_PHASES: continue
+            if state['target'] == str(self.target):
+                raise UpdateError(f'An unfinished update blocks new installs: {record}\n' + self.next_steps(record, state))
+            raise UpdateError(f'An unfinished update of {state["target"]} blocks new installs: {record}\n'
+                              + self._for_target(state['target']).next_steps(record, state))
 
     def _begin(self, state):
         name = uuid.uuid4().hex
@@ -760,7 +807,9 @@ class Installer:
                 if _owned_directory(record) and set(os.listdir(record)) <= {'journal.json.tmp'}:
                     shutil.rmtree(record)
                 continue
-            state = self.journal(record)
+            state, _ = self._read_record(record)
+            # Unreadable records block installs elsewhere; another target's records are its own.
+            if state is None or state['target'] != str(self.target): continue
             if state['phase'] in PRE_STOP_PHASES:
                 # This updater holds the lock, so the installer that wrote it has died.
                 self._close_aborted(record, state)
@@ -1106,10 +1155,7 @@ class Installer:
             raise UpdateError('Installing beside running stock AeroSpace must be file-only.')
         with self._lock():
             self._tidy_records()
-            pending = self.pending_transactions()
-            if pending:
-                raise UpdateError(f'An unfinished update blocks new installs: {pending[0]}\n'
-                                  + self.next_steps(pending[0], self.journal(pending[0])))
+            self._refuse_blocking_records()
             metadata = bundle_metadata(self.source)
             if self.target == self.source or self.target in self.source.parents or self.source in self.target.parents:
                 raise UpdateError('Build and installation paths must be separate.')
@@ -1287,6 +1333,54 @@ class Installer:
             step = f'Quit it, then {finish} with:\n  {resume}'
         return f'{reason} Nothing was confirmed.\n{step}\n' + self._restore_hint(transaction, state)
 
+    def set_aside(self, record):
+        """Rename an unreadable record in its folder so that it stops blocking installs.
+
+        Nothing is deleted, and no process is started or stopped. It refuses when the
+        record could still matter: it is readable (use the commands it names), it
+        changed in the last LAUNCH_SETTLE_SECONDS (an updater or a launch may still
+        be in progress), or it holds a bundle while the installation is missing or
+        damaged (it may hold the only copy).
+        """
+        record = canonical(record)
+        with self._lock():
+            if record.parent != self.target.parent or not record.name.startswith(RECORD_PREFIX):
+                raise UpdateError('Only an update record in the installation folder can be set aside.')
+            if not os.path.lexists(record):
+                raise UpdateError(f'No update record at {record}.')
+            state, _ = self._read_record(record)
+            if state is not None:
+                guide = self.next_steps if state['target'] == str(self.target) else self._for_target(state['target']).next_steps
+                raise UpdateError('This update record is readable, so it is not set aside. Use the commands for its state:\n'
+                                  + guide(record, state))
+            info = os.lstat(record)
+            if info.st_uid != os.getuid():
+                raise UpdateError(f'{record} belongs to another account. Ask an administrator to move it.')
+            entries = [record] + (list(record.iterdir()) if stat.S_ISDIR(info.st_mode) else [])
+            changed = max(os.lstat(entry).st_mtime for entry in entries)
+            waited = self.system.time() - changed
+            if waited < LAUNCH_SETTLE_SECONDS:
+                raise UpdateError(f'{record} changed {max(waited, 0):.0f} s ago; an update may still use it. '
+                                  f'Wait {LAUNCH_SETTLE_SECONDS} s, then run this command again.')
+            bundles = sorted(entry.name for entry in entries[1:] if entry.name.endswith('.app'))
+            if bundles:
+                try:
+                    bundle_metadata(self.target)
+                except UpdateError:
+                    raise UpdateError(f'{self.target} is missing or is not a valid AquaSpace, and this record holds '
+                                      f'{", ".join(bundles)}, which may be the only copy. It is not set aside. Copy the '
+                                      f'bundle you want to keep to {self.target} first, for example:\n  '
+                                      + shlex.join(['ditto', str(record / bundles[0]), str(self.target)])) from None
+            aside = self.target.parent / (SET_ASIDE_PREFIX + record.name[len(RECORD_PREFIX):] + time.strftime('-%Y%m%d-%H%M%S'))
+            while os.path.lexists(aside): aside = aside.with_name(aside.name + '-1')
+            os.rename(record, aside)
+            sync_directory(self.target.parent)
+            self.summary = (f'Set the unreadable update record aside: {aside}\n'
+                            'Nothing was deleted, and no app was started or stopped.')
+            if bundles:
+                self.summary += f'\nIt still holds {", ".join(bundles)}. Remove it yourself when you no longer need it.'
+            return aside
+
     def recover(self, transaction):
         """Restore files only. Never starts or stops a process."""
         transaction = canonical(transaction)
@@ -1334,17 +1428,18 @@ def main(argv=None):
     parser.add_argument('--resume', type=Path, metavar='UPDATE_RECORD', help='Finish an interrupted update with no window manager running: complete the file swap, then launch the new AquaSpace once')
     parser.add_argument('--confirm', type=Path, metavar='UPDATE_RECORD', help='Verify that the AquaSpace started by an update controls windows, then complete the update; never stops or launches an app')
     parser.add_argument('--recover', type=Path, metavar='UPDATE_RECORD', help='Restore files from an unfinished update; never launches an app. Needs all managers stopped unless the record proves nothing was stopped')
+    parser.add_argument('--set-aside', type=Path, metavar='UPDATE_RECORD', help='Rename an unreadable update record in its folder so that it stops blocking installs; deletes nothing and never starts or stops apps')
     parser.add_argument('--archive-backups', action='store_true', help=f'Archive bundles from completed updates and keep only the newest {KEEP_COMPLETED_RECORDS} completed records; never starts or stops apps')
     parser.add_argument('--allow-running-stock', action='store_true', help='File-only repair of inactive AquaSpace while the sole stock AeroSpace remains running')
     parser.add_argument('--allow-identity-change', action='store_true', help='Install a build signed with a different identity; macOS then asks for Accessibility permission again')
     parser.add_argument('--ready-timeout', type=float, metavar='SECONDS', help=f'How long to wait for the new AquaSpace to take control (default {READY_TIMEOUT})')
     args = parser.parse_args(argv)
-    modes = [args.restart, args.resume, args.confirm, args.recover, args.archive_backups]
+    modes = [args.restart, args.resume, args.confirm, args.recover, args.set_aside, args.archive_backups]
     if sum(bool(x) for x in modes) > 1:
-        parser.error('--restart, --resume, --confirm, --recover and --archive-backups cannot be combined')
+        parser.error('--restart, --resume, --confirm, --recover, --set-aside and --archive-backups cannot be combined')
     if args.allow_running_stock and any(modes):
         parser.error('--allow-running-stock is only available for file-only installation')
-    if args.allow_identity_change and (args.resume or args.confirm or args.recover or args.archive_backups):
+    if args.allow_identity_change and (args.resume or args.confirm or args.recover or args.set_aside or args.archive_backups):
         parser.error('--allow-identity-change is only available when installing')
     if args.ready_timeout is not None:
         if not (args.restart or args.resume or args.confirm):
@@ -1363,6 +1458,7 @@ def main(argv=None):
         elif args.resume: installer.resume(args.resume)
         elif args.confirm: installer.confirm(args.confirm)
         elif args.recover: installer.recover(args.recover)
+        elif args.set_aside: installer.set_aside(args.set_aside)
         else: installer.install(restart=args.restart, allow_running_stock=args.allow_running_stock,
                                 allow_identity_change=args.allow_identity_change)
         print(installer.summary)
