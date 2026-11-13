@@ -1226,6 +1226,13 @@ class NativeBackendTests(unittest.TestCase):
                         self.native.launch(self.app / 'Contents/MacOS/AquaSpace', None, Path(self.tmp.name) / 'app.log')
                 self.assertEqual(launch.call_count, 1)
 
+    def test_bundle_verification_uses_the_system_codesign(self):
+        requirement = 'identifier "local.aquaspace" and certificate leaf = H"AAAA"'
+        with patch.object(self.native, 'run') as tool, \
+             patch.object(update, 'designated_requirement', return_value=requirement):
+            self.assertEqual(self.native.verify_bundle(self.app), requirement)
+        self.assertEqual({call.args[0][0] for call in tool.call_args_list}, {'/usr/bin/codesign'})
+
     def test_native_stop_rejects_reused_pid_before_sending_any_signal(self):
         old = update.Process(1234, (1, 2), os.getuid(), self.app / 'Contents/MacOS/AquaSpace', 'local.aquaspace')
         with patch('aquaspace_update.os.kill') as signaler:
