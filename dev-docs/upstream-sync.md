@@ -59,6 +59,26 @@ To list them again:
 git log --grep='cherry picked from commit' --format='%h %s' 74a1bf17..HEAD
 ```
 
+### Deviation to keep: `getWindowLevel`
+
+After these picks, the fork changed `getWindowLevel` in
+[windowLevelCache.swift](../Sources/AppBundle/windowLevelCache.swift) (commits
+`531fb9fe` and `cc484271`). It now differs from `be3e58df` and `0d498deb` in two
+rules:
+
+- A cache miss that joined a WindowServer read already in flight waits for
+  that read. If the window is still missing, it waits for, or starts, one read
+  that began after its request. Upstream returns the result of the joined read.
+  That read took its window list before the request, so it can miss a window
+  that was created since. Such a miss can make an ordinary new browser window
+  look like a popup.
+- A failed WindowServer read keeps the known levels. Upstream replaces them
+  with an empty list.
+
+**At the next merge, keep these two rules** in `windowLevelCache.swift`, also
+where upstream changed the same function. The `hidden-handoff` offline suite
+tests them.
+
 ## Upstream native tabs
 
 Upstream is adding its own native tab support on `main`. The commit series is
@@ -100,7 +120,9 @@ AX tab-bar identity and requires unique evidence for every transition.
 After that change, `%{window-id}` no longer gives the macOS window ID, and the
 value changes when the manager restarts. The fork's session transfer, the
 updater and the live harnesses all pass `%{window-id}` values between processes
-(see `WindowManagerSession.windowQuery` and `script/aquaspace_update.py`). A
+(see `WindowManagerSession.windowQuery` in
+`Sources/AppBundle/model/WindowManagerSession.swift`, and
+`script/aquaspace_update.py`). A
 merge must move them to a stable ID, for example `%{window-id-native}`. Stock
 AeroSpace releases without that variable will not understand it, so the
 handoff to stock needs a check of the peer's version.
@@ -117,11 +139,13 @@ When upstream releases this work:
 2. **Port the detector onto upstream's identity model.** With opaque IDs, a tab
    switch can keep the same model window and point its opaque ID to the new
    macOS window. The fork's slot-transfer code then has no job, and can go:
-   - `transferNativeTabState` (in `nativeTabs.swift`);
+   - `transferNativeTabState` (in
+     `Sources/AppBundle/tree/nativeTabSlotTransfer.swift`);
    - `replaceNativeTabFocusId` (in `Sources/AppBundle/focus.swift`);
    - the `replacingNativeTabWindowId` path in `MacWindow.getOrRegister`
      (`Sources/AppBundle/tree/MacWindow.swift`, called from `MacApp.swift`).
-   Merges (absorptions) and detaches (inheritances) still need the fork's code.
+   Merges (absorptions) and detaches (inheritances) still need the fork's code:
+   `absorbNativeTabState` and `inheritNativeTabWorkspace` in the same file.
 3. **Move session IDs** to a stable window ID, as described above.
 4. Run every offline suite in the [guide](aquaspace.md#tests), then the live
    harnesses with authorization.
