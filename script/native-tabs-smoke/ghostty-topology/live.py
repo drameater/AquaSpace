@@ -2,7 +2,8 @@
 import argparse
 import sys
 
-parser = argparse.ArgumentParser(description=__doc__)
+# No abbreviations: only the full --run-live flag authorizes a run.
+parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
 parser.add_argument('--run-live', action='store_true', help='Explicitly authorize launching disposable Ghostty windows and native menu actions')
 parser.add_argument('--expect-existing-window', action='append', required=False, default=[], metavar='ID:WORKSPACE', help='Required preservation baseline; repeat for multiple windows')
 parser.add_argument('--test-workspace-prefix', default='native-tab-test-ghostty-topology', help='Dedicated empty workspace pair prefix (must start with native-tab-test-)')

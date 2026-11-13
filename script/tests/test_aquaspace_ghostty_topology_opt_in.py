@@ -34,6 +34,12 @@ class GhosttyTopologyOptInTest(unittest.TestCase):
     def test_help_is_inert(self):
         self.invoke(['--help'], 0)
 
+    def test_abbreviated_opt_in_is_inert(self):
+        # argparse accepts unique prefixes by default. A shortened flag must not authorize a run.
+        for flag in ('--run', '--run-l', '--run-liv'):
+            with self.subTest(flag=flag):
+                self.invoke([flag, '--expect-existing-window', '21423:2'], 2)
+
     def test_explicit_baseline_is_required(self):
         self.invoke(['--run-live'], 2)
 
