@@ -52,7 +52,7 @@ EXIT_INTERRUPTED = 130
 INSTALLER_SCRIPT = Path(__file__).resolve().with_name('install-aquaspace.py')
 # Per-user, so another account cannot pre-create the lock and block updates.
 USER_STATE_DIRECTORY = Path.home() / 'Library/Application Support/AquaSpace/Updater'
-# Updaters before 2026-11 locked here; hold these too while such a copy may still run.
+# Updaters before 2026-11 created and locked their lock file here; hold it too.
 LEGACY_LOCK_DIRECTORIES = (Path('/tmp'),)
 UNREADABLE_EXECUTABLE = Path('/(unreadable executable)')
 
@@ -367,14 +367,22 @@ def _owned_directory(path):
 class InstallLock:
     """One flock per user, on a file that is never unlinked.
 
-    The lock file lives in a directory only this user can write. The legacy
-    locations are locked too, if this user already owns a regular lock file
-    there, so an older updater that is still running cannot overlap. A legacy file
-    that another account planted is ignored instead of blocking updates.
+    The lock file lives in a directory only this user can write. The updater also
+    locks the file that updaters before 2026-11 used, so an older updater that is
+    still running cannot overlap. Those updaters create that file in /tmp, which
+    macOS clears at boot, so this lock creates it too (`legacy`). Locations that no
+    old updater created are locked only if the file is already there (`legacy_existing`).
+
+    A legacy file that is not a regular file of this user with one link (for
+    example, one that another account planted in /tmp) is skipped with a warning.
+    An older updater checks the same properties and refuses to start, so it cannot
+    overlap while that file is there. A planted file never blocks this updater.
     """
-    def __init__(self, parent, legacy=()):
+    def __init__(self, parent, legacy=(), legacy_existing=(), report=None):
         name = f'.aquaspace-install-{os.getuid()}.lock'
-        self.path, self.legacy, self.fds = Path(parent) / name, [Path(p) / name for p in legacy], []
+        self.path, self.fds = Path(parent) / name, []
+        self.legacy = [(Path(p) / name, True) for p in legacy] + [(Path(p) / name, False) for p in legacy_existing]
+        self.report = report or (lambda text: print(text, file=sys.stderr, flush=True))
         self.fd = None
 
     def __enter__(self):
@@ -393,13 +401,24 @@ class InstallLock:
             self.__exit__()
             raise UpdateError('Another installer is running, or the install lock cannot be acquired.') from error
         primary = os.fstat(self.fd)
-        for path in self.legacy:
-            try: fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-            except OSError: continue  # Absent, a symlink, or not readable: no older updater can use it.
+        for path, create in self.legacy:
+            if not create and not os.path.lexists(path): continue
+            # The flags and checks match the older updater's, so it refuses every file skipped here.
+            flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_CREAT if create else 0)
+            try:
+                fd = os.open(path, flags, 0o600)
+            except FileNotFoundError:
+                continue  # The directory is absent, so no older updater can lock there either.
+            except OSError as error:
+                self._skip(path, error.strerror or str(error))
+                continue
             self.fds.append(fd)
             os.set_inheritable(fd, False)
             info = os.fstat(fd)
-            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode): continue
+            if info.st_uid != os.getuid():
+                self._skip(path, 'it belongs to another account'); continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                self._skip(path, 'it is not a plain file with one link'); continue
             if (info.st_dev, info.st_ino) == (primary.st_dev, primary.st_ino): continue  # Same file: already held.
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -408,6 +427,11 @@ class InstallLock:
                 raise UpdateError(f'An older AquaSpace installer is running (it holds {path}). '
                                   'Wait for it to finish, then try again.') from error
         return self
+
+    def _skip(self, path, reason):
+        self.report(f'Note: the old install lock {path} cannot be used ({reason}). An older AquaSpace installer '
+                    'cannot run while this file is there, so this installer continues. To let an older '
+                    'installer run again, ask an administrator to remove that file.')
 
     def __exit__(self, *args):
         # Never unlink a flock file: replacing its inode would permit two owners.
@@ -577,18 +601,20 @@ def _remove_tree(path):
 
 class Installer:
     def __init__(self, source, target, system, timeout=5, lock_parent=None,
-                 ready_timeout=READY_TIMEOUT, legacy_lock_parents=()):
+                 ready_timeout=READY_TIMEOUT, legacy_lock_parents=(), existing_legacy_lock_parents=()):
         self.source, self.target = canonical(source), canonical(target)
         self.system, self.timeout, self.ready_timeout = system, timeout, ready_timeout
         self.lock_parent = Path(lock_parent) if lock_parent is not None else self.target.parent
         self.legacy_lock_parents = tuple(legacy_lock_parents)
+        self.existing_legacy_lock_parents = tuple(existing_legacy_lock_parents)
         self.checkpoint = lambda phase: None  # Fault injection seam; never configured by the CLI.
         self.report = lambda text: print(text, file=sys.stderr, flush=True)
         self.summary = ''
         self.warnings = []
 
     def _lock(self):
-        return InstallLock(self.lock_parent, self.legacy_lock_parents)
+        return InstallLock(self.lock_parent, self.legacy_lock_parents, self.existing_legacy_lock_parents,
+                           report=self.report)
 
     # Guidance --------------------------------------------------------------
 
@@ -1215,7 +1241,8 @@ def main(argv=None):
         # One lock for all of this user's updates, with any --target directory or spelling.
         installer = Installer(args.source, args.target, NativeSystem(), lock_parent=USER_STATE_DIRECTORY,
                               ready_timeout=args.ready_timeout or READY_TIMEOUT,
-                              legacy_lock_parents=(*LEGACY_LOCK_DIRECTORIES, canonical(args.target).parent))
+                              legacy_lock_parents=LEGACY_LOCK_DIRECTORIES,
+                              existing_legacy_lock_parents=(canonical(args.target).parent,))
         if args.archive_backups:
             installer.archive_completed_backups()
             installer.summary = 'Completed update backups archived and old records pruned; no app launched or stopped.'
