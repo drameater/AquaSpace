@@ -764,6 +764,29 @@ class ManifestAfterExchangeTests(BuilderTest):
         self.assert_app_matches_its_manifest()
 
 
+class StrandedPreviousBuildTests(FailureTests):
+    """A failed publish never deletes the only copy of the previous build."""
+
+    def test_previous_build_that_could_not_be_put_back_survives_until_the_next_build(self):
+        self.stage_previous_build()
+        def publish(staged, app):
+            os.rename(app, staged.parent / 'previous.app')
+            raise OSError('the previous build could not be put back')
+        with patch.object(build, 'publish', publish), patch('sys.stderr', io.StringIO()), \
+                self.assertRaises(SystemExit):
+            self.main()
+        stranded = list(self.output.glob('.staging-*/previous.app'))
+        self.assertEqual(len(stranded), 1)
+        self.assertEqual((stranded[0] / 'Contents/marker').read_text(), 'previous')
+        # The next build restores it before it compiles, so a failed compile keeps it.
+        def failing_compile(package):
+            raise build.BuildError('swift build failed with exit code 1')
+        self.tools.compile = failing_compile
+        with patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):
+            self.main()
+        self.assert_previous_build_kept()
+
+
 class InstallerExitStatusTests(BuilderTest):
     """Finding 6: the installer's exit status reaches the caller unchanged, with no traceback."""
     fake_installer_process = False

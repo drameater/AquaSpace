@@ -410,6 +410,7 @@ def build_locked(args, root, identity, keychain, source):
         shutil.rmtree(leftover, ignore_errors=True)  # From an interrupted build; this build holds the lock.
     binaries = compile_products(source, args.scratch_path, args.sdk, args.jobs, not args.disable_sandbox)
     work = Path(tempfile.mkdtemp(prefix=".staging-", dir=args.output))
+    app = args.output / "AquaSpace.app"
     try:
         staged = work / "AquaSpace.app"
         assemble_bundle(staged, binaries, root, version, work)
@@ -424,7 +425,6 @@ def build_locked(args, root, identity, keychain, source):
             "app_sha256": hashlib.sha256((macos / APP_EXECUTABLE).read_bytes()).hexdigest(),
             "cli_sha256": hashlib.sha256((macos / CLI_EXECUTABLE).read_bytes()).hexdigest(),
             "designated_requirement": requirement}, indent=2) + "\n")
-        app = args.output / "AquaSpace.app"
         # The manifest goes first: the output never holds an app without the manifest of that
         # app. After a power loss between the two steps, the installer rejects the mismatch.
         published = args.output / "build.json"
@@ -439,7 +439,10 @@ def build_locked(args, root, identity, keychain, source):
                 restore_manifest(work, published)
             raise
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        # A failed publish can leave the only copy of the previous build in the staging
+        # folder. Keep it then: the next build puts it back with its manifest.
+        if not ((work / "previous.app").is_dir() and not (app.exists() or app.is_symlink())):
+            shutil.rmtree(work, ignore_errors=True)
     return app
 
 
