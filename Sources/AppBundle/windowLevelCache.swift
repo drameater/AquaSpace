@@ -36,6 +36,15 @@ func getRestorationWindowOwners() -> [UInt32: Set<Int32>]? {
 
 @MainActor func getWindowLevel(for windowId: UInt32, _ cm: CancellationMode) async throws -> MacOsWindowLevel? {
     if let existing = cache[windowId] { return existing }
+    // AquaSpace deviates from upstream be3e58df and 0d498deb here. A read that is
+    // already in flight took its WindowServer list before this request, so it can
+    // miss a window created since. After it, a miss waits for, or starts, one read
+    // that began after this request, as every miss did before the async port.
+    if let wip {
+        try await wip.await(cm)
+        if let existing = cache[windowId] { return existing }
+    }
+    // A read in flight now began after the read above had finished.
     if let wip {
         try await wip.await(cm)
         return cache[windowId]
