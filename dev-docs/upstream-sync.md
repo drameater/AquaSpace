@@ -47,7 +47,7 @@ unless the fork changed the same lines.
 | Upstream | Fork | Change |
 | --- | --- | --- |
 | `80092f30` | `c520f452` | Fix `balance-sizes` and `resize` interop. |
-| `bc6be84a` | `58a35a1f` | Show a warning icon after a config reload with warnings. |
+| `bc6be84a` | `58a35a1f` | Show a warning icon in the menu bar after a config reload with warnings. |
 | `0921fb81` | `3347d5e7` | Show the menu images of the Experimental UI Settings menu on macOS 27. |
 | `be3e58df` | `27f4c2df` | `getWindowLevel`: do not block the main thread. |
 | `0d498deb` | `e34cb3af` | `getWindowLevel`: signal the callers that wait for a fetch in progress. |
