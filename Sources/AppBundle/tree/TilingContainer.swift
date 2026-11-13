@@ -32,17 +32,16 @@ extension TilingContainer {
         if orientation == targetOrientation {
             return
         }
+        cancelPendingRestorationForOrientationChange()
         if config.enableNormalizationOppositeOrientationForNestedContainers {
             var orientation = targetOrientation
             parentsWithSelf
                 .filterIsInstance(of: TilingContainer.self)
                 .forEach {
-                    WindowManagerHandoff.cancelPendingForUserMutation($0.allLeafWindowsRecursive)
                     $0._orientation = orientation
                     orientation = orientation.opposite
                 }
         } else {
-            WindowManagerHandoff.cancelPendingForUserMutation(allLeafWindowsRecursive)
             _orientation = targetOrientation
         }
     }

@@ -17,3 +17,13 @@ extension TreeNode {
         }
     }
 }
+
+extension TilingContainer {
+    /// A user orientation change supersedes the saved intent of every window under
+    /// each container that changeOrientation flips, in the order it flips them.
+    @MainActor func cancelPendingRestorationForOrientationChange() {
+        let flipped = config.enableNormalizationOppositeOrientationForNestedContainers
+            ? parentsWithSelf.filterIsInstance(of: TilingContainer.self) : [self]
+        WindowManagerHandoff.cancelPendingForUserMutation(flipped.flatMap(\.allLeafWindowsRecursive))
+    }
+}
