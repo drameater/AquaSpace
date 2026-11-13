@@ -702,6 +702,45 @@ class ManifestOrderTests(FailureTests):
         self.assertFalse(self.app.exists())
 
 
+class ManifestAfterExchangeTests(BuilderTest):
+    """An error or Ctrl-C after the exchange: the output keeps the app with its own manifest."""
+
+    def assert_app_matches_its_manifest(self):
+        manifest = json.loads((self.output / 'build.json').read_text())
+        self.assertEqual(hashlib.sha256((self.app / 'Contents/MacOS/AquaSpace').read_bytes()).hexdigest(),
+                         manifest['app_sha256'])
+
+    def interrupted_publish(self, after_swap):
+        """Run a build whose exchange raises KeyboardInterrupt before or after it swaps the paths."""
+        def exchange(first, second):
+            if after_swap:
+                swap = Path(first).with_name(Path(first).name + '.swap')
+                os.rename(first, swap); os.rename(second, first); os.rename(swap, second)
+            raise KeyboardInterrupt  # For example, Ctrl-C while the directory is synced.
+        with patch.object(build, 'exchange_paths', exchange), self.assertRaises(KeyboardInterrupt):
+            self.main()
+
+    def test_interrupt_after_the_exchange_keeps_the_new_manifest(self):
+        for previous_manifest in (True, False):
+            with self.subTest(previous_manifest=previous_manifest):
+                self.setUp()
+                self.main()
+                if not previous_manifest: (self.output / 'build.json').unlink()  # From an older builder.
+                self.tools.dirty = True  # The next build has other binaries.
+                self.interrupted_publish(after_swap=True)
+                self.assertIn('.dirty', self.info()['CFBundleShortVersionString'])
+                self.assert_app_matches_its_manifest()
+
+    def test_interrupt_before_the_exchange_puts_the_previous_manifest_back(self):
+        self.main()
+        before = (self.output / 'build.json').read_bytes()
+        self.tools.dirty = True
+        self.interrupted_publish(after_swap=False)
+        self.assertNotIn('.dirty', self.info()['CFBundleShortVersionString'])
+        self.assertEqual((self.output / 'build.json').read_bytes(), before)
+        self.assert_app_matches_its_manifest()
+
+
 class InstallerExitStatusTests(BuilderTest):
     """Finding 6: the installer's exit status reaches the caller unchanged, with no traceback."""
     fake_installer_process = False

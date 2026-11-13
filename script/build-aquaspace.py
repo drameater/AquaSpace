@@ -303,6 +303,15 @@ def publish(staged, app):
         raise
 
 
+def directory_identity(path):
+    """The device and inode of a directory, or None if it is absent. A rename keeps both."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino
+
+
 def restore_stranded_build(output):
     """Put back a previous build that a crash left between the two renames of publish."""
     app = output / "AquaSpace.app"
@@ -386,14 +395,17 @@ def build_locked(args, root, identity, keychain, source):
         published = args.output / "build.json"
         previous = published.read_bytes() if published.exists() else None
         os.replace(work / "build.json", published)
+        staged_directory = directory_identity(staged)
         try:
             publish(staged, app)
         except BaseException:
-            if previous is None:
-                published.unlink()
-            else:
-                (work / "previous-build.json").write_bytes(previous)
-                os.replace(work / "previous-build.json", published)
+            # Decide by what is on disk: an exchange can complete before an error or Ctrl-C.
+            if directory_identity(app) != staged_directory:
+                if previous is None:
+                    published.unlink()
+                else:
+                    (work / "previous-build.json").write_bytes(previous)
+                    os.replace(work / "previous-build.json", published)
             raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
