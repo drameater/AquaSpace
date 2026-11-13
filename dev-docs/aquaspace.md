@@ -117,6 +117,12 @@ began before the freeze cannot continue after a later claim.
 
 - Every 200 ms AquaSpace scans for peers. A failed scan is retried on the next
   tick. Only a confirmed peer stops control.
+- This periodic scan reads only new or changed processes. It remembers which
+  processes are not managers, by PID and kernel exec generation (unique process
+  ID, exec version and executable image UUID). Any `exec` changes the
+  generation, so a process that becomes a manager is read again on the next
+  scan. Startup, launch notifications, session export and status use a full
+  scan.
 - When macOS reports that another app with a manager bundle ID will launch,
   launched or became active, AquaSpace freezes writes at once and scans. If the
   scan confirms a peer, AquaSpace yields. If not, it resumes control.
@@ -196,12 +202,17 @@ control. The updater uses both.
 
 ## Build
 
-<!-- UPDATE-AFTER-INTEGRATION: build -->
+You need:
 
-You need macOS, Python 3, Git, a Swift toolchain that matches
-[Package.swift](../Package.swift), and a macOS SDK that builds the app.
-Keep `/Applications/AeroSpace.app` installed: the builder copies its icon and
-bundle resources.
+- macOS, Python 3 and Git;
+- a Swift toolchain that matches [Package.swift](../Package.swift). The Command
+  Line Tools are enough. Xcode is not necessary;
+- `/usr/bin/sips`, `/usr/bin/iconutil`, `/usr/bin/lipo` and `/usr/bin/codesign`;
+- the Swift package dependencies at the versions in `Package.resolved`. The
+  builder does not resolve or update dependencies.
+
+The builder uses no other installed app. It checks every tool and the signing
+identity before it compiles.
 
 Create the signing identity once:
 
@@ -213,8 +224,15 @@ This creates a persistent local code-signing certificate in a dedicated
 keychain under `~/Library/Application Support/AquaSpace/Signing`. macOS ties
 privacy permissions (Accessibility) to the signing identity. A stable identity
 lets a grant survive rebuilds. Keep that folder when you clean caches. Setup
-reuses an existing identity unchanged and does not change system trust
-settings.
+does not change system trust settings, and passes the keychain passwords on
+standard input, not on the command line.
+
+- A complete identity is reused unchanged.
+- An interrupted setup has no certificate yet, so no build used it. Setup moves
+  its files to an `incomplete-<date>-<time>` folder and starts again.
+- If the certificate is present but the keychain or its password file is
+  missing, setup stops. It prints the commands to make a new identity. A new
+  identity needs a new Accessibility grant.
 
 Build:
 
@@ -224,106 +242,239 @@ Build:
 
 The builder:
 
-- copies `Package.swift`, `Package.resolved` and `Sources/` to
-  `.debug/aquaspace/source` and writes the version and Git hash files there;
-- runs `swift build -c release` with dependency resolution and updates
-  disabled (dependencies must already be cached) and 2 jobs by default;
-- copies `/Applications/AeroSpace.app` as the base, replaces its executables
-  with `AquaSpace` and `aquaspace-cli`, adds the `Contents/Helpers/aerospace`
-  alias, and sets the bundle ID `local.aquaspace`;
-- signs with the persistent identity and refuses ad-hoc signing;
-- writes the app to `.debug/aquaspace/release/AquaSpace.app` and a manifest
-  `build.json` (version, Git revision, source and executable hashes, designated
-  requirement).
+1. Derives the version from Git. The short version is
+   `<base>-aquaspace.<commits>.g<commit>`, for example
+   `0.21.3-aquaspace.71.g79e53f21`. `<base>` comes from the nearest tag
+   `v<major>.<minor>.<patch>...` before `HEAD`, and `<commits>` is the number of
+   commits since that tag. Without a tag, the version is
+   `0.21.3-aquaspace.g<commit>`. If a build input has uncommitted changes or
+   untracked files, the version ends with `.dirty`. Build inputs are `Package.swift`,
+   `Package.resolved`, `Sources/`, `script/aquaspace-Info.plist`, the icon image
+   and `docs/config-examples/default-config.toml`.
+2. Sets `CFBundleVersion` to the commit time in UTC (`YYYYMMDDhhmmss`). A dirty
+   build uses the build time instead. So a newer commit or a later dirty build
+   always gets a higher number.
+3. Copies `Package.swift`, `Package.resolved` and `Sources/` to
+   `.debug/aquaspace/source` and writes the version and Git hash files there.
+4. Runs `swift build -c release` for the products `AeroSpaceApp` and
+   `aerospace`, with 2 jobs and with dependency resolution and updates
+   disabled. The build cache is `.debug/aquaspace/build`.
+5. Assembles `AquaSpace.app` in a temporary `.staging-*` folder in the output
+   folder:
+   - `Contents/MacOS/AquaSpace` (the `AeroSpaceApp` product) and
+     `Contents/MacOS/aquaspace-cli` (the `aerospace` product);
+   - the alias `Contents/Helpers/aerospace`, a symlink to `../MacOS/aquaspace-cli`;
+   - `Contents/Info.plist` from `script/aquaspace-Info.plist`, with bundle ID
+     `local.aquaspace`;
+   - `Contents/Resources/AppIcon.icns`, made with `sips` and `iconutil` from
+     `resources/Assets.xcassets/AppIcon.appiconset/icon.png`. The bundle has no
+     `Assets.car`; `Info.plist` names only this icon file;
+   - `Contents/Resources/default-config.toml`.
+6. Validates the bundle before and after signing: the exact file list, the
+   bundle ID, executable and version in `Info.plist`, the helper symlink, the
+   architecture of this Mac, and the version and Git hash inside both
+   executables.
+7. Signs the CLI and the app with the persistent identity and refuses ad-hoc
+   signing. The designated requirement must name `local.aquaspace` and a
+   certificate. Both signatures must pass `codesign --verify --strict`.
+8. Publishes the result. It replaces `.debug/aquaspace/release/AquaSpace.app`
+   with the new bundle, then writes `build.json` next to it: version, bundle
+   version, Git revision, dirty flag, source hashes, app and CLI hashes, and
+   designated requirement. If any step fails, the previous build stays.
+
+If the builder stops between the app and `build.json`, the old manifest no
+longer matches the app. The installer then refuses the build; build again.
 
 It does not install or start anything unless you pass `--install-and-restart`.
 
-Options: `--sdk <path>`, `--scratch-path`, `--output`, `--base-app` (another
-resource donor), `--version` (default `0.21.3-aquaspace.<date>.<time>`),
-`--jobs`, `--signing-identity` and `--signing-keychain`. `build-release.sh`
-passes all options on and accepts `--build-version` as a name for `--version`.
+| Option | Use |
+| --- | --- |
+| `--sdk <path>` | Build with this macOS SDK. |
+| `--scratch-path <path>`, `--output <path>` | Other build cache and output folders. |
+| `--version <text>` | Replace the short version. `CFBundleVersion` stays derived from Git. |
+| `--jobs <n>` | Compiler jobs (default 2). |
+| `--disable-sandbox` | See below. |
+| `--signing-identity <id>`, `--signing-keychain <path>` | Sign with another persistent identity. `-` (ad hoc) is refused. |
+| `--install-and-restart` | After the build, run the installer with `--restart`. The installer takes over the process, so its [exit status](#exit-status) is the builder's. |
+| `--allow-identity-change`, `--ready-timeout <seconds>` | Installer options. They need `--install-and-restart`, and the builder checks them before it compiles. |
+
+`build-release.sh` passes all options on and accepts `--build-version` as a
+name for `--version`.
+
+SwiftPM evaluates `Package.swift` inside a macOS sandbox. Some sandboxes do not
+allow a nested sandbox. If you run the builder inside such a sandbox, for
+example the command sandbox of a coding agent, `swift build` fails. Only then,
+pass `--disable-sandbox`.
 
 On the owner's machine the macOS 27 Command Line Tools SDK lacks the SwiftUI
 macro plugin, so builds use
 `--sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`.
 
-Debug build: `./build-debug.sh` writes `AquaSpaceApp` and `aquaspace` to
-`.debug/aquaspace-debug`. A debug build refuses to run while any other manager
-runs.
+Debug build: `./build-debug.sh` needs Xcode (for XCTest), swiftly and Bash 5.
+Without XCTest it stops at once with a message. It copies the products
+`AeroSpaceApp` and `aerospace` to `.debug/`. A debug build refuses to run while
+any other manager runs.
 
 ## Install and update
 
-<!-- UPDATE-AFTER-INTEGRATION: install-and-update -->
-
 `script/install-aquaspace.py` installs a staged build. The code is in
-[aquaspace_update.py](../script/aquaspace_update.py).
+[aquaspace_update.py](../script/aquaspace_update.py). Run
+`python3 script/install-aquaspace.py --help` for the full list of options.
 
 | Command | What it does |
 | --- | --- |
-| `./install-from-sources.sh` | Build, then install with `--restart`. Build options pass through. |
-| `./install-from-sources.sh --dont-rebuild` | Install the staged build with `--restart`. Refuses build options. |
-| `python3 script/install-aquaspace.py --restart` | Replace the sole running AquaSpace and start the new one once. |
+| `./install-from-sources.sh` | Build, then install with `--restart`. Accepts build options and the two installer options below. |
+| `./install-from-sources.sh --dont-rebuild` | Install the staged build with `--restart`. Accepts only the two installer options below. |
+| `python3 script/install-aquaspace.py --restart` | Replace the running AquaSpace, or install when no manager runs. Starts the new AquaSpace once. |
 | `python3 script/install-aquaspace.py` | Install files only. All managers must be stopped. Starts nothing. |
-| `... --allow-running-stock` | File-only install while the one stock AeroSpace keeps running. The installer checks that stock's identity does not change and never signals it. Not with `--restart` or `--recover`. |
-| `... --archive-backups` | Turn bundles from completed updates into `.app.tar.gz` archives. Starts and stops nothing. |
-| `... --recover <dir>` | See [Recovery](#recovery). |
+| `... --allow-running-stock` | File-only install while the one stock AeroSpace (`/Applications/AeroSpace.app`) keeps running. The installer checks that stock's identity does not change and never signals it. Not with another mode. |
+| `... --allow-identity-change` | Accept a build signed with another identity. See [Signing identity change](#signing-identity-change). |
+| `... --ready-timeout <seconds>` | How long to wait for the new AquaSpace to take control: more than 0, at most 3600, default 30. With `--restart`, `--resume` or `--confirm`. |
+| `... --resume <record>`, `--confirm <record>`, `--recover <record>` | Finish an unfinished update. See [Recovery](#recovery). |
+| `... --archive-backups` | Tidy the update records (see below). Starts and stops nothing. |
 
-First installation: stop any running manager, then run
-`./install-from-sources.sh --dont-rebuild` after a build. Grant Accessibility
-(called *Device Control and Data Access* on some macOS versions) to AquaSpace
-once.
+`--source` (default `.debug/aquaspace/release/AquaSpace.app`) and `--target`
+(default `/Applications/AquaSpace.app`) select other bundles.
 
-An update with `--restart`:
+### First installation
 
-1. Takes the install lock `/Applications/.aquaspace-install-<uid>.lock`. A
-   second installer stops.
-2. Refuses if an earlier update is unfinished. Archives the backups of
-   completed updates.
+1. Quit every window manager, including stock AeroSpace. The installer refuses
+   to start while a manager other than the installed AquaSpace runs.
+2. Run `./install-from-sources.sh`, or `./build-release.sh` and then
+   `./install-from-sources.sh --dont-rebuild`.
+3. The installer starts AquaSpace once. AquaSpace waits for the Accessibility
+   permission before it controls windows. Allow AquaSpace in System Settings >
+   Privacy & Security > Accessibility (called *Device Control and Data Access*
+   on some macOS versions). The installer waits up to the ready timeout
+   (30 seconds by default) and tells you when it starts to wait.
+4. If you allow it in time, the installer finishes with exit status 0.
+   Otherwise it stops with exit status 3, leaves AquaSpace running and prints a
+   `--confirm` command. Allow AquaSpace, then run that command. `--confirm`
+   stops and starts nothing. It waits again for AquaSpace to take control, then
+   completes the update.
+
+### Updates
+
+`./install-from-sources.sh` builds and replaces the running AquaSpace. The
+installer:
+
+1. Takes the [install lock](#install-lock). A second installer stops.
+2. [Tidies the update records](#update-records). It refuses if an earlier
+   update is unfinished and prints the next command for it.
 3. Verifies the staged app and CLI signatures and refuses a hash-bound (ad-hoc)
-   identity. Refuses if any manager other than the sole installed AquaSpace
-   runs.
-4. Creates `/Applications/.aquaspace-update-<id>/` with a journal. Each phase is
-   written to the journal before it starts. Copies the build into the folder,
-   verifies the copy again, and checks its hashes against `build.json`.
-5. Asks the running AquaSpace for its status and session, and checks that the
-   CLI belongs to the running process. Saves the session in the folder.
-6. Stops the old AquaSpace with `SIGKILL` after a fresh identity check. This
-   skips the normal quit path, which moves windows. It waits for the process to
-   exit.
-7. Moves the old app into the update folder and moves the new app into place.
-8. Starts the new app once through Launch Services (`open -n -g ...
-   --restore-session <file>`), so macOS gives the privacy request to AquaSpace
-   and not to the terminal. It then checks that exactly one new manager runs
-   from the installed path and that it reports control.
-9. Marks the update complete and archives the old app as `previous.app.tar.gz`.
+   identity. Refuses if any manager other than the installed AquaSpace runs.
+4. Compares the signing identity of the build with the installed app. See
+   [Signing identity change](#signing-identity-change).
+5. Creates the update record `/Applications/.aquaspace-update-<id>/` with a
+   journal. Each phase is written to the journal before it starts. Copies the
+   build into the record and verifies the copy again. If the build has a
+   `build.json`, the copy's hashes, version and designated requirement must
+   match it.
+6. Asks the running AquaSpace for its status and session through the installed
+   CLI, and checks that the CLI belongs to the running process. Saves the
+   session in the record.
+7. Stops the old AquaSpace with `SIGKILL` after a fresh identity check. This
+   skips the normal quit path, which moves windows. It waits up to 5 seconds
+   for the process to exit.
+8. Exchanges the new and the old bundle in one atomic step. The old bundle
+   goes into the record as `previous.app`. A volume without atomic exchange
+   uses two renames; `--resume` can finish them.
+9. Starts the new app once through Launch Services (`open -n -g ...
+   --args --restore-session <file>`), so macOS gives the privacy request to
+   AquaSpace and not to the terminal. Its output goes to `app.log` in the
+   record. The installer checks that exactly one new manager runs from the
+   installed path, then waits up to the ready timeout for it to report control.
+10. Marks the update complete and archives the old app as
+    `previous.app.tar.gz`.
 
-There is one launch site. No step starts an old copy, a rollback app or a
-watchdog. If a step fails, the installer reports the update folder and stops.
+Only `--restart` and `--resume` start an app, and each starts the new
+AquaSpace at most once. No step starts an old copy, a rollback app or a
+watchdog. If a step fails, the installer names the record, says what state
+remains, and prints the next command. If you press Ctrl-C before the old
+AquaSpace is stopped, the installer closes the record as aborted.
+
+### Signing identity change
+
+If the build is signed with another identity than the installed app, the
+installer stops before it changes anything. It prints both designated
+requirements and an installer command with `--allow-identity-change` added.
+`./install-from-sources.sh` also accepts that option. macOS ties
+the Accessibility permission to the identity, so after that change AquaSpace
+waits for a new grant: allow it, then run the `--confirm` command that the
+installer prints. If the change is not intended, rebuild with the usual
+identity. `python3 script/aquaspace_signing.py` shows it.
+
+### Exit status
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Success. |
+| 1 | Stopped. The message says what state remains and which command comes next. |
+| 2 | Invalid arguments. |
+| 3 | The new AquaSpace runs but did not take control in time. Run the `--confirm` command shown. |
+| 130 | Interrupted. The message says which command comes next. |
+
+### Install lock
+
+Every installer run takes an exclusive lock on
+`~/Library/Application Support/AquaSpace/Updater/.aquaspace-install-<uid>.lock`.
+Updaters before 2026-11 locked `/tmp/.aquaspace-install-<uid>.lock` or
+`/Applications/.aquaspace-install-<uid>.lock`. If you own one of these files,
+the installer locks it too, so an older updater that still runs cannot overlap.
+The installer never deletes a lock file.
+
+### Update records
+
+Each install keeps a record folder `/Applications/.aquaspace-update-<id>/`.
+Before each install, and with `--archive-backups`, the installer tidies the
+records:
+
+- A record in the phase `staging` or `prepared` is closed as aborted. In these
+  phases no process was stopped and no file was replaced, and the installer
+  that wrote the record has ended.
+- In completed records (committed, recovered or aborted), the unused copy of
+  the new build is deleted, and `previous.app` and `unconfirmed.app` become
+  `.tar.gz` archives. Live `.app` backups can show up in Privacy settings.
+- Only the 5 newest completed records stay. **Older completed records are
+  deleted, with their archived backups.** Unfinished records are never deleted.
 
 ## Recovery
-
-<!-- UPDATE-AFTER-INTEGRATION: recovery -->
 
 - **AquaSpace stopped or will not start.** Read
   `~/Library/Logs/AquaSpace/last-failure.txt`. It names the refusal: a
   competing manager, an unreadable process scan, or the controller lock. Resolve
   that cause first. Resetting the Accessibility permission does not fix a scan
   or lock failure.
-- **An update failed.** The error names the update folder. An unfinished update
-  blocks every later install until you deal with it. If the failure happened
-  before any process was signaled, the update is marked aborted and you can
-  retry.
-- **Restore the previous files.** Stop all managers, then run:
+- **An update stopped.** An unfinished update blocks every later install. The
+  installer prints the commands for the state of the record, with full paths.
+  Copy them from its message. The table explains them.
 
-  ```sh
-  python3 script/install-aquaspace.py --recover /Applications/.aquaspace-update-<id>
-  ```
+| State in the message | Next command |
+| --- | --- |
+| No process was stopped and no file was replaced. | `--recover <record>` closes the record. Then run the update again. |
+| The updater asked the old AquaSpace to stop. | If a manager still runs, nothing was replaced: `--recover <record>` closes the record. If no manager runs: `--resume <record>`. |
+| The new AquaSpace was not started. | `--resume <record>`: completes the file exchange and starts the new AquaSpace once. No manager may run. |
+| The new AquaSpace may or may not have started. | If it runs: `--confirm <record>`. If no manager runs: wait 30 seconds after the start attempt, then `--resume <record>`. `--resume` refuses earlier. |
+| The new AquaSpace was started (exit status 3). | If it runs: allow it in Accessibility settings, then `--confirm <record>`. If no manager runs: `--resume <record>`. |
 
-  Recovery restores files only and starts nothing. It refuses if the
-  installation changed after that update. Then start the manager you want by
-  hand.
-- **Old backups.** Run `--archive-backups` to turn completed backups into
-  archives. Live `.app` backups can show up in Privacy settings.
+`--confirm` stops and starts nothing. It completes the update only if the one
+running manager is the AquaSpace that this update started, from the installed
+bundle of this update. `--resume` and `--recover` close a record in which no
+process was stopped. Otherwise they refuse while a manager runs. If that
+manager is the AquaSpace from this update, they print the `--confirm` command.
+
+**Restore the previous version** instead of finishing an update: quit all
+managers, then run
+
+```sh
+python3 script/install-aquaspace.py --recover /Applications/.aquaspace-update-<id>
+```
+
+`--recover` restores files only and starts nothing. The new bundle stays in the
+record as `unconfirmed.app`. It refuses if the installation changed after that
+update. Then start AquaSpace by hand (`open /Applications/AquaSpace.app`). After
+a first installation there is no previous version: `--recover` closes the record
+and leaves the new files in place.
 
 ## Tests
 
@@ -336,11 +487,15 @@ first time.
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s script/tests -v
 ```
 
-This is the suite that CI runs. It needs only Python 3. It covers the updater
-and its transaction, signing checks, session identity checks, the shell
-wrappers, the Ghostty harness safety guards, and some source-text guards. The
-tests use fakes and block `subprocess`, `os.kill` and native library loading.
-The shell-wrapper tests run Bash with a fake `python3` in a temporary folder.
+This is the suite that CI runs. It needs only Python 3 and Git. It covers the
+builder, the updater and its transaction, signing checks, session identity
+checks, the shell wrappers, the opt-in guards of the live harnesses, the
+Ghostty harness safety guards, some source-text guards, and the relative links
+and heading anchors in every tracked Markdown file. The tests use fakes for
+`swift`, `codesign`, the macOS tools and the process scan. The updater tests
+block `subprocess`, `os.kill` and native library loading. The shell-wrapper
+tests run Bash with a fake `python3` in a temporary folder. The link test runs
+`git ls-files`.
 
 `test_aquaspace_lifecycle_source_guards.py` reads Swift source instead of
 running it. Each of its tests names the Swift behavior test that should replace
@@ -365,7 +520,8 @@ Swift toolchain, and the `swift test` runners need cached package dependencies
 ### Upstream test target
 
 `./swift-test.sh` runs `swift test` on the package, including the fork's Swift
-Testing files in `Sources/AppBundleTests`. Upstream's XCTest cases need Xcode.
+Testing files in `Sources/AppBundleTests`. It needs Xcode for XCTest, swiftly
+and Bash 5, and stops at once with a message when XCTest is missing.
 `./test.sh` also builds, lints and regenerates files.
 
 ### Live harnesses
@@ -376,7 +532,7 @@ without its opt-in flag.
 
 | Harness | What it does |
 | --- | --- |
-| `script/installer-smoke/live.py --run-live` | Real updates and failure/recovery cases against `/Applications/AquaSpace.app`. Restarts AquaSpace. |
+| `script/installer-smoke/live.py --run-live` | Real updates, `--confirm`, `--resume` and `--recover` cases against `/Applications/AquaSpace.app`. Restarts AquaSpace and prunes old update records. Not yet run against the updater of 2026-11. |
 | `script/native-tabs-smoke/ghostty-topology/live.py --run-live` | Real Ghostty merges and detaches through the running AquaSpace. See its [README](../script/native-tabs-smoke/ghostty-topology/README.md). |
 | `swift run --package-path script/native-tabs-smoke NativeTabSmoke` | AppKit tab groups in a test process that reads only its own AX tree. |
 
@@ -397,7 +553,7 @@ harness uses them.
   startup are restored only when AquaSpace sees them later and can prove their
   process. Rows that lose that proof are dropped, not guessed.
 - **Native tabs.** See [native-tabs.md](native-tabs.md#known-limits).
-- **Build machine.** The builder needs the stock app as a resource donor and
-  cached Swift package dependencies.
+- **Build machine.** The builder uses the dependency versions in
+  `Package.resolved` and does not resolve or update them.
 - **CI.** CI runs only the Python suite. Swift builds and tests run only on a
   local Mac.

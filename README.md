@@ -28,25 +28,25 @@ to build, install, update, recover and test it. Dated test records are in
 
 ## Quick start
 
-<!-- UPDATE-AFTER-INTEGRATION: readme-quick-start -->
-
-Keep `/Applications/AeroSpace.app` installed; the builder copies its resources.
-Stop any running window manager before the first installation.
+You need macOS, Python 3, Git and a Swift toolchain (the Command Line Tools are
+enough). Quit every window manager, including stock AeroSpace, before the first
+installation.
 
 ```sh
 git clone https://github.com/drameater/AquaSpace.git
 cd AquaSpace
 python3 script/aquaspace_signing.py --setup   # once: persistent signing identity
-./build-release.sh                            # stage a signed build
-./install-from-sources.sh --dont-rebuild      # install and start it
+./install-from-sources.sh                     # build, install and start AquaSpace
 ```
 
-Then grant Accessibility to AquaSpace in System Settings (called **Device
-Control and Data Access** on some macOS versions). To update later, run
-`./install-from-sources.sh`. Options, requirements and recovery steps are in
-the guide: [build](dev-docs/aquaspace.md#build),
-[install and update](dev-docs/aquaspace.md#install-and-update),
-[recovery](dev-docs/aquaspace.md#recovery).
+AquaSpace then waits for the Accessibility permission. Allow it in System
+Settings > Privacy & Security > Accessibility (called **Device Control and Data
+Access** on some macOS versions). If the installer stops waiting first (exit
+status 3), allow AquaSpace and run the `--confirm` command that the installer
+prints. To update later, run `./install-from-sources.sh` again. The guide
+explains the [build](dev-docs/aquaspace.md#build),
+[install and update](dev-docs/aquaspace.md#install-and-update) and
+[recovery](dev-docs/aquaspace.md#recovery) steps.
 
 The upstream Homebrew cask installs stock AeroSpace, not this fork.
 

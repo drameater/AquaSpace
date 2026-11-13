@@ -285,6 +285,21 @@ def build(args, root):
     return app
 
 
+# The installer's own limit for --ready-timeout; checked here so that a wrong value stops before the compile.
+MAX_READY_TIMEOUT = 3600
+
+
+def ready_timeout(text):
+    """Check a --ready-timeout value as the installer does; return it unchanged for the installer."""
+    try:
+        seconds = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number of seconds: {text!r}") from None
+    if not 0 < seconds <= MAX_READY_TIMEOUT:
+        raise argparse.ArgumentTypeError(f"must be between 0 and {MAX_READY_TIMEOUT} seconds")
+    return text
+
+
 def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path)
@@ -298,7 +313,14 @@ def main(argv=None, root=ROOT):
     parser.add_argument("--signing-identity", help="Persistent code-signing certificate; defaults to AquaSpace's local identity")
     parser.add_argument("--signing-keychain", type=Path, help="Keychain containing the explicit signing identity")
     parser.add_argument("--install-and-restart", action="store_true", help="After building, use the serialized installer to replace and restart the sole installed AquaSpace")
+    installer = parser.add_argument_group("installer options", "Passed to script/install-aquaspace.py; need --install-and-restart")
+    installer.add_argument("--allow-identity-change", action="store_true",
+                           help="Install a build signed with a different identity; macOS then asks for Accessibility permission again")
+    installer.add_argument("--ready-timeout", type=ready_timeout, metavar="SECONDS",
+                           help="How long the installer waits for the new AquaSpace to take control")
     args = parser.parse_args(argv)
+    if (args.allow_identity_change or args.ready_timeout) and not args.install_and_restart:
+        parser.error("--allow-identity-change and --ready-timeout need --install-and-restart")
     if args.signing_keychain and not args.signing_identity:
         parser.error('--signing-keychain requires --signing-identity')
     if args.signing_identity == '-':
@@ -307,11 +329,19 @@ def main(argv=None, root=ROOT):
         app = build(args, root)
     except (BuildError, SigningError, OSError) as error:
         parser.exit(1, f"AquaSpace build stopped: {error}\n")
-    print(f"Built {app}; CLI: {app / 'Contents/MacOS' / CLI_EXECUTABLE}")
+    print(f"Built {app}; CLI: {app / 'Contents/MacOS' / CLI_EXECUTABLE}", flush=True)
     if args.install_and_restart:
-        subprocess.run([sys.executable, str(root / "script/install-aquaspace.py"),
-                        "--source", str(app), "--restart"], check=True)
+        command = [sys.executable, str(root / "script/install-aquaspace.py"), "--source", str(app), "--restart"]
+        if args.allow_identity_change:
+            command.append("--allow-identity-change")
+        if args.ready_timeout:
+            command += ["--ready-timeout", args.ready_timeout]
+        # The installer replaces this process: its exit status (for example 3, waiting for
+        # --confirm) reaches the caller, and Ctrl-C reaches only the installer, which
+        # closes or keeps its update record. A child process would be killed on Ctrl-C.
+        os.execv(sys.executable, command)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
