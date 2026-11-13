@@ -1,5 +1,11 @@
 # Contributing
 
+> **AquaSpace fork.** AquaSpace is a personal fork. The text below is upstream
+> AeroSpace's contributing guide, kept for reference. Do not report AquaSpace
+> problems to upstream AeroSpace: its maintainers do not support this fork. For
+> how the fork works and how to test a change, see the
+> [AquaSpace guide](dev-docs/aquaspace.md).
+
 The main and the most important rule: **read the room!**
 
 * Does your patch look like typical commit in the repo?
