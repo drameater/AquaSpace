@@ -103,8 +103,8 @@ class FakeSystem:
         self.launch_sessions = []
         self.launched_at = None
 
-    def add(self, pid, kind='local.aquaspace', path=None, birth=1):
-        process = update.Process(pid, (birth, pid), os.getuid(),
+    def add(self, pid, kind='local.aquaspace', path=None, birth=1, micro=None):
+        process = update.Process(pid, (birth, pid if micro is None else micro), os.getuid(),
                                  path or self.target / 'Contents/MacOS/AquaSpace', kind)
         self.running[pid] = process
         self.maximum_controllers = max(self.maximum_controllers, len(self.running))
@@ -160,8 +160,10 @@ class FakeSystem:
     def launch(self, executable, session, log):
         self.event('launch')
         self.launch_sessions.append(session)
+        self.now += .001  # The kernel records the start after `open` was called.
         self.launched_at = self.now
-        child = self.add(200, birth=int(self.time()))
+        started = self.time()
+        child = self.add(200, birth=int(started), micro=round(started % 1 * 1e6))
         self.launches.append(child)
         self.event('launched')
         if self.spawn_raises_after_start: raise OSError('Spawn outcome uncertain')

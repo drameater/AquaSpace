@@ -38,6 +38,8 @@ TERMINAL_PHASES = frozenset(('committed', 'recovered', 'aborted'))
 PRE_STOP_PHASES = frozenset(('staging', 'prepared'))
 PHASES = TERMINAL_PHASES | PRE_STOP_PHASES | frozenset((
     'stop_requested', 'stopped', 'replacing', 'replaced', 'launch_attempted', 'child_started'))
+# In these phases the new bundle is in place, so a running AquaSpace can be confirmed.
+CONFIRMABLE_PHASES = frozenset(('replaced', 'launch_attempted', 'child_started'))
 RECORD_PREFIX = '.aquaspace-update-'
 # A record is created under this name and renamed after its first journal write.
 NEW_RECORD_PREFIX = '.aquaspace-new-update-'
@@ -630,11 +632,11 @@ class Installer:
         if phase in PRE_STOP_PHASES:
             return ('No process was stopped and no file was replaced. Close this record, then run the update again:\n  '
                     + recover)
-        if state.get('had_target'):
-            restore = ('To put the previous version back instead (files only; no app is started), run:\n  ' + recover +
-                       '\nthen start AquaSpace yourself:\n  ' + shlex.join(['open', str(self.target)]))
-        else:
-            restore = ('To close this record and leave the new files installed (no app is started), run:\n  ' + recover)
+        restore = self._restore_hint(transaction, state)
+        if not self._restart_requested(state):
+            return ('This update was file-only: it starts no app. To finish it (no app is started), run:\n  ' + resume +
+                    '\nIt needs every window manager to be closed, except a stock AeroSpace that the update kept running.\n'
+                    + restore)
         if phase == 'stop_requested':
             return ('The updater asked the old AquaSpace to stop.\n'
                     'If a window manager is still running, nothing was replaced. Close this record with:\n  ' + recover +
@@ -652,8 +654,27 @@ class Installer:
                     'If it is running, confirm the update (this stops nothing):\n  ' + confirm +
                     f'\nIf no window manager is running, wait {LAUNCH_SETTLE_SECONDS} seconds, then start it once:\n  '
                     + resume + '\n' + restore)
+        started = ('\nIf you started the new AquaSpace yourself after this, confirm the update (this stops nothing):\n  '
+                   + confirm if phase == 'replaced' else '')
         return ('The new AquaSpace was not started. When no window manager is running, finish the update '
-                'and start the new AquaSpace once:\n  ' + resume + '\n' + restore)
+                'and start the new AquaSpace once:\n  ' + resume + started + '\n' + restore)
+
+    def _restore_hint(self, transaction, state):
+        recover = self.command('--recover', transaction)
+        if state.get('had_target'):
+            return ('To put the previous version back instead (files only; no app is started), run:\n  ' + recover +
+                    '\nthen start AquaSpace yourself:\n  ' + shlex.join(['open', str(self.target)]))
+        return 'To close this record and leave the new files installed (no app is started), run:\n  ' + recover
+
+    @staticmethod
+    def _restart_requested(state):
+        """Whether the original command asked to start the new AquaSpace.
+
+        Records written before this field: a launch phase or a stopped manager proves
+        a restart. Nothing else proves one, so then nothing is started.
+        """
+        if isinstance(state.get('restart'), bool): return state['restart']
+        return state.get('phase') in ('launch_attempted', 'child_started') or bool(state.get('old'))
 
     # Records ---------------------------------------------------------------
 
@@ -862,7 +883,8 @@ class Installer:
             raise UpdateError('The installation changed during this update; refusing to replace it.')
         else:
             replace_directory(new, self.target)
-        self._phase(transaction, state, 'replaced')
+        # A process that starts after this moment runs the new files.
+        self._phase(transaction, state, 'replaced', replaced_at=self.system.time())
 
     def _restore_previous(self, transaction, state):
         unconfirmed = transaction / 'unconfirmed.app'
@@ -916,24 +938,54 @@ class Installer:
         current = self.system.inspect(old['pid'])
         return current is not None and self._same_process(current, old)
 
-    def _is_update_child(self, process, state):
-        if process.bundle_id != 'local.aquaspace' or process.executable != self.target / 'Contents/MacOS/AquaSpace':
-            return False
-        if state.get('child'):
-            return self._same_process(process, state['child'])
-        # Interrupted between the launch and its record: adopt only a process that
-        # started after the launch intent was written.
-        return state['phase'] == 'launch_attempted' and process.started[0] >= state.get('launch_attempted_at', float('inf')) - 2
+    def _journal_time(self, transaction):
+        return (transaction / 'journal.json').stat().st_mtime
 
-    def _require_no_manager(self, transaction, state, action):
+    def _launch_time(self, transaction, state):
+        """When the last launch was attempted. Records before 2026-11 have no such
+        field; their journal was last written at that attempt or later."""
+        value = state.get('launch_attempted_at')
+        return value if isinstance(value, (int, float)) else self._journal_time(transaction)
+
+    def _installed_since(self, transaction, state):
+        """A time after the new bundle reached the target; a process started later runs its files."""
+        for key in ('replaced_at', 'launch_attempted_at'):
+            if isinstance(state.get(key), (int, float)): return state[key]
+        return self._journal_time(transaction)
+
+    def _runs_installed_update(self, process, transaction, state):
+        """True for the recorded child, or for any instance of the target that started
+        after the new bundle was in place (for example, after a restart of the Mac)."""
+        if (process.bundle_id != 'local.aquaspace' or process.uid != os.getuid()
+                or process.executable != self.target / 'Contents/MacOS/AquaSpace'):
+            return False
+        if state.get('child') and self._same_process(process, state['child']):
+            return True
+        if state['phase'] not in CONFIRMABLE_PHASES: return False
+        # The kernel's start time and time.time() read the same clock.
+        return process.started[0] + process.started[1] / 1e6 >= self._installed_since(transaction, state)
+
+    def _allowed_managers(self, transaction, state, mode, action):
+        """Return the running managers that the original command allowed; refuse any other.
+
+        A restart allows none at this point. A file-only update allows the stock
+        AeroSpace that it kept running, with an unchanged identity, and nothing else.
+        """
         managers = self.system.managers()
-        if not managers: return
-        if len(managers) == 1 and self._is_update_child(managers[0], state):
-            raise UpdateError(f'The new AquaSpace from this update is running (pid {managers[0].pid}). '
+        retained = [] if self._restart_requested(state) else state.get('retained') or []
+        kept = [m for m in managers if any(self._same_process(m, r) and m.bundle_id == r.get('bundle_id')
+                                           for r in retained)]
+        others = [m for m in managers if m not in kept]
+        if not others: return kept
+        if len(others) == 1 and self._runs_installed_update(others[0], transaction, state):
+            raise UpdateError(f'The new AquaSpace from this update is running (pid {others[0].pid}). '
                               'To keep it, confirm the update (this stops nothing):\n  '
                               + self.command('--confirm', transaction)
-                              + f'\nTo {action} instead, quit AquaSpace first, then run this command again.')
-        raise UpdateError(f'A window manager is running. Quit every window manager first, then run this command again to {action}.')
+                              + f'\nTo {action} instead, quit AquaSpace first, then run:\n  '
+                              + self.command(f'--{mode}', transaction))
+        names = ', '.join(f'{m.executable.name} (pid {m.pid})' for m in others)
+        raise UpdateError(f'A window manager is running: {names}. Quit it first, then run this command '
+                          f'again to {action}:\n  ' + self.command(f'--{mode}', transaction))
 
     def _start_replacement(self, transaction, state):
         """The only launch site. Callers: install --restart and the explicit --resume."""
@@ -1055,7 +1107,8 @@ class Installer:
             state = dict(schema=1, target=str(self.target), version=metadata.get('CFBundleShortVersionString'),
                          had_target=had_target, old=old.record() if old else None, requirement=requirement,
                          identity_changed=identity_changed, old_bundle=_inode(self.target) if had_target else None,
-                         old_sha256=sha256(self.target / 'Contents/MacOS/AquaSpace') if had_target else None)
+                         old_sha256=sha256(self.target / 'Contents/MacOS/AquaSpace') if had_target else None,
+                         restart=restart, retained=[p.record() for p in retained])
             transaction = self._begin(state)
             signaled = False
             try:
@@ -1119,9 +1172,11 @@ class Installer:
                 self.summary = ('No process was stopped and no file was replaced, so there was nothing to resume.\n'
                                 f'The record is closed: {transaction}\nRun the update again.')
                 return transaction
-            self._require_no_manager(transaction, state, 'start the new AquaSpace')
+            restart = self._restart_requested(state)
+            retained = self._allowed_managers(transaction, state, 'resume',
+                                              'start the new AquaSpace' if restart else 'finish the update')
             if phase == 'launch_attempted':
-                waited = self.system.time() - state.get('launch_attempted_at', 0)
+                waited = self.system.time() - self._launch_time(transaction, state)
                 if waited < LAUNCH_SETTLE_SECONDS:
                     raise UpdateError(f'The last start attempt was {max(waited, 0):.0f} s ago, and macOS may still start it. '
                                       f'Wait {LAUNCH_SETTLE_SECONDS - waited:.0f} s, then run this command again:\n  '
@@ -1133,14 +1188,21 @@ class Installer:
                     raise UpdateError('The bundle from this update is missing; it cannot be resumed.')
                 self._check_new(new, state)
                 if phase not in ('launch_attempted', 'child_started'):
-                    self._publish(transaction, state)
+                    self._publish(transaction, state, retained)
                 if self._locate(transaction, state)[0] != self.target:
                     raise UpdateError('The installed AquaSpace is not the bundle from this update.')
-                self._start_replacement(transaction, state)
+                if restart:
+                    self._start_replacement(transaction, state)
                 self._commit(transaction, state)
             except BaseException as error:
                 raise self._failure(transaction, state, error, nothing_stopped=False)
-            self.summary = f'Finished the interrupted update; the new AquaSpace controls windows.\nUpdate record: {transaction}'
+            if restart:
+                self.summary = 'Finished the interrupted update; the new AquaSpace controls windows.'
+            else:
+                self.summary = 'Finished the interrupted file-only update; no app was started, as the original command asked.'
+                if not retained:
+                    self.summary += '\nTo start AquaSpace:\n  ' + shlex.join(['open', str(self.target)])
+            self.summary += f'\nUpdate record: {transaction}'
             return transaction
 
     def confirm(self, transaction):
@@ -1151,27 +1213,47 @@ class Installer:
             phase = state['phase']
             if phase in TERMINAL_PHASES:
                 raise UpdateError('This update is already complete; there is nothing to confirm.')
-            if phase not in ('launch_attempted', 'child_started'):
-                raise UpdateError('This update never started the new AquaSpace, so there is nothing to confirm.\n'
+            if phase not in CONFIRMABLE_PHASES:
+                raise UpdateError('This update has not finished replacing the files, so there is nothing to confirm.\n'
                                   + self.next_steps(transaction, state))
             new, _ = self._locate(transaction, state)
             if new != self.target or sha256(self.target / 'Contents/MacOS/AquaSpace') != state.get('main_sha256'):
                 raise UpdateError('The installed AquaSpace is not the bundle from this update; refusing to confirm.')
             managers = self.system.managers()
-            if len(managers) != 1 or not self._is_update_child(managers[0], state):
-                reason = ('No window manager is running.' if not managers else
-                          'The running window manager is not the AquaSpace that this update started.')
-                raise UpdateError(f'{reason} Nothing was confirmed.\n' + self.next_steps(transaction, state))
+            if len(managers) != 1 or not self._runs_installed_update(managers[0], transaction, state):
+                raise UpdateError(self._confirm_refusal(transaction, state, managers))
             child = managers[0]
             try:
-                if not state.get('child'):
-                    self._phase(transaction, state, 'child_started', child=child.record())
+                if not (state.get('child') and self._same_process(child, state['child'])):
+                    # Its start time proves that it runs the new files; readiness checks its identity again.
+                    self._phase(transaction, state, 'child_started', child=child.record(), adopted=True)
                 self._await_ready(transaction, child)
                 self._commit(transaction, state)
             except BaseException as error:
                 raise self._failure(transaction, state, error, nothing_stopped=False)
             self.summary = f'Confirmed the running AquaSpace; the update is complete.\nUpdate record: {transaction}'
             return transaction
+
+    def _confirm_refusal(self, transaction, state, managers):
+        """Explain why nothing can be confirmed, and name a command that can proceed."""
+        resume = self.command('--resume', transaction)
+        restart = self._restart_requested(state)
+        finish = ('start the new AquaSpace once' if restart else 'finish the update (no app is started)')
+        retained = [] if restart else state.get('retained') or []
+        others = [m for m in managers if not any(self._same_process(m, r) for r in retained)]
+        if not others:
+            reason = 'No window manager from this update is running.'
+            step = f'To {finish}, run:\n  {resume}'
+        else:
+            installed = self.target / 'Contents/MacOS/AquaSpace'
+            if len(others) == 1 and others[0].executable == installed:
+                reason = (f'The running AquaSpace (pid {others[0].pid}) started before this update installed its '
+                          'files, so it can still run the previous version.')
+            else:
+                reason = 'Another window manager is running: ' + ', '.join(
+                    f'{m.executable} (pid {m.pid})' for m in others) + '.'
+            step = f'Quit it, then {finish} with:\n  {resume}'
+        return f'{reason} Nothing was confirmed.\n{step}\n' + self._restore_hint(transaction, state)
 
     def recover(self, transaction):
         """Restore files only. Never starts or stops a process."""
@@ -1185,7 +1267,7 @@ class Installer:
                 self._close_aborted(transaction, state)
                 self.summary = f'Closed the update record; no process or installed file was changed.\nRecord: {transaction}'
                 return transaction
-            self._require_no_manager(transaction, state, 'restore the previous files')
+            self._allowed_managers(transaction, state, 'recover', 'restore the previous files')
             self._record_bundles(transaction, state)
             self._restore_previous(transaction, state)
             self._check_restored(transaction, state)

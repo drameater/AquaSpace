@@ -40,9 +40,10 @@ RECOVER_CRASH_POINTS = ['upgraded', 'exchange', 'exchanged', 'recovered']
 
 
 class LegacyFixture(InstallerFixture):
-    def legacy_record(self, layout, old_running=False):
+    def legacy_record(self, layout, phase=None, **fields):
         """Write a record exactly as the pre-2026-11 updater did, in the given layout."""
-        phase, places = LEGACY_LAYOUTS[layout]
+        layout_phase, places = LEGACY_LAYOUTS[layout]
+        phase = phase or layout_phase
         record = self.target.parent / '.aquaspace-update-legacy'
         record.mkdir()
         shutil.rmtree(self.target)
@@ -57,7 +58,10 @@ class LegacyFixture(InstallerFixture):
                               executable=str(self.target / 'Contents/MacOS/AquaSpace'), bundle_id='local.aquaspace'),
                      phase=phase, main_sha256=update.sha256(self.source / 'Contents/MacOS/AquaSpace'),
                      cli_sha256=update.sha256(self.source / 'Contents/MacOS/aquaspace-cli'))
+        state.update(fields)
         (record / 'journal.json').write_text(json.dumps(state))
+        # The journal was last written at this moment of the fake clock.
+        os.utime(record / 'journal.json', (self.system.time(), self.system.time()))
         update.atomic_json(record / 'session.json', {'windows': [], 'workspaces': [], 'workspace': 'w',
                                                      'focusedWindow': ''})
         return record
@@ -91,6 +95,56 @@ class LegacyFixture(InstallerFixture):
             if 'never reached' in str(error): return False
             raise
         return True
+
+
+class LegacyLaunchTests(LegacyFixture):
+    """Finding 5: old records have no launch time; the journal's time stands in for it."""
+
+    def test_resume_waits_after_an_old_launch_attempt_before_starting_again(self):
+        record = self.legacy_record('after-renames', 'launch_attempted')
+        self.system.now += 1
+        with self.assertRaises(update.UpdateError) as caught: self.installer.resume(record)
+        self.assertIn('Wait', str(caught.exception))
+        self.assertEqual(self.system.launches, [])
+        self.system.now += update.LAUNCH_SETTLE_SECONDS
+        self.installer.resume(record)
+        self.assertEqual(len(self.system.launches), 1)
+        self.assertEqual(phase_of(record), 'committed')
+
+    def test_confirm_adopts_the_child_of_an_old_launch_attempt(self):
+        record = self.legacy_record('after-renames', 'launch_attempted')
+        self.system.now += 2
+        self.system.add(200, birth=int(self.system.time()))
+        self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'committed')
+        self.assertEqual(self.system.launches, [])
+
+    def test_confirm_never_adopts_a_process_older_than_an_old_launch_attempt(self):
+        self.system.now += 50
+        record = self.legacy_record('after-renames', 'launch_attempted')
+        self.system.add(200, birth=int(self.system.time()) - 40)
+        with self.assertRaises(update.UpdateError): self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'launch_attempted')
+
+    def test_confirm_commits_an_old_record_with_its_recorded_child(self):
+        self.system.now += 2
+        child = self.system.add(200, birth=int(self.system.time()))
+        record = self.legacy_record('after-renames', 'child_started', child=child.record())
+        self.installer.confirm(record)
+        self.assertEqual(phase_of(record), 'committed')
+        with tarfile.open(record / 'previous.app.tar.gz') as backup:
+            self.assertEqual(backup.extractfile('previous.app/Contents/MacOS/AquaSpace').read(), b'old')
+
+    def test_resume_starts_an_old_record_whose_child_died_once(self):
+        self.system.now += 2
+        record = self.legacy_record('after-renames', 'child_started',
+                                    child=dict(pid=200, started=[1, 200], uid=os.getuid(),
+                                               executable=str(self.target / 'Contents/MacOS/AquaSpace'),
+                                               bundle_id='local.aquaspace'))
+        self.system.now += update.LAUNCH_SETTLE_SECONDS
+        self.installer.resume(record)
+        self.assertEqual(len(self.system.launches), 1)
+        self.assertEqual(phase_of(record), 'committed')
 
 
 class LegacyBundleIdentityTests(LegacyFixture):
